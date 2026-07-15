@@ -1,0 +1,30 @@
+name: Architecture decision
+description: Propose a decision that changes a system boundary or invariant
+title: "ADR: "
+labels: ["architecture"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What problem or force requires a decision?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed decision and alternatives
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Privacy, security, legal, and external-action impact
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Tests, migration, and rollback
+    validations:
+      required: true

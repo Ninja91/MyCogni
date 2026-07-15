@@ -1,0 +1,39 @@
+name: Connector change
+description: Propose or update a broker connector using synthetic data only
+title: "connector: "
+labels: ["connector", "needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include real PII, credentials, session state, screenshots, or live request evidence."
+  - type: input
+    id: connector
+    attributes:
+      label: Connector and capability
+      placeholder: example-broker / observe
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Source URLs, observed dates, and license/provenance
+    validations:
+      required: true
+  - type: textarea
+    id: disclosure
+    attributes:
+      label: Destination and identity attributes disclosed
+    validations:
+      required: true
+  - type: textarea
+    id: drift
+    attributes:
+      label: Workflow change and old/new disclosure diff
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Synthetic fixtures, contract tests, and known limitations
+    validations:
+      required: true

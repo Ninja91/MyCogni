@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "connector_id": "synthetic-people-search",
+  "version": "0.1.0",
+  "broker": {
+    "id": "synthetic-people-search",
+    "name": "Synthetic People Search",
+    "category": "people_search",
+    "jurisdictions": ["US-TEST"]
+  },
+  "destinations": [
+    {"origin": "https://broker.example.test", "purpose": "observe", "allow_subdomains": false},
+    {"origin": "https://privacy.example.test", "purpose": "submit", "allow_subdomains": false},
+    {"origin": "https://broker.example.test", "purpose": "verify", "allow_subdomains": false}
+  ],
+  "capabilities": [
+    {
+      "name": "observe",
+      "transport": "http",
+      "identity_attributes": [
+        {"type": "name", "requirement": "required", "reason": "Synthetic record lookup"},
+        {"type": "address", "requirement": "optional", "reason": "Disambiguate matching synthetic names"}
+      ],
+      "automation": "observe_only",
+      "rate_limit": {"max_actions": 2, "period_seconds": 60},
+      "limitations": ["Synthetic fixture only; never a live broker"]
+    },
+    {
+      "name": "submit",
+      "transport": "http",
+      "identity_attributes": [
+        {"type": "broker_record_id", "requirement": "required", "reason": "Target the confirmed synthetic record"},
+        {"type": "email", "requirement": "required", "reason": "Receive synthetic confirmation"}
+      ],
+      "automation": "approval_required",
+      "rate_limit": {"max_actions": 1, "period_seconds": 300},
+      "limitations": ["Synthetic fixture only; never a live broker"]
+    }
+  ],
+  "provenance": [
+    {"url": "https://privacy.example.test", "observed_at": "2026-07-15T00:00:00Z", "kind": "manual_observation"}
+  ],
+  "review": {
+    "status": "observe_sandbox",
+    "reviewed_at": "2026-07-15T00:00:00Z",
+    "expires_at": "2027-01-15T00:00:00Z",
+    "reviewers": ["architecture-inception"]
+  }
+}
