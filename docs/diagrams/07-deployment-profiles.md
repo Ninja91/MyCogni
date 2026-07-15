@@ -2,35 +2,50 @@
 
 ```mermaid
 flowchart TB
-    subgraph local["Local-lite — laptop, NAS, or home server"]
-        browser["Browser on localhost"] --> allinone["MyCogni all-in-one container<br/>serve + worker + scheduler"]
-        allinone --> sqlite[("Encrypted-field SQLite<br/>persistent volume")]
-        allinone --> files[("Encrypted evidence<br/>persistent volume")]
-        hostkey["OS keychain or mounted secret"] --> allinone
-        allinone -.->|"on-demand action envelope"| localrunner["Ephemeral browser runner"]
-        localrunner --> internet1["Approved broker origins"]
+    subgraph local["Local-lite — one adult, laptop/NAS/home server"]
+        browserClient["Authenticated localhost browser"] --> coreLocal["Core all-in-one image<br/>serve + worker + scheduler"]
+        cli["CLI via permissioned local channel"] --> coreLocal
+        coreLocal --> sqlite[("SQLite metadata<br/>field/relationship encryption")]
+        coreLocal --> files[("Encrypted evidence volume")]
+        hostKEK["OS keychain or mounted KEK"] --> keyCatalog[("Separate wrapped-profile-key catalog")]
+        keyCatalog --> coreLocal
+        coreLocal --> budget["One heavy-work lease"]
+        budget -.-> connectorLocal["Ephemeral digest-pinned connector artifact"]
+        budget -.-> browserLocal["Ephemeral Playwright artifact"]
+        connectorLocal --> gatewayLocal["Mandatory egress gateway"]
+        browserLocal --> gatewayLocal
+        gatewayLocal --> internetLocal["Approved public broker origins"]
+        coreLocal -.-> taskLocal["Sanitized advisory task"]
+        taskLocal -.-> modelLocal["Optional post-v1 local model<br/>separate, no network"]
     end
 
     subgraph cloud["Cloud-small — single tenant"]
-        client["User browser"] --> ingress["TLS ingress + strong authentication"]
-        ingress --> serve["MyCogni image<br/>serve role"]
-        scheduler["MyCogni image<br/>scheduler leader"] --> pg[("Private PostgreSQL")]
+        client["User browser"] --> ingress["TLS ingress + passkey/OIDC"]
+        ingress --> serve["Core image: serve role"]
+        scheduler["Core image: scheduler leader"] --> pg[("Private PostgreSQL")]
         serve --> pg
-        worker1["MyCogni image<br/>worker role"] --> pg
-        worker2["Optional worker replica"] --> pg
+        worker1["Core image: worker role"] --> pg
+        worker2["Optional core worker"] --> pg
         serve --> object[("Encrypted evidence objects")]
         worker1 --> object
-        kms["KMS or secret manager"] --> serve
-        kms --> worker1
-        worker1 -.->|"one-time action envelope"| cloudrunner["Isolated browser job/service"]
-        cloudrunner --> internet2["Manifest-approved origins"]
+        kms["KMS/secret manager KEK"] --> cloudCatalog[("Separate wrapped-profile-key catalog")]
+        cloudCatalog --> serve
+        cloudCatalog --> worker1
+        worker1 --> cloudConnector["Isolated connector job/artifact"]
+        worker1 --> cloudBrowser["Isolated browser job/artifact"]
+        cloudConnector --> cloudGateway["Mandatory egress gateway"]
+        cloudBrowser --> cloudGateway
+        cloudGateway --> internetCloud["Approved public broker origins"]
+        higher["Optional gVisor/Kata/VM higher-assurance tier"] -.-> cloudConnector
+        higher -.-> cloudBrowser
     end
 
-    registry["Signed registry and policy updates"] -.->|"explicit update check"| allinone
-    registry -.->|"explicit update check"| serve
+    updates["Expiring monotonic signed registry + artifact provenance"] -.->|"explicit verified update"| coreLocal
+    updates -.->|"explicit verified update"| serve
 
-    warning["Not a multi-tenant SaaS architecture"]
+    warning["Same domain semantics, separate conformance and assurance claims<br/>Never multi-tenant SaaS"]
+    warning -.-> coreLocal
     warning -.-> serve
 ```
 
-Both profiles use the same versioned application image and domain model. Cloud-small separates roles for reliability; it does not pool unrelated users.
+The core, connector, browser, gateway, and optional model are distinct artifacts/processes. Local shared-kernel isolation is explicitly lower assurance than a hardened cloud sandbox. Active model resources are excluded from core idle claims and are never required.

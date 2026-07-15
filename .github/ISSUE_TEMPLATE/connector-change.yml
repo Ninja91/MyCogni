@@ -16,7 +16,7 @@ body:
   - type: textarea
     id: sources
     attributes:
-      label: Source URLs, observed dates, and license/provenance
+      label: Source URLs, observed/revalidation dates, and license/provenance
     validations:
       required: true
   - type: textarea
@@ -34,6 +34,17 @@ body:
   - type: textarea
     id: tests
     attributes:
-      label: Synthetic fixtures, contract tests, and known limitations
+      label: Artifact, synthetic fixtures, adversarial contract tests, and known limitations
     validations:
       required: true
+  - type: checkboxes
+    id: safety_check
+    attributes:
+      label: Safety check
+      options:
+        - label: I used no real PII, credentials, sessions, screenshots, or live user evidence.
+          required: true
+        - label: This proposal does not bypass CAPTCHA, MFA, rate limits, terms changes, or access controls.
+          required: true
+        - label: Any submit capability remains untrusted until the governance promotion gate passes.
+          required: true

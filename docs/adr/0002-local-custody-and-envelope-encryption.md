@@ -9,11 +9,12 @@ MyCogni must assemble a complete identity profile to remove data. A database or 
 
 ## Decision
 
-Keep data in user-controlled local or single-tenant infrastructure. Field-encrypt PII and object-encrypt evidence using per-profile/per-purpose data keys. Keep the wrapping key outside the database and backups through an OS keychain, mounted secret, or KMS. Bind ciphertext to record context, redact diagnostics by construction, and support cryptographic profile deletion.
+Keep data in user-controlled local or single-tenant infrastructure. Generate an independent random data-encryption key for each profile and wrap it with an installation/cloud key-encryption key held outside the data store. Derive purpose-specific keys only below the profile key. Field-encrypt PII and object-encrypt evidence, bind ciphertext to record context, redact diagnostics by construction, and support profile deletion by destroying the profile key subject to recoverable key-catalog backup expiry.
 
 ## Consequences
 
 - Operators must manage a separate recovery key and can permanently lose data.
+- The wrapped-key catalog is a separate recovery asset. Profile deletion is not complete while a retained catalog backup can recover the destroyed profile key.
 - Equality searches require narrowly approved blind indexes.
 - Migrations, backups, exports, and support flows must operate on ciphertext safely.
 - Cloud-small remains single-tenant until an entirely new tenancy/privacy design is reviewed.
@@ -24,4 +25,4 @@ Disk encryption alone does not protect DB exports, object backups, or operator a
 
 ## Review trigger
 
-Independent cryptographic review, algorithm/library change, new secret provider, shared tenancy, server-side search over encrypted fields, or recovery-model change.
+Independent cryptographic review, algorithm/library change, new secret provider, shared tenancy, server-side search over encrypted fields, key-catalog backup change, or recovery-model change. ADR-0007 refines deletion and catalog semantics.

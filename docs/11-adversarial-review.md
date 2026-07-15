@@ -1,97 +1,76 @@
 # Adversarial review and design refinement
 
-Review date: 2026-07-15. This is an internal architecture red team, not a substitute for independent security, privacy, legal, accessibility, or operational review.
+Review date: 2026-07-15.
 
-## Review method
+Five independent role tracks reviewed the same architecture from ML, backend/infra/security, edge, product, and experienced open-source perspectives. Their reports are in [`docs/reviews/`](reviews/README.md). A principal-role decision council then accepted, modified, deferred, or rejected findings in [`docs/14-principal-team-synthesis.md`](14-principal-team-synthesis.md).
 
-The draft was attacked from five perspectives: privacy engineer, application-security red team, skeptical user/product reviewer, data-rights/legal operator, and tiny-system SRE. Findings were ranked by impact and used to change the proposed architecture.
+These are AI-assisted adversarial reviews, not external human security/cryptography/legal audits. Required independent reviews remain release gates.
 
-## Critical challenges
+## P0 findings accepted
 
-### 1. “Local-first” can still become a perfect dossier
+### 1. Subprocess connectors were not isolated
 
-**Attack:** A stolen laptop, volume snapshot, cloud backup, or support bundle reveals the user's current and historical identity plus every broker relationship.
+**Attack:** a Python connector subprocess in the core image inherits UID, mounts, environment, network, and kernel surface; a domain allowlist cannot stop rebinding or alternate-protocol exfiltration.
 
-**Refinement:** field/object envelope encryption; master key outside DB/backups; per-profile keys; logs and support bundles built from allowlists; retention classes; cryptographic deletion; restore tests. Local custody is not presented as sufficient by itself.
+**Change:** separate digest-pinned OCI/WASI artifacts; rootless/read-only/tmpfs/capability/syscall/resource containment; mandatory gateway revalidating fence, authorization epoch, pauses, artifact/capability, method/protocol/origin/public IP/redirect, disclosure and byte/time budget. ADR-0008.
 
-### 2. A community connector is remote code execution with PII
+### 2. Root-derived profile keys made deletion reversible
 
-**Attack:** A contributor adds a harmless-looking selector update that sends identity data to a lookalike domain or reads another connector's session.
+**Attack:** if a profile key is deterministically derived from a persistent root, deleting it does not erase it. A retained key-catalog backup can also resurrect a destroyed live key.
 
-**Refinement:** connectors are untrusted-by-default, capability-scoped, reviewed and expiring; exact destination allowlists; one-time action envelopes; no vault/database access; per-connector/profile session state; signed releases and revocation; disclosure ledger; quarantine on drift.
+**Change:** independent random profile DEKs wrapped by the external install/cloud KEK; purpose keys below the profile DEK; separately protected/inventoried key catalog; deletion remains pending until recoverable catalog backups expire/sanitize. ADR-0007.
 
-### 3. Automatic deletion can target the wrong person
+### 3. Queue idempotency could duplicate external sends
 
-**Attack:** Common names produce a false match. The system removes or modifies another person's record and exposes more PII while trying.
+**Attack:** database commit and HTTP/email send are not atomic. Attempt/connector-version-derived keys change across retry and upgrade. A timeout may be a successful send with a lost response.
 
-**Refinement:** candidate vs confirmed states; attribute-level match explanation; ambiguity task; minimum thresholds per connector; no high-risk submit from name-only discovery; user correction feedback; precision is a primary metric.
+**Change:** immutable `intent_id`, separate attempts, monotonic fence, explicit dispatch journal, final reauthorization, and no retry after `dispatch_started` until reconciliation proves no send. ADR-0009.
 
-### 4. “Removed” is a marketing state, not an observed fact
+### 4. Loopback/private networking was treated as authentication
 
-**Attack:** The transport returned 200 or a broker emailed “done,” so the dashboard claims success even while the page remains.
+**Attack:** DNS rebinding, CSRF, another local user, browser extension, stolen session, or cloud lateral movement reaches a dossier-and-submit control plane.
 
-**Refinement:** submitted, acknowledged, in-progress, broker-asserted, and independently verified states; post-request timing policy; immutable verification evidence; resurfacing history; no missing-evidence fallback to success.
+**Change:** local bootstrap/session auth, strict Host/Origin/CSRF/cookie/session policy, permissioned CLI channel; cloud passkey/WebAuthn or narrow OIDC; step-up and actor/profile/scope/expiry/revocation epochs. ADR-0010.
 
-### 5. The tool may confirm or enrich the user's identity to brokers
+### 5. Optional AI had no enforceable authority floor
 
-**Attack:** Blanket requests broadcast a clean current identity profile to brokers that had stale or no data, increasing correlation.
+**Attack:** “explain or draft” can grow into a model deciding match, policy, disclosure, status, or submission; local endpoints/logs can still leak PII.
 
-**Refinement:** no blanket broadcast mode; observe public sources first; private-broker outreach gets a disclosure-risk preview and broker-specific minimum bundle; record every disclosed category; support official aggregate paths such as DROP through user guidance rather than automating around verification.
+**Change:** no model in v1; typed null `IntelligencePort`; deterministic redaction; isolated no-network/no-tools runtime only after post-v1 gates; schema/supporting spans; output remains `UntrustedSuggestion` and cannot create a command. ADR-0011.
 
-## High challenges
+## P1 product and assurance findings accepted
 
-### 6. Browser automation will rot and can violate controls
+| Attack | Change |
+| --- | --- |
+| One clean search is called proof | add assertion → one absence → corroborated verification → inconclusive ladder; blocks/ambiguity never imply absence |
+| Unkeyed event hash chain is called append-only | keyed/signed events and external monotonic checkpoint; claim only tamper evidence relative to checkpoint |
+| Product tries to cover too much | stable v1 becomes one adult, small public preview, guided flows, 2–5 trusted automatic connectors |
+| Coverage count hides capability gaps | generated support matrix by capability, maturity, expiry, disclosure, human steps, evidence, recent tests |
+| Stalled cases create opaque trust | reason, owner, last evidence, next action, and next date are mandatory |
+| Browser and inference collide on small host | shared heavy-work lease/resource preflight; deterministic deadline work has priority |
+| Registry signature permits stale rollback | expiring monotonic metadata, delegated/threshold trust, revocation, artifact/SBOM/provenance |
+| Local/cloud same-code claim hides failure differences | profile-specific conformance and threat statements |
+| Restore can replay post-backup sends | external actions pause; journal-boundary intents become unknown and reconcile before resume |
+| Community reviews look synthetic/promotional | evidence grading A/B/C; anonymous/vendor material used as hypotheses, not effectiveness truth |
+| Volunteer ecosystem cannot review everything | maturity ladder, second reviewer for trusted submit, demotion/retirement on expiry/capacity |
 
-**Refinement:** browser automation is optional, isolated, visible for human challenges, and versioned separately. CAPTCHA/MFA/terms/required-field changes stop execution. Guided manual completion is a supported outcome, not failure.
+## Product changes after review
 
-### 7. Sporadic operation can cause retry storms and duplicate requests
+The wedge is now explicit: auditable proof-first recurring U.S. removal for technical self-hosters, not a commercial clone or “largest coverage” promise. Product-market-fit gates cover install/activation, match precision, proof/disclosure comprehension, switching, manual burden, 30/90-day recurrence, connector health, and disclosure cost.
 
-**Refinement:** compute one bounded catch-up decision rather than replaying intervals; per-domain budgets and jitter; leases/idempotency; unknown submission outcomes never auto-retry.
+Custom URL intake remains valuable but v1 only produces a safe guided draft. Family/guardian administration, blanket private-broker outreach, arbitrary custom automation, multi-tenant SaaS, non-U.S. support, and an AI dependency are deferred.
 
-### 8. Jurisdiction rules will be wrong or stale
+## Residual risks preserved
 
-**Refinement:** versioned sourced policy facts with effective/review/expiry dates; uncertainty requires review; scope claims stay narrow; qualified legal review before authorized-agent positioning.
+- Some private brokers cannot be independently verified.
+- Browser/email transports remain brittle and an allowed broker can misuse disclosed PII.
+- A crash after transmission may remain unknowable.
+- Local shared-kernel isolation is weaker than higher-assurance VM/gVisor/Kata profiles.
+- Key loss is permanent and retained recovery catalogs extend deletion time.
+- Laws, destinations, and procedures drift.
+- Volunteer review capacity can collapse; forks can remove safeguards.
+- Removal does not erase public records, downstream copies, breach data, or future recollection.
 
-### 9. Assistant integration expands the prompt-injection blast radius
+## Required external reviews
 
-**Refinement:** metadata-only default tools; external text never becomes instructions; no raw evidence/PII in model context; no submit or approval tool initially; short-lived actor/profile/case grants for any future write.
-
-### 10. SQLite and one container could be sold as “production ready” too early
-
-**Refinement:** two explicit deployment profiles and honest release gates. SQLite is single-worker local-lite; cloud-small uses PostgreSQL and role separation. Initial commit states that it is architecture, not a runnable release.
-
-### 11. A giant broker count encourages bad incentives
-
-**Refinement:** publish capability and recent quality per broker; optimize verified-removal precision, intervention cost, and PII disclosed; begin with a small trusted connector set.
-
-### 12. Evidence can retain third-party PII and hostile content
-
-**Refinement:** encrypted evidence, sanitized derivatives, bounded capture, raw-evidence retention limits, download prohibition, no active rendering outside isolated viewer, content hashes.
-
-## Medium challenges
-
-- **Email threads are hard to correlate:** use per-case aliases/tokens where provider permits, message IDs, sender/domain checks, and manual review for ambiguous mail.
-- **Authorization can outlive consent:** explicit scope/expiry/revocation and job cancellation on revocation.
-- **Backups can be unrecoverable or too recoverable:** separate key backup with strong warnings; scheduled restore verification; no wrapping key in archives.
-- **Family mode invites coercion:** separate profiles and audit; no silent shared identity; guardian flows deferred until legally reviewed.
-- **Custom URLs enable SSRF:** parse-first, private-range denial, redirect/DNS revalidation, no credentials, strict byte/time/content bounds.
-- **Metrics leak relationship data:** local-only defaults and opaque/aggregate schemas.
-- **Open directories have license/provenance traps:** import only after license review; preserve provenance; initial repo contains synthetic data only.
-- **Project name may create affiliation/trademark confusion:** working-name disclaimer and pre-launch review.
-
-## Residual risks accepted for planning
-
-- Some brokers cannot be independently verified because their databases are private.
-- Some legal requests require users to disclose sensitive attributes or identification.
-- Removal does not prevent copies, public records, new collection, breach data, or unlawful brokers.
-- Browser and email workflows remain brittle despite governance.
-- Self-hosting shifts operational/key-loss risk to the user.
-- A volunteer project cannot promise legal representation or response SLAs.
-
-## Required independent reviews
-
-Before automatic live submission: cryptography/key management, setup-authorization binding, connector sandbox/SSRF, and data-rights legal posture. Before stable v1: accessibility, deployment hardening, backup recovery, privacy notice/retention, and one end-to-end user study. Findings and resulting ADRs should be published without user PII.
-
-## Design changes made after this review
-
-The architecture was tightened to add: no blanket broadcast mode; exact semantic outcome states; one-time connector capabilities; separate browser image; profile-specific keys and cryptographic deletion; unknown-outcome no-retry; official-platform guidance boundary; hard distinction between single-tenant cloud and multi-tenant SaaS; provenance expiry; and an explicit assistant capability floor.
+Before live automatic submission: independent cryptographic/key-catalog review, actor/setup-authorization review, connector/egress/SSRF review, dispatch-journal/restore review, and qualified U.S. legal/authorized-agent review. Before stable v1: accessibility, deployment hardening, signed supply chain, proof/disclosure user comprehension, privacy/retention/offboarding, and a 12-week user study. Findings and dispositions are published without user PII.

@@ -1,91 +1,116 @@
 # Security, privacy, and threat model
 
-## Assets
+## Assets and harms
 
-The highest-value assets are identity attributes, historical aliases/addresses, authorization documents, broker findings, browser and email credentials, evidence, case history, encryption keys, and the relationship graph connecting a person to brokers.
+Highest-value assets: current/historical identity attributes, relationship graph, authorization/authority evidence, profile/key catalog, connector/browser/email credentials, findings/evidence, case history, wrapping/profile keys, and external-action authority.
 
-Availability and integrity matter too: a compromised connector could submit unauthorized requests, delete the wrong person's record, spam brokers, falsify evidence, or cause a user to miss a deadline.
+Confidentiality, integrity, and availability all matter. A compromise can expose a dossier, submit for the wrong person, enrich a broker, spam destinations, falsify proof, make deletion unrecoverable, or miss a deadline.
 
 ## Adversaries
 
-- opportunistic malware or another local user;
-- cloud account or backup compromise;
-- a malicious or compromised connector contributor;
-- a broker serving hostile HTML, redirects, files, or misleading responses;
-- an attacker who can submit a custom URL;
-- a compromised assistant/OpenClaw plugin or prompt-injected page;
-- a malicious household administrator targeting another person;
-- a curious operator or diagnostics recipient;
-- supply-chain compromise of dependencies or container images.
+- opportunistic malware, malicious extension, or another local user;
+- cloud account, ingress, database, object store, KMS, or backup compromise;
+- malicious/compromised connector contributor, build/signing key, or model artifact;
+- broker-controlled hostile HTML, redirects, files, service workers, mail, or misleading responses;
+- custom URL/email sender attempting SSRF, prompt injection, decompression/Unicode sponge, or parser exploit;
+- compromised assistant/OpenClaw plugin or another client of a local model server;
+- malicious household administrator or stale authorized actor;
+- curious operator/diagnostics recipient;
+- supply-chain or container/kernel compromise;
+- broker that legitimately receives the minimum bundle and then misuses it.
 
 ## Trust zones
 
-1. **User control plane:** UI/CLI, setup authorization, and exception-review ceremony.
-2. **Core trusted process:** domain, policy, orchestration, projections.
-3. **PII vault/key boundary:** encrypted fields and external master key.
-4. **Connector sandbox:** untrusted-by-default code with scoped capabilities.
-5. **External network:** brokers, mail, registries, and hostile content.
-6. **Integration zone:** assistants and notifications with metadata-only defaults.
+1. **Authenticated user control plane:** UI/CLI, bootstrap/cloud identity, setup authorization, step-up, exception review.
+2. **Trusted deterministic core:** domain, policy, orchestration, external-intent journal, resource budget, projections.
+3. **Vault/key boundary:** encrypted fields/evidence, random wrapped profile keys, separately protected key catalog, external install/cloud KEK.
+4. **Connector/browser artifact boundary:** one untrusted action, ephemeral filesystem, strict runtime limits, no core mounts.
+5. **Egress policy gateway:** final fence/authority/origin/IP/protocol/disclosure/budget enforcement.
+6. **External network/content:** brokers, mail, registries, public procedures, hostile responses.
+7. **Optional local intelligence:** sanitized bounded input, no tools/network/vault, untrusted suggestions.
+8. **Low-trust integrations/diagnostics:** OpenClaw, notifications, support bundles, optional exports.
 
 ## Major threats and controls
 
 | Threat | Preventive controls | Detective/recovery controls |
 | --- | --- | --- |
-| Database/backup theft | envelope encryption; key outside DB/backups; field-level keys per profile | key rotation; restore audit; cryptographic erasure |
-| Raw PII leakage in logs | typed redacted values; no string interpolation of domain objects; log allowlist | redaction tests; canary PII scans in CI/support bundles |
-| Connector exfiltrates full profile | minimum attribute bundle; one-time capability; egress allowlist; isolated process | disclosure ledger; unusual destination/volume alerts; kill switch |
-| SSRF/custom URL attacks | parse without fetch first; DNS/IP checks; deny private/link-local/metadata ranges; redirect revalidation | destination audit and alert; connector quarantine |
-| Hostile browser content | isolated browser context; downloads disabled; no clipboard; no core cookies; bounded time/memory | capture sanitized failure evidence; destroy context |
-| Wrong-person deletion | attribute explanation; minimum match threshold; ambiguity review; broker-specific identifiers | post-action review; incident classification and connector rollback |
-| Unauthorized household request | separate profiles; stored authority; actor-bound approvals; no shared implicit consent | consent/authorization event history; revoke all grants |
-| Replay/duplicate submission | idempotency keys; immutable approved plan hash; nonce/expiry | duplicate detector; case timeline |
-| Prompt injection via page/email | deterministic parser; external text is data; no raw content sent to assistant; tools lack submission authority | assistant audit log; capability revocation |
-| Key exposed through environment/process | file descriptor or secret provider preferred; restricted permissions; never print config | startup self-check; rotation runbook |
-| Supply-chain compromise | locked hashes; SBOM; signed images; minimal images; connector signing and review | vulnerability scans; provenance verification; rapid connector disable |
-| False proof of removal | semantic states; independent verifier; evidence policy | resurfacing scan; evidence integrity checks |
-| Denial of service / broker blocking | per-domain rate limits; randomized scheduling; no mass broadcast | backoff; circuit breaker; manual fallback |
+| Database/evidence backup theft | random profile DEKs; external KEK; field/object encryption; encrypted/pseudonymized relationship metadata | key rotation; inventory; isolated restore; cryptographic deletion report |
+| Key deletion falsely claimed | profile DEK not root-derived; key-catalog backup inventory and tombstone horizons | restore old catalog after deletion in tests; visible pending-backup state |
+| Localhost/cloud account takeover | bootstrap auth; Host/Origin/CSRF/session/cookie controls; passkey/OIDC cloud profile; step-up and epochs | session audit/revocation; cross-profile and stale-grant tests |
+| Raw PII in logs/traces | typed allowlisted diagnostics; generic HTTP capture off; no domain-object interpolation | PII canaries over logs, traces, error pages, bundles, notifications |
+| Connector reads core secrets | separate artifact; no core image/mounts/socket/host network; rootless/read-only/tmpfs/cap/seccomp/resource policy | malicious-artifact suite; runtime audit; kill/quarantine |
+| Connector exfiltrates or rebinds | mandatory gateway; fence/authority/disclosure; origin + resolved public IP every connection; protocol/redirect/byte limits | destination/disclosure ledger; gateway denial metrics; signed revocation |
+| Hostile browser content | Chromium sandbox/dedicated user; ephemeral context; no downloads/clipboard/WebRTC/DoH/QUIC; bounded content | sanitized failure evidence; destroy context; higher-assurance cloud sandbox |
+| SSRF/custom URL | parse first; public-IP validation on each resolution/redirect; no credentials; byte/time/MIME limits | gateway audit; quarantine; fuzz/redirect/rebinding suite |
+| Wrong-person removal | attribute explanation; high connector-specific threshold; no name-only automatic confirmation; ambiguity review | precision by connector; incident/rollback; user correction |
+| Stale or unauthorized submit | immutable plan; actor/profile/scope/epoch; final dispatch recheck; monotonic fence; kill switches | journal/fence audit; revoke grants; no retry after start |
+| Crash creates duplicate send | immutable intent, separate attempts, `dispatch_started` and `outcome_unknown` | receipt/portal/mail reconciliation; kill-at-every-edge tests |
+| Restore replays old work | external actions paused; journal boundary; restore-time unknown marking and reconciliation | restore drill from pre-send backup; explicit resume step-up |
+| False proof | assertion/one-absence/corroborated/inconclusive ladder; independent timed policy | resurfacing; method-specific evidence; proof-comprehension test |
+| Event history rewritten | keyed/signed event chain; monotonic checkpoint outside primary DB | checkpoint mismatch alert; projection rebuild; disclose assurance limit |
+| Registry rollback/compromise | expiring monotonic metadata; delegated capability roles; threshold root; digest/SBOM/provenance; no auto-promotion | persisted version floor; revocation; reproducible verification |
+| Prompt injection/model leak | deterministic redaction and caps; no raw PII; isolated local runtime; no tools/network/state authority | canaries; supporting-span/schema validation; abstain/disable |
+| Resource exhaustion | shared heavy-work lease; memory preflight; CPU/RAM/tmp/time/token caps; deterministic priority | cancellation, unload, `assist_unavailable`, capacity metrics |
+| Unauthorized household request | one-adult v1; isolated profile/authority model; no implicit shared consent | consent/authority history; epoch revocation; defer guardian flows |
 
 ## Cryptographic design
 
-- Generate a random root data-encryption key at first setup.
-- Wrap it with a key-encryption key held in macOS Keychain, Linux Secret Service/file with strict permissions, or a cloud KMS/secret manager.
-- Derive independent per-profile and per-purpose keys with HKDF.
-- Encrypt fields and objects with a misuse-resistant authenticated encryption construction selected during implementation security review; AES-256-GCM with unique nonces is the portability baseline, while XChaCha20-Poly1305 is preferred when the dependency choice is accepted.
-- Bind ciphertext to table, record ID, profile ID, schema version, and field name as associated data.
-- Store key version and nonce with ciphertext, never the wrapping key.
-- Rotation rewraps data keys first; full re-encryption is an explicit background job.
+- Generate a random installation/cloud key-encryption key (KEK) at setup and hold it in OS keychain, mounted secret, or KMS—not application data/evidence backups.
+- Generate an independent random profile data-encryption key (DEK) per profile; never derive it from the KEK.
+- Wrap each profile DEK with the KEK; classify and separately back up the wrapped-key catalog.
+- Derive field, evidence, blind-index, session, and event-authentication keys below the profile DEK with context-bound HKDF.
+- Encrypt with a reviewed authenticated-encryption library/algorithm selected during implementation review; AES-256-GCM with unique nonces is the portability baseline, XChaCha20-Poly1305 a candidate.
+- Bind ciphertext to tenant/install, table/object, record, profile, schema version, field/purpose, and key version as associated data.
+- Rotation rewraps profile DEKs first; purpose/algorithm changes may re-encrypt. Interrupted rotation is resumable and versioned.
+- Profile deletion destroys the live wrapped DEK and indexes/session keys. It is reported incomplete while any key-catalog backup can recover that DEK.
 
-Do not invent cryptography. Use reviewed libraries and test vectors.
+Do not invent cryptography. Use reviewed libraries/test vectors and obtain independent review before live submission.
 
-## Privacy model
+## Authentication and authority model
 
-Privacy is enforced as data-flow policy, not a settings page:
+Local-lite binds loopback by default but still authenticates. Setup uses a random bootstrap secret/ceremony, then rotates into an authenticated session. Strict Host/Origin validation, anti-CSRF token, `SameSite=Strict`, secure cookies where TLS applies, clickjacking defense, and session rotation/revocation are mandatory. CLI uses a permissioned Unix socket or equivalent authenticated API.
 
-- identity attributes are classified by sensitivity and purpose;
-- connector manifests declare a maximum disclosure schema;
-- policy computes the minimum bundle for the selected right and jurisdiction;
-- the setup-authorization and exception-review UI shows every released category and warns on novel/high-risk fields;
-- every actual release becomes a disclosure event;
-- optional remote integrations receive opaque IDs and aggregates unless separately granted;
-- telemetry is off by default and never includes broker/profile identifiers if later added.
+Cloud-small requires HTTPS and a phishing-resistant passkey/WebAuthn or narrowly configured OIDC reference profile. Step-up is required for setup-authorization changes, resume, exception submit, key export/recovery change, profile deletion, and destructive restore. Every authorization/grant binds actor, represented profile, evidence, scope, expiry, plan boundary, and revocation epoch.
 
-## Browser and CAPTCHA policy
+A fully compromised host remains outside the protection claim.
 
-MyCogni will not bypass CAPTCHAs or access controls. A connector may detect a challenge, preserve safe state, and create a user task. User-completed challenges occur in a visible isolated browser session. Third-party CAPTCHA-solving services are outside the supported threat model because they disclose task content and encourage evasion.
+## Connector/browser and egress policy
+
+Connectors are not plugins. They are separate digest-pinned artifacts with no core imports/mounts/network. The runtime is non-root/rootless, read-only except tmpfs, capability/syscall constrained, resource/time bounded, and cannot access DB/vault/key catalog/Docker socket/host metadata/other sessions.
+
+The mandatory egress gateway is the only connector path to the network. It verifies the current action token/fence, authority epoch, all pause states, connector digest/capability, allowed method/protocol/origin/public IP, redirect, byte/time budget, and authorized disclosure before first and subsequent connections. Browser challenge/terms/disclosure drift stops.
+
+Local container isolation shares the host kernel and is lower assurance than a properly configured VM/gVisor/Kata tier; documentation and support matrix must state this.
+
+## Evidence assurance
+
+`submitted` proves transport evidence, not receipt. `acknowledged` proves acknowledgement. `broker_asserted_removed` is the broker's claim. `observed_absent_once` records one clean post-request observation. `verified_removed` requires the versioned policy's independent time/method corroboration. Rate-limit, block, challenge, personalization/geolocation difference, ambiguous result, or missing evidence is `inconclusive`.
+
+Screenshots are not automatically “gold standard”: they can capture third-party PII, hostile content, or a transient result. Prefer structured redacted derivatives, encrypt/bound raw captures, record method/context/time, and retain minimally.
+
+## Local intelligence policy
+
+V1 ships no model. A future local adapter follows ADR-0011: deterministic sanitized bounded inputs; digest-pinned license-reviewed artifacts; no raw PII/evidence, tools, network, vault/database, connectors, authority, reusable conversation, fine-tuning, or vault RAG. Output is an encrypted `UntrustedSuggestion` with schema/supporting spans and cannot mutate state. Remote fallback is prohibited.
 
 ## Security release gates
 
-Before the first live submission release:
+Before any live automatic submission:
 
-- external review of cryptographic/key management design;
-- threat-model review of the connector protocol and SSRF defenses;
-- redaction tests using seeded canary PII;
-- restore and key-loss drills;
-- dependency/SBOM/container scans;
-- permission tests proving read-only integrations cannot mutate;
-- a broker-owned or synthetic staging target for end-to-end submission tests;
-- incident response and emergency connector-disable runbooks.
+- independent review of key hierarchy/catalog/deletion and implementation crypto;
+- actor/session/step-up and setup-authorization binding review;
+- connector artifact + egress gateway threat review and malicious-connector suite;
+- dispatch-journal crash/fence/revocation/restore tests;
+- canary PII scans of every diagnostic/support/AI surface;
+- backup, key-loss, old-catalog deletion, restore and reconciliation drills;
+- SBOM/container/artifact/provenance verification;
+- broker simulator end-to-end tests; no real broker in CI;
+- incident, emergency disable, unknown-outcome, and registry rollback runbooks;
+- qualified U.S. legal/authorized-agent review for the claimed connectors/policies.
 
-## Legal boundary
+Before stable v1: accessibility, proof/disclosure comprehension, local deployment hardening, signed images, registry rollback protection, one 12-week user study, and no unresolved P0/P1 without public expiring acceptance.
 
-This architecture supports lawful user-directed requests; it does not decide that a right always applies. Jurisdiction rules are versioned policy facts with sources and review dates. Uncertainty produces a reviewed task. The project must obtain qualified legal review before representing itself as an authorized agent service or enabling unattended submissions across jurisdictions.
+## Legal and abuse boundary
+
+MyCogni supports lawful user-directed requests; it does not decide that a right always applies or provide legal representation. U.S.-only is not one policy: voluntary opt-out, state rights, agent authority, and official mechanisms are versioned separately. California DROP remains guided/user-completed. Unknown applicability requires review.
+
+Open-source forks can remove safeguards. The official project will not support unauthorized-person requests, mass/bulk outreach, CAPTCHA/rate-limit evasion, harassment, record tampering, or deceptive effectiveness claims.

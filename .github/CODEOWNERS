@@ -1,0 +1,8 @@
+* @Ninja91
+
+# Security-sensitive surfaces require explicit owner review.
+/connectors/ @Ninja91
+/broker-registry/ @Ninja91
+/docs/adr/ @Ninja91
+/docs/05-security-privacy-threat-model.md @Ninja91
+/deploy/ @Ninja91

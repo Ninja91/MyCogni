@@ -1,0 +1,40 @@
+name: Synthetic bug report
+description: Report a reproducible problem without personal data or live broker evidence.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include real names, contact details, broker-profile URLs, screenshots, credentials, cookies, inbox content, or authorization records. Use `.test`, `.example`, or `.invalid`."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Describe the problem using synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Synthetic reproduction
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I verified this report contains no real PII, secrets, sessions, or live evidence.
+          required: true

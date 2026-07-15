@@ -1,16 +1,14 @@
-## Scope
+## What changed
 
-Describe the narrow outcome and linked requirement/issue/ADR.
+## Why
 
-## Safety review
+## Safety and privacy impact
 
-- [ ] Uses synthetic data only; no PII, credentials, sessions, or live evidence
-- [ ] Preserves observe/prepare/approve/submit/verify separation
-- [ ] Documents disclosures, destinations, authorization, and external actions
-- [ ] Updates threat cases and redaction tests where applicable
-- [ ] Includes migration, backup, and rollback impact where applicable
-- [ ] Does not add live broker traffic to CI
+- [ ] I used only synthetic data and reserved domains.
+- [ ] This change does not add live broker traffic to CI.
+- [ ] I updated requirements, threats, ADRs, migrations/rollback notes, or docs where material.
+- [ ] Connector capability and destination changes include provenance, expiry, fixtures, and disclosure review.
 
-## Verification
+## Validation
 
-List tests, fixtures, manual checks, and known limitations.
+List the exact checks run. Do not attach real evidence or screenshots.

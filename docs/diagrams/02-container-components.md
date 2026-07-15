@@ -2,78 +2,105 @@
 
 ```mermaid
 flowchart TB
-    subgraph control["User control plane"]
-        ui["Local Web UI<br/>FastAPI + server-rendered HTML"]
-        cli["CLI<br/>Typer"]
+    subgraph control["Authenticated user control plane"]
+        ui["Local web UI<br/>server-rendered FastAPI"]
+        cli["CLI over permissioned authenticated channel"]
+        session["Bootstrap, session, step-up, authority epochs"]
     end
 
-    subgraph core["Trusted core process"]
+    subgraph core["Trusted deterministic core image"]
         api["Command and Query API"]
-        identity["Identity Vault service"]
-        registry["Broker Registry service"]
-        discovery["Discovery service"]
-        cases["Case Management service"]
-        policy["Policy and Disclosure engine"]
-        reporting["Reporting projections"]
-        gateway["Integration Gateway"]
-        orchestrator["Orchestrator<br/>jobs, leases, outbox"]
+        identity["Identity Vault + key catalog"]
+        registry["Broker Registry"]
+        discovery["Discovery"]
+        cases["Case Management"]
+        policy["Policy and Disclosure Engine"]
+        journal["External Intent Journal"]
+        orchestrator["Jobs, leases, outbox, catch-up"]
+        budget["Resource Budget Manager"]
+        evidenceSvc["Evidence and verification service"]
+        reporting["Reporting + support matrix"]
+        integration["Mail / OpenClaw gateway"]
+        taskBuilder["Deterministic intelligence task builder"]
     end
 
-    subgraph state["Encrypted state"]
+    subgraph state["Encrypted state and recovery boundary"]
         db[("SQLite local-lite<br/>PostgreSQL cloud-small")]
         objects[("Encrypted evidence objects")]
-        keys["External key provider"]
+        keyCatalog[("Wrapped random profile-key catalog")]
+        kek["External KEK provider"]
+        checkpoint["External monotonic integrity checkpoint"]
     end
 
-    subgraph runtime["Connector execution boundary"]
-        brokerRunner["Non-browser connector runner"]
-        browserRunner["On-demand browser runner"]
-        envelope["One-time capability envelope"]
+    subgraph execution["Separate untrusted artifacts"]
+        connector["Digest-pinned connector OCI/WASI artifact"]
+        browser["Ephemeral Playwright/Chromium artifact"]
+        envelope["One-time sealed action + fence"]
+        egress["Mandatory egress policy gateway"]
     end
 
-    subgraph external["External and untrusted"]
-        broker["Manifest-approved broker origins"]
-        email["Mail provider"]
-        sources["Registry and policy sources"]
+    subgraph advisory["Optional post-v1 local intelligence"]
+        nullAdapter["IntelligencePort<br/>null by default"]
+        localRunner["Isolated local runtime<br/>no network, tools, vault, or DB"]
+        suggestion["Schema + span validated<br/>UntrustedSuggestion"]
+    end
+
+    subgraph external["External and hostile"]
+        broker["Manifest-approved broker origin"]
+        mail["Mail provider"]
+        sources["Registry / policy sources"]
         openclaw["OpenClaw / assistant"]
     end
 
     ui --> api
     cli --> api
+    session --> api
     api --> identity
     api --> registry
     api --> discovery
     api --> cases
     api --> reporting
-    api --> gateway
+    api --> integration
     discovery --> policy
     cases --> policy
+    policy --> journal
+    journal --> orchestrator
     discovery --> orchestrator
-    cases --> orchestrator
-    policy --> orchestrator
+    orchestrator --> budget
 
-    identity <-->|"encrypted fields"| db
-    registry <-->|"versioned metadata"| db
-    cases <-->|"events and projections"| db
-    orchestrator <-->|"durable jobs and outbox"| db
+    identity <-->|"encrypted profile data"| db
+    cases <-->|"events, projections, intents"| db
+    orchestrator <-->|"jobs, leases, outbox"| db
+    identity <-->|"wrapped profile keys"| keyCatalog
+    kek -->|"wrap/unwrap only"| keyCatalog
+    evidenceSvc <-->|"encrypted locators and hashes"| db
+    evidenceSvc <-->|"bounded objects"| objects
+    evidenceSvc --> checkpoint
     reporting --> db
-    identity <-->|"wrap and unwrap only"| keys
-    cases <-->|"encrypted locators and hashes"| objects
 
-    orchestrator -->|"issue scoped action"| envelope
-    envelope --> brokerRunner
-    envelope --> browserRunner
-    brokerRunner -->|"allowlisted egress"| broker
-    browserRunner -->|"isolated context and allowlisted egress"| broker
-    brokerRunner -->|"structured result and evidence reference"| orchestrator
-    browserRunner -->|"structured result or human task"| orchestrator
+    orchestrator -->|"issue current fence"| envelope
+    envelope --> connector
+    envelope --> browser
+    connector -->|"all outbound bytes"| egress
+    browser -->|"all outbound bytes"| egress
+    egress <-->|"validated connection"| broker
+    connector -->|"structured result + evidence"| evidenceSvc
+    browser -->|"result or human task"| evidenceSvc
+    evidenceSvc --> cases
 
-    gateway <-->|"scoped credential"| email
-    registry -->|"read public facts"| sources
-    gateway <-->|"metadata-only default tools"| openclaw
+    integration <-->|"scoped mail credential"| mail
+    registry -->|"licensed/provenanced public facts"| sources
+    integration <-->|"metadata-only tools"| openclaw
 
-    guard["Core never loads arbitrary connector code in-process"]
-    guard -.-> orchestrator
+    cases -.-> taskBuilder
+    taskBuilder -.->|"sanitized bounded task"| nullAdapter
+    nullAdapter -.-> localRunner
+    localRunner -.-> suggestion
+    suggestion -.->|"advisory display/review only"| cases
+    budget -.-> localRunner
+
+    guard["Core contains no connector, browser, model runtime, or model weights"]
+    guard -.-> core
 ```
 
-The same image exposes `serve`, `worker`, and `scheduler` roles. Local-lite co-locates roles but preserves module and subprocess boundaries.
+The core image can co-locate trusted roles in local-lite. Runtime boundaries, authentication, gateway enforcement, key separation, and authority semantics remain intact.

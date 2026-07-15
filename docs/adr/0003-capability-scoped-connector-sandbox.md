@@ -9,7 +9,7 @@ Broker procedures change often and connectors process hostile content while hold
 
 ## Decision
 
-Run connectors outside the trusted core. Each immutable release declares independent capabilities, exact destinations, maximum disclosure schema, provenance, tests, and expiry. Each action receives one short-lived envelope and key, only the minimum sealed attributes, and no database/vault credential. Enforce destination allowlists and resource/time bounds. Quarantine material drift and require separate promotion for observe, prepare, submit, poll, and verify.
+Run connectors outside the trusted core as separate digest-pinned OCI or constrained WASI artifacts; do not include or import them in the core image/process. Each immutable release declares independent capabilities, exact destinations, maximum disclosure schema, provenance, tests, and expiry. Each action receives one short-lived envelope and key, only the minimum sealed attributes, and no database/vault credential. Force all egress through a policy gateway and enforce rootless execution, read-only/tmpfs filesystems, syscall/capability and resource bounds. Quarantine material drift and require separate promotion for observe, prepare, submit, poll, and verify.
 
 ## Consequences
 
@@ -24,4 +24,4 @@ Loading plugins into the application process was rejected. A central remote conn
 
 ## Review trigger
 
-Runtime transport changes, signed registry launch, remote browser execution, plugin-supplied native code, or a connector security incident.
+Runtime transport changes, signed registry launch, remote browser execution, connector-supplied native code, egress-gateway change, or a connector security incident. ADR-0008 specifies the artifact and egress boundary.

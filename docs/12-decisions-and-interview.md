@@ -11,6 +11,7 @@ Interview recorded: 2026-07-15.
 | Browser automation | Comfortable with Playwright | use an isolated Playwright/Chromium runner; stop for CAPTCHA, MFA, ambiguity, or drift |
 | Interface | Any is acceptable | implement CLI first for velocity and a minimal local web UI in the same early milestone |
 | License | Apache-2.0 if possible | accepted; canonical license text and NOTICE are vendored in the repository |
+| Public repository | Push after adversarial review with a detailed README | intended public repository under the authenticated GitHub account; publishing status recorded in the audit |
 
 ## Automatic execution contract
 
@@ -29,8 +30,11 @@ Any failed condition produces a visible task. CAPTCHA and MFA are user-completed
 ## Decisions made by the architecture
 
 - Deployment remains single-tenant: local-lite first, cloud-small next.
+- Stable v1 officially supports one consenting adult per installation; profile isolation remains in the domain for later household support.
 - SQLite is used for one-worker local-lite; PostgreSQL is used for cloud-small.
-- Optional AI can explain or draft but receives no raw PII and has no default submit capability.
+- Connectors are separate digest-pinned artifacts and all egress crosses a fenced policy gateway.
+- External action uses immutable intents, separate attempts, and explicit unknown outcomes rather than exactly-once claims.
+- Optional AI is absent from v1; a future local adapter returns untrusted suggestions, receives no raw PII/tools/authority, and can never submit.
 - OpenClaw starts with metadata-only status, task, and custom-case-draft tools.
 - Evidence keeps encrypted raw artifacts for bounded periods and produces redacted derivatives for reports.
 
@@ -38,15 +42,14 @@ Any failed condition produces a visible task. CAPTCHA and MFA are user-completed
 
 These do not block the initial architecture, but they should be answered before their associated feature is implemented:
 
-1. Is the first release solely for the maintainer, or should onboarding target non-technical family/friends?
-2. Which measurable outcome would make the first 90 days successful?
-3. Are scoped email app passwords/OAuth acceptable, or should the first mail workflow create drafts only?
-4. Are family profiles required in v1, and if so, adults only?
-5. Which primary host should drive packaging tests: macOS laptop, home server/NAS, or cloud VM?
-6. Which notification channels matter beyond the local UI and email digest?
-7. Is any remote AI acceptable with redacted inputs, or must optional AI be local-only?
-8. Is “MyCogni” the final public name? Its similarity to “Incogni” requires trademark/confusion review before launch.
-9. When and under which GitHub user or organization should the repository be published?
+1. Should preview-alpha onboarding optimize first for the maintainer's macOS laptop, a NAS/home server, or both?
+2. Are scoped email app passwords/OAuth acceptable in guided beta, or should it create drafts only?
+3. Which 2–5 U.S. people-search workflows should be evaluated first, after terms/legal/source review?
+4. Which notification channels matter beyond the local UI and a PII-free digest?
+5. Which qualified reviewers can cover cryptography, connector isolation, and U.S. legal posture before live beta?
+6. Is “MyCogni” the final public name? Its similarity to “Incogni” requires trademark/confusion review before stable launch.
+7. Which cloud/VM, ingress identity provider, KMS, and evidence store should be the cloud-small reference?
+8. After v1 metrics exist, is one local advisory reply-triage experiment worth its model/runtime/license/resource cost?
 
 ## Decision protocol
 

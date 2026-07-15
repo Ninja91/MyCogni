@@ -6,11 +6,21 @@ Requirement keywords use MUST, SHOULD, and MAY in their usual normative sense. I
 
 ### Identity and authorization
 
-- **ID-01** The system MUST support multiple people while cryptographically and operationally isolating each profile.
+- **ID-01** The domain and storage model MUST support multiple people while cryptographically and operationally isolating each profile; stable v1 product support is one consenting adult per installation until household authority is reviewed.
 - **ID-02** A profile MUST support current and historical names, emails, phone numbers, and addresses with validity ranges and provenance.
 - **ID-03** The system MUST record jurisdiction, age/guardianship status, consent, and authorization scope before preparing an external request.
 - **ID-04** Family members MUST be separate profiles; adding a person to one identity record is prohibited.
 - **ID-05** The vault MUST allow per-profile export and cryptographic deletion.
+- **ID-06** Every profile MUST use an independent random wrapped data-encryption key; purpose keys MAY be derived below it, but the profile key MUST NOT be reproducible from an installation root after deletion.
+- **ID-07** A profile deletion report MUST disclose retained key-catalog backup horizons and MUST NOT claim completion while a recoverable catalog backup can restore the profile key.
+
+### Actor authentication and authority
+
+- **AU-01** Local and cloud control planes MUST authenticate actors; loopback, LAN, VPN, or private-network location alone is insufficient.
+- **AU-02** Web control planes MUST enforce Host/Origin policy, CSRF protection, secure session/cookie policy, clickjacking protection, and session rotation/revocation.
+- **AU-03** Cloud-small MUST support a phishing-resistant authentication reference profile using passkeys/WebAuthn or narrowly configured OIDC.
+- **AU-04** Setup-authorization changes, external-action resume, exception submission, key export/recovery changes, profile deletion, and destructive restore MUST require step-up authentication.
+- **AU-05** Every grant MUST bind actor, represented profile, authority evidence, scope, expiry, and revocation epoch.
 
 ### Broker registry and discovery
 
@@ -26,20 +36,25 @@ Requirement keywords use MUST, SHOULD, and MAY in their usual normative sense. I
 - **RQ-02** Every proposed submission MUST show destination, legal/policy basis, transport, disclosed attributes, attachments, and risk warnings.
 - **RQ-03** Default policy MUST automatically submit through a fresh trusted connector when the action fits the profile's active setup authorization, match policy, destination allowlist, and maximum disclosure schema.
 - **RQ-03A** The system MUST suspend automatic submission and require review after a material connector/destination/disclosure/legal-policy change, an ambiguous match, or a request for an attribute outside the setup authorization.
-- **RQ-04** Requests MUST be idempotent and carry a stable internal case ID without leaking a globally correlatable user identifier.
+- **RQ-04** Each exact authorized external action MUST have an immutable `intent_id` independent of connector version or attempt; each execution MUST have a distinct `attempt_id`, neither leaking a globally correlatable user identifier.
 - **RQ-05** The system MUST calculate deadlines from versioned jurisdiction policy and show the policy source/version.
 - **RQ-06** Retry policies MUST use broker-specific rate limits, bounded backoff, and duplicate suppression.
 - **RQ-07** CAPTCHA, MFA, identity challenge, account login, ambiguous match, changed terms, or unexpected disclosure MUST suspend automation and create a user task.
 - **RQ-08** A user MUST be able to revoke an unsent request, disable a broker, pause all external actions, and rotate credentials.
+- **RQ-09** External dispatch MUST use a fenced journal with explicit `ready`, `dispatch_claimed`, `dispatch_started`, `transport_proven`, `outcome_unknown`, and `failed_before_send` semantics.
+- **RQ-10** The final dispatch transaction and egress gateway MUST revalidate authorization epoch, plan hash, match policy, connector digest/freshness, destination/disclosure, and all global/profile/broker pauses before the first outbound byte.
+- **RQ-11** Once dispatch has started, timeout/crash/cancellation MUST produce `outcome_unknown`; automatic retry is prohibited until reconciliation proves no send.
 
 ### Evidence and verification
 
 - **EV-01** Submission evidence MUST capture a timestamp, connector version, redacted payload summary, destination, and response digest.
 - **EV-02** Broker acknowledgement and independent absence verification MUST use different states.
-- **EV-03** `verified_removed` MUST require post-submission evidence and a verification policy that defines timing and method.
+- **EV-03** `verified_removed` MUST require post-submission corroboration satisfying a versioned verification policy that defines timing, method, independence, and inconclusive conditions.
 - **EV-04** Negative scan evidence MUST include enough context to reproduce the check while minimizing storage of page content.
 - **EV-05** Resurfacing MUST create a new occurrence linked to the prior case, not rewrite history.
-- **EV-06** Evidence integrity MUST be detectable with content hashes and an append-only event chain.
+- **EV-06** Evidence integrity MUST use content hashes plus keyed/signed event chaining and an external monotonic checkpoint, and MUST state the assurance boundary honestly.
+- **EV-07** Reports MUST distinguish broker assertion, `observed_absent_once`, `verified_removed`, and `inconclusive`; rate limits, CAPTCHA, access denial, ambiguous search, geolocation/personalization uncertainty, and missing evidence are inconclusive.
+- **EV-08** Tamper-evidence claims MUST be relative to a trusted keyed/signed checkpoint outside the primary database; an unkeyed recomputable chain MUST NOT be described as append-only proof.
 
 ### Experience and reporting
 
@@ -49,6 +64,10 @@ Requirement keywords use MUST, SHOULD, and MAY in their usual normative sense. I
 - **UX-04** Digests MUST be useful after sporadic/offline operation and avoid notification spam.
 - **UX-05** The UI SHOULD meet WCAG 2.2 AA and support keyboard-only completion of setup-authorization and exception-review flows.
 - **UX-06** The system SHOULD provide privacy-hygiene guidance without claiming that tools such as VPNs prevent data brokerage.
+- **UX-07** Every nonterminal case MUST show reason, owner, last evidence, next action, and next date; an unexplained spinner or generic “processing” label is prohibited.
+- **UX-08** The generated support matrix MUST expose capability, maturity, freshness/expiry, jurisdiction basis, required disclosure categories, human steps, verification method, and recent test/canary age per connector.
+- **UX-09** The product MUST provide pause, export, backup status, uninstall/scheduler-disable, key deletion, and residual-backup-horizon guidance.
+- **UX-10** Product claims MUST preserve denominators and MUST NOT market broker count, requests sent, acknowledgement, or one absence observation as verified effectiveness.
 
 ### Integrations
 
@@ -57,25 +76,47 @@ Requirement keywords use MUST, SHOULD, and MAY in their usual normative sense. I
 - **IN-03** An assistant MUST NOT approve disclosure, access raw PII/evidence, or submit externally without a separately enabled capability and a current user confirmation policy.
 - **IN-04** All external integrations MUST have a kill switch and auditable grants.
 
+### Optional local intelligence
+
+- **AI-01** The product MUST be fully functional with a no-op intelligence adapter and MUST NOT bundle, download, or require a model in v1.
+- **AI-02** `IntelligencePort` MUST return only a schema-validated `UntrustedSuggestion` with supporting spans; it MUST NOT create a command or mutate domain state.
+- **AI-03** A model MUST NOT receive raw PII/evidence, a vault/database/connector handle, tools, network access, authorization, reusable conversation, or credentials.
+- **AI-04** A model MUST NOT decide identity match, legal eligibility/policy, deadline, authorization, disclosure, destination, connector trust, verification/outcome, retry, or external action.
+- **AI-05** Model input MUST be deterministically selected, normalized, redacted, bounded, and canary-tested; prompt bodies MUST NOT be retained.
+- **AI-06** Model, quantization, runtime, prompt, schema, and redactor versions MUST be immutable, license/provenance reviewed, digest-pinned, revocable, and re-evaluated per task.
+- **AI-07** Invalid, unsupported, unavailable, timed-out, OOM, or uncited output MUST abstain and MUST NOT fail or delay deterministic broker work.
+- **AI-08** No assist task may leave shadow mode without published task accuracy/safety/resource results and a measured user-time benefit; remote fallback, per-user fine-tuning, and RAG over vault/evidence are prohibited.
+
 ## Quality attributes
 
 - **SEC-01** Raw PII MUST be field-encrypted at rest and protected in transit.
-- **SEC-02** The master key MUST remain outside the application database and backups.
+- **SEC-02** The installation/cloud key-encryption key MUST remain outside application data/evidence backups; the recoverable wrapped-profile-key catalog MUST be classified, separately protected, inventoried, and included in deletion truth.
 - **SEC-03** Logs, metrics, traces, support bundles, and notifications MUST be PII-redacted by construction.
-- **SEC-04** Connector execution SHOULD be isolated with a destination allowlist, ephemeral filesystem, memory/CPU/time limits, and no access to the full vault.
+- **SEC-04** Connector execution MUST use a separate digest-pinned artifact with a rootless/non-root identity, read-only root filesystem, tmpfs workspace, dropped capabilities, `no-new-privileges`, syscall and resource limits, and no core image, database, vault, key catalog, Docker socket, host network, or unrelated session.
+- **SEC-05** All connector/browser egress MUST traverse a mandatory policy gateway that validates the action fence, authority, capability, origin, public IP, redirect, protocol, method, disclosure, and byte/time budget on every connection.
+- **SEC-06** Registry/update metadata MUST provide expiry, monotonic version/rollback protection, delegated capability trust, revocation, artifact digest verification, and build provenance; a signature alone is insufficient.
 - **PRV-01** Data collection and retention MUST be purpose-limited, user-visible, and configurable within safe minimums.
 - **REL-01** Queue actions MUST be durable, idempotent, lease-based, and recoverable after process termination.
 - **REL-02** Local-lite MUST tolerate being offline for months and safely calculate catch-up work.
-- **OPS-01** Backup/restore MUST be documented and automatically testable without putting the master key in the backup archive.
+- **OPS-01** Backup/restore MUST be documented and automatically testable without putting the installation/cloud KEK in the application data/evidence archive.
 - **OPS-02** Every schema and broker-manifest change MUST be versioned and migratable.
+- **OPS-03** Restore MUST leave external actions paused and reconcile every intent newer than the trusted journal/backup boundary before resume.
+- **OPS-04** Local-lite and cloud-small MUST publish separate conformance results for database queueing, keys, evidence, sandbox, auth, backup, restore, and upgrades; common domain code MUST NOT be presented as equivalent security behavior.
 - **PERF-01** Idle local-lite SHOULD use less than 250 MiB RAM excluding an active browser and near-zero CPU.
 - **PERF-02** Browser workers MUST start on demand and shut down after a bounded idle period.
+- **PERF-03** Local-lite MUST grant one shared heavy-work lease to browser or optional inference, with memory preflight and deterministic external-deadline work taking priority.
+- **PERF-04** Optional inference MUST use concurrency one and bounded input/output/time/CPU/RAM/tmp/queue budgets; active inference is reported separately from the core idle target.
 - **PORT-01** The same versioned OCI image MUST support local-lite and cloud-small roles on amd64 and arm64.
 - **PORT-02** Core workflows MUST not depend on a commercial AI, CAPTCHA, email, or cloud service.
 - **GEO-01** Stable v1 MUST support United States privacy workflows only and MUST NOT imply legal coverage for other jurisdictions.
 - **TEST-01** No connector may submit to a real broker in CI.
 - **TEST-02** Release gates MUST include migration, restore, redaction, connector contract, and synthetic end-to-end tests.
+- **TEST-03** Release gates for external actions MUST kill execution at every dispatch-journal edge and test stale fences, revocation-after-claim, duplicate schedulers, connector upgrades, delayed receipts, and pre-submission backup restore.
+- **TEST-04** Connector isolation tests MUST attempt forbidden filesystem/environment/socket/metadata access, DNS rebinding, redirects, WebSocket/QUIC/DoH, byte-budget violations, and allowed-origin exfiltration.
+- **TEST-05** Control-plane tests MUST cover CSRF, DNS rebinding against localhost, Host abuse, session theft/rotation, cross-profile authorization, and stale grant replay.
+- **GOV-01** A live unattended `submit` capability MUST NOT receive `trusted` maturity from one bootstrap maintainer; two qualified reviewers or an equivalent approved governance change are required.
+- **GOV-02** Imported broker facts, datasets, fixtures, connector code, and model artifacts MUST retain source, license/terms, review, transformation, and expiry provenance.
 
 ## Explicitly deferred
 
-Business accounts, identity insurance, credit monitoring, dark-web monitoring, generalized content moderation, public-record source correction, mobile apps, fully autonomous AI connector generation, and a hosted multi-tenant SaaS are not initial requirements.
+Business accounts, family/guardian administration, identity insurance, credit monitoring, dark-web monitoring, generalized content moderation, public-record source correction, mobile apps, fully autonomous AI connector generation, arbitrary-site automatic custom removal, non-U.S. legal support, and a hosted multi-tenant SaaS are not initial requirements.

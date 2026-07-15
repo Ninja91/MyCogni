@@ -2,97 +2,112 @@
 
 ## Architectural choice
 
-MyCogni begins as a modular monolith with explicit ports between domain modules and external connectors. This keeps a local installation understandable and inexpensive while preserving a clean path to split connector workers or scale API/worker roles independently. The system uses one OCI image and no mandatory Redis, message broker, Kubernetes cluster, or AI service.
+MyCogni begins as a Python modular monolith for trusted domain logic, with untrusted/volatile connectors and optional intelligence outside the core image and process. This keeps one local installation understandable and inexpensive while establishing real security boundaries where hostile content and selected PII meet extensible code.
 
 Proposed baseline:
 
-- Python 3.12+
-- FastAPI with server-rendered HTML and small progressive enhancements
-- Typer CLI using the same application services as the API
-- SQLAlchemy and Alembic
-- SQLite in single-instance local-lite; PostgreSQL in cloud-small
-- a database-backed durable job queue with leases and an outbox
-- Playwright only inside isolated browser-capable connector workers
-- OpenTelemetry-compatible structured diagnostics with local exporters disabled by default
+- Python 3.12+, FastAPI with server-rendered HTML, and a Typer CLI;
+- SQLAlchemy/Alembic; SQLite with one worker in local-lite, PostgreSQL in cloud-small;
+- database-backed durable jobs, transactional outbox, fenced submission journal, and event-sourced case history;
+- separate digest-pinned OCI or constrained WASI connector artifacts;
+- Playwright/Chromium only in an ephemeral browser artifact with its sandbox enabled;
+- a mandatory egress policy gateway for every connector/browser byte;
+- independent random profile keys wrapped by an external installation/cloud key;
+- hand-authored PII-safe diagnostics; generic HTTP capture disabled;
+- no mandatory Redis, message broker, Kubernetes, cloud, email vendor, CAPTCHA service, or AI runtime.
 
-The specific libraries remain replaceable behind ports. ADR-0001 records why this shape is preferred over microservices and a desktop-only application.
+One core image exposes `serve`, `worker`, `scheduler`, and local `all-in-one` roles. Connector/browser images and any future model runtime are separate artifacts. ADR-0001 records the modular-monolith decision; ADRs 0007–0011 record the review-driven boundaries.
 
-## Domain modules
+## Trusted domain modules
 
 | Module | Responsibility | Must not do |
 | --- | --- | --- |
-| Identity Vault | profiles, aliases, authorization, field encryption, attribute release | make network calls |
-| Broker Registry | broker identity, domains, procedures, capabilities, provenance, expiry | store user PII |
-| Discovery | schedule scans, classify findings, calculate match explanations | submit deletion requests |
-| Case Management | cases, request plans, approvals, tasks, deadlines, events | execute arbitrary connector code in-process |
-| Policy Engine | jurisdiction rules, disclosure and automation gates, retry/deadline decisions | infer legal rules from an LLM |
-| Orchestrator | durable jobs, idempotency, leases, outbox, catch-up scheduling | bypass policy gates |
-| Connector Runtime | invoke reviewed connector capabilities with minimum scoped data | access the full database or key store |
-| Evidence Store | encrypted artifacts, hashes, retention, verification comparisons | call a finding “removed” without policy evidence |
-| Reporting | dashboard projections, exports, digests, effectiveness measures | expose raw PII in telemetry |
-| Integration Gateway | email, webhooks, OpenClaw/MCP-compatible tools | grant implicit write authority |
+| Identity Vault | profiles, aliases, authority, random profile keys, field release, deletion state | make network calls or expose a general vault API |
+| Actor and Session | bootstrap/cloud authentication, sessions, step-up, revocation epochs | trust loopback/private network alone |
+| Broker Registry | broker identity, procedures, capability maturity, provenance, expiry, revocation | store user PII or silently import external lists |
+| Discovery | schedule scans, classify deterministic findings, calculate attribute explanations | submit requests or use an LLM for match truth |
+| Case Management | cases, immutable plans, tasks, deadlines, state/evidence ladder | execute connector/model code in-process |
+| Policy Engine | state/jurisdiction facts, disclosure, automation, retry and deadline gates | infer law/policy from external text or a model |
+| Orchestrator | jobs, leases, outbox, catch-up, fences, submission journal | claim exactly-once network effects or bypass final gates |
+| Resource Budget Manager | shared heavy-work lease, memory preflight, priority, budgets | allow optional assist to starve deadline/browser work |
+| Evidence Store | encrypted artifacts, assurance method, keyed checkpoints, retention | infer truth from HTTP success or broker assertion |
+| Reporting | dashboard projections, support matrix, exports, digests, PMF measures | blend denominators or expose PII in diagnostics |
+| Integration Gateway | mail, notifications, metadata-only OpenClaw-compatible tools | grant implicit vault/submit authority |
+| Intelligence Task Builder | deterministic sanitization and optional advisory invocation | pass raw PII/evidence or turn suggestions into commands |
 
 ## Ports and adapters
 
 Domain code depends on typed ports:
 
-- `VaultPort`: retrieve a policy-approved attribute bundle by opaque profile reference;
-- `BrokerRegistryPort`: resolve a versioned broker manifest;
-- `ConnectorPort`: observe, prepare, submit, poll, and verify capabilities;
-- `EvidencePort`: write/read encrypted artifacts and integrity metadata;
-- `MailPort`: create drafts, send approved mail, and ingest correlated replies;
-- `ClockPort`: deterministic deadline and retry testing;
-- `EventPort`: append domain events and update projections;
-- `SecretPort`: retrieve keys and connector credentials without persisting them in the database;
-- `NotificationPort`: emit PII-free task/digest notifications.
+- `VaultPort`: release a policy-approved attribute bundle by opaque action reference;
+- `SecretPort`: wrap/unwrap independent profile keys without persisting the install/cloud KEK;
+- `ActorPort`: authenticate, step up, and validate actor/profile/scope/revocation epoch;
+- `BrokerRegistryPort`: resolve versioned, monotonic, unexpired capability metadata;
+- `ConnectorPort`: invoke one digest-pinned artifact action;
+- `EgressPolicyPort`: validate fence, authority, destination, public IP, redirect, method, protocol, disclosure, and budget;
+- `EvidencePort`: write/read encrypted objects, verification method, and trusted checkpoint metadata;
+- `MailPort`: create drafts, send exact intents, and ingest bounded correlated replies;
+- `ClockPort`: deterministic deadline, retry, and expiry tests;
+- `EventPort`: append keyed/signed events and update projections;
+- `ResourceBudgetPort`: lease browser/inference-heavy work under profile-specific limits;
+- `NotificationPort`: emit PII-free tasks/digests;
+- `IntelligencePort`: return only `UntrustedSuggestion`; the default is a no-op.
 
-The connector protocol is versioned JSON over a subprocess boundary initially. Cloud-small may replace the local subprocess transport with mutually authenticated internal HTTP without changing the domain port.
+SQLite/PostgreSQL, filesystem/object store, host keychain/KMS, connector runtime, mail provider, and optional local model are adapters with separate conformance results. Sharing a domain port does not imply identical security/failure behavior.
 
-## Command path and data path
+## Actor and command path
 
-A user command or scheduled case becomes a domain command with an actor/automation principal, profile scope, intent, and idempotency key. Policy produces an allow, deny, or require-review decision. A trusted connector action is allowed automatically only when it is covered by the profile's active setup authorization and its plan hash fits the current destination and disclosure policy. Allowed work becomes a durable job. The worker creates a one-time capability token listing the connector, allowed action, destination domains, encrypted attribute bundle, expiry, and maximum attempts. The isolated runtime performs that single action and returns a structured result plus encrypted evidence references.
+A UI/CLI/assistant request becomes a domain command containing authenticated actor, represented profile, scope, revocation epoch, intent, and idempotency key. Local browser sessions require bootstrap authentication, Host/Origin/CSRF checks, secure cookies/session rotation, and step-up for high-risk actions. Cloud-small uses TLS plus passkeys/WebAuthn or narrowly configured OIDC. CLI uses a permissioned authenticated local channel, never direct database access.
 
-Connectors never receive a reusable vault API credential. Browser session state is connector- and profile-specific, encrypted, and not mounted into unrelated runs.
+Policy returns allow, deny, or require-review. A plan eligible for automatic submission must fit the current setup authorization, exact destination/disclosure, match threshold, connector digest/capability/freshness, jurisdiction fact, and all pause states. Authorization binds the immutable plan hash and is rechecked at dispatch, not only at enqueue time.
 
-## Durable execution
+## Durable jobs and external side effects
 
-Jobs use explicit state and renewable leases. PostgreSQL workers claim with row locking; SQLite supports exactly one active worker and scheduler. Every external action uses a deterministic idempotency key derived from case, action type, connector version, and attempt generation. A transactional outbox keeps events, notifications, and job creation consistent.
+Ordinary jobs are at-least-once, lease-based, and idempotent at the domain boundary. PostgreSQL claims rows with locking; SQLite permits one worker and one scheduler. A transactional outbox keeps database events, projections, notifications, and job creation consistent.
 
-After downtime the scheduler does not replay every missed interval. It computes one catch-up decision per broker/profile from the latest completed observation, legal deadline, priority, and backoff state. Global and per-domain budgets prevent a thundering herd.
+External transmission uses a separate model:
 
-## Read/write capability model
+- `intent_id` identifies the exact authorized side effect and never changes across connector versions or attempts;
+- `attempt_id` identifies one execution;
+- a monotonically increasing fence proves the current dispatch claim;
+- journal states are `ready`, `dispatch_claimed`, `dispatch_started`, `transport_proven`, `outcome_unknown`, and `failed_before_send`.
 
-Capabilities are monotonic in risk:
+The final dispatch transaction revalidates actor/profile authority, revocation epoch, plan/authorization hash, match, connector digest/freshness, destination/disclosure, and global/profile/broker pause. The egress gateway checks the fence before accepting the first outbound byte. A crash/timeout/cancel after `dispatch_started` is `outcome_unknown`; no automatic retry occurs until a non-mutating reconciliation path proves no send.
 
-1. `catalog`: read public broker metadata;
-2. `observe`: search or check for a record without submitting;
-3. `prepare`: construct a proposed disclosure and request;
-4. `submit`: transmit an approved request;
-5. `poll`: check an existing case status;
-6. `verify`: independently recheck presence/absence;
-7. `escalate`: prepare a regulator complaint or custom follow-up, always reviewed initially.
+After downtime the scheduler calculates one bounded catch-up decision per broker/profile instead of replaying missed intervals. Restores leave all external actions paused and reconcile intents newer than the trusted journal/backup boundary.
 
-A connector is approved separately for each capability and profile policy. Capability approval expires when destination, required PII, legal terms, selectors, or verification semantics materially change.
+## Connector artifact and network boundary
+
+Each connector capability is an immutable separately built artifact. It receives a short-lived action envelope, one-time decrypt key, sealed minimum attributes, destination/policy budget, fence, and no reusable core credential. It runs rootless/non-root with read-only root filesystem, tmpfs, dropped capabilities, syscall and PID/CPU/RAM/time limits, and no core image, DB/vault/key catalog, Docker socket, host network, or unrelated profile/session.
+
+All network flows pass through the mandatory gateway. It revalidates origin and resolved public IP for every connection/redirect and denies private/link-local/loopback/metadata ranges, rebinding, undeclared protocols, WebSocket/QUIC/DoH, downloads, and byte/time overflow. Browser sessions use an ephemeral dedicated user/context and stop for CAPTCHA, MFA, terms/disclosure drift, or account controls.
+
+Signatures identify reviewed artifacts; they do not create trust by themselves. Registry metadata is versioned, expiring, rollback-resistant, delegated per capability, revocable, and linked to artifact digest/SBOM/build provenance. Trusted automatic submit requires governance promotion and recent canary evidence.
+
+## Evidence and outcome assurance
+
+Transport receipt, acknowledgement, processing, broker assertion, one absence observation, corroborated verification, partial/denied, inconclusive, and resurfaced are distinct facts. `observed_absent_once` does not imply `verified_removed`. A versioned verification policy defines independent method, delay, number of observations, ambiguity/block handling, and acceptable corroboration.
+
+Events and objects are content-hashed. Sensitive event chains are keyed/signed, with periodic monotonic checkpoints outside the primary DB. This is tamper evidence relative to a trusted checkpoint, not proof against a host/key compromise or broker deception.
+
+## Optional local intelligence
+
+V1 has a null `IntelligencePort` and no model runtime or weights. A later opt-in adapter receives only a deterministic sanitized bounded task and returns a schema-validated `UntrustedSuggestion` with supporting spans. It has no vault/database/network/tools/connector/authorization/command capability and cannot determine identity, policy, deadline, disclosure, destination, trust, verification, retry, or submission.
+
+`ResourceBudgetManager` grants one heavy-work lease in minimum local-lite; browser/deadline work outranks advisory inference. Local model failure becomes `assist_unavailable` and cannot delay deterministic work. See `docs/16-local-intelligence-architecture.md` and ADR-0011.
 
 ## Assistant integration boundary
 
-The Integration Gateway exposes opaque case and summary identifiers, not direct database access. Initial OpenClaw-compatible tools are:
-
-- `privacy_status`: counts and deadline summary with no raw PII;
-- `list_attention_items`: user tasks and reasons;
-- `draft_custom_case(url)`: safe intake only;
-- `request_run(mode=observe)`: create an observe proposal;
-- `open_mycogni_review(case_id)`: deep-link to the local exception-review UI.
-
-Submission, evidence-body access, and vault reads are absent from the default tool surface. Any future mutating tool requires a short-lived grant bound to an actor, profile, case, and action.
+The Integration Gateway exposes opaque case and summary identifiers, not DB/vault access. Initial OpenClaw-compatible tools remain metadata-only: status, attention items, safe custom-case draft, observe proposal, and a deep link to the trusted local review UI. Submission, evidence bodies, identity fields, model sessions, and approval are absent. Any future write needs an actor/profile/case/action grant, step-up policy, expiry, and revocation epoch.
 
 ## Failure containment
 
-- A broken connector can fail one broker, not the scheduler or vault.
-- A compromised connector gets only its one-time scoped input and destination allowlist.
-- A failed notification cannot roll back an already recorded external submission.
-- A corrupted projection can be rebuilt from domain events.
-- A missing evidence object prevents `verified_removed`; it does not silently downgrade proof requirements.
-- A policy update can pause affected jobs before execution.
+- A broken connector affects one capability/digest, not the core or other sessions.
+- A stale fence or revoked authorization cannot emit the first byte through the gateway.
+- A missing/ambiguous evidence object produces inconclusive, never success.
+- A failed notification cannot roll back a recorded send.
+- A corrupted projection is rebuilt from authenticated events and checked against the external checkpoint.
+- A model failure removes an advisory suggestion only.
+- A policy/registry revocation pauses affected queued and claimed work before dispatch.
 
-See the [diagram index](diagrams/README.md) for component, trust-boundary, sequence, lifecycle, data, and deployment views.
+See the [diagram index](diagrams/README.md) for context, components, trust/PII, request sequence, lifecycle, data, deployment, and decision-authority views.

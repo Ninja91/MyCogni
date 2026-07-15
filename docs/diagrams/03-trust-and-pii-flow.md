@@ -2,67 +2,92 @@
 
 ```mermaid
 flowchart LR
-    subgraph z1["Zone 1 — user and trusted UI"]
-        entry["Identity entry and setup authorization"]
-        preview["Disclosure preview"]
+    subgraph z1["Zone 1 — authenticated user control"]
+        entry["Identity entry"]
+        auth["Setup authorization / step-up"]
+        preview["Disclosure and proof preview"]
         viewer["Safe evidence viewer"]
     end
 
-    subgraph z2["Zone 2 — trusted core"]
+    subgraph z2["Zone 2 — trusted deterministic core"]
         classify["Attribute classification"]
-        decide["Policy decision"]
+        decide["Policy + final dispatch decision"]
+        journal["Intent, attempt, fence journal"]
         ledger["Disclosure ledger"]
-        redact["Redaction and report projection"]
+        sanitize["Deterministic sanitizer/task builder"]
+        redact["Redacted reporting projection"]
     end
 
-    subgraph z3["Zone 3 — vault and keys"]
+    subgraph z3["Zone 3 — encrypted data and keys"]
         sealed[("Field-encrypted PII")]
-        evidence[("Encrypted evidence")]
-        kek["External key-encryption key"]
+        evidence[("Encrypted bounded evidence")]
+        profileKeys[("Wrapped random profile DEKs")]
+        kek["External installation/cloud KEK"]
+        checkpoint["External integrity checkpoint"]
     end
 
-    subgraph z4["Zone 4 — isolated connector"]
-        action["One action envelope"]
-        sandbox["Connector sandbox"]
-        session["Connector/profile session state"]
+    subgraph z4["Zone 4 — isolated action artifact"]
+        action["One action envelope + current fence"]
+        sandbox["Rootless connector/browser sandbox"]
+        session["Connector/profile-specific session"]
     end
 
-    subgraph z5["Zone 5 — broker network"]
+    subgraph z5["Zone 5 — mandatory egress enforcement"]
+        gate["Fence, authority, origin/IP, method, disclosure, budget"]
+    end
+
+    subgraph z6["Zone 6 — hostile broker network/content"]
         endpoint["Approved broker endpoint"]
-        hostile["Hostile page, email, or response"]
+        hostile["Hostile page, mail, redirect, response"]
     end
 
-    subgraph z6["Zone 6 — low-trust integrations"]
-        assistant["OpenClaw / AI"]
-        notifications["Email or chat notifications"]
-        diagnostics["Metrics and support bundle"]
+    subgraph z7["Zone 7 — optional local intelligence"]
+        model["No-network local runtime"]
+        suggestion["UntrustedSuggestion"]
+    end
+
+    subgraph z8["Zone 8 — low-trust integration/diagnostics"]
+        assistant["OpenClaw"]
+        notifications["Notifications"]
+        diagnostics["Metrics/support bundle"]
     end
 
     entry -->|"raw attributes over local/TLS channel"| classify
-    classify -->|"encrypt by profile and purpose"| sealed
-    kek -->|"wrap or unwrap data keys"| sealed
-    sealed -->|"only policy-requested attribute types"| decide
+    classify -->|"encrypt with profile/purpose key"| sealed
+    kek -->|"wrap/unwrap"| profileKeys
+    profileKeys -->|"release scoped key material"| sealed
+    sealed -->|"policy-requested categories only"| decide
+    auth -->|"actor, profile, plan, epoch"| decide
     decide -->|"exact proposed bundle"| preview
-    preview -->|"setup authorization or exception approval bound to plan hash"| decide
-    decide -->|"sealed minimum bundle + expiry"| action
+    decide --> journal
+    journal -->|"sealed minimum bundle + fence"| action
     action --> sandbox
     session --> sandbox
-    sandbox -->|"declared fields only"| endpoint
+    sandbox -->|"all outbound bytes"| gate
+    gate -->|"validated exact disclosure"| endpoint
     endpoint --> hostile
-    hostile -->|"bounded untrusted bytes"| sandbox
+    hostile -->|"bounded response through gateway"| sandbox
     sandbox -->|"encrypted artifact + structured result"| evidence
     evidence --> viewer
+    evidence --> checkpoint
     decide -->|"categories, destination, purpose, time"| ledger
     ledger --> redact
-    evidence -->|"local redacted derivative"| redact
+    evidence -->|"redacted derivative"| redact
+
+    evidence -.->|"selected sanitized bounded content"| sanitize
+    sanitize -.-> model
+    model -.-> suggestion
+    suggestion -.->|"display/review only; no command"| redact
+
     redact -->|"opaque cases, counts, tasks"| assistant
-    redact -->|"counts and deep links"| notifications
+    redact -->|"counts, reasons, deep links"| notifications
     redact -->|"allowlisted fields only"| diagnostics
 
-    deny["DENIED: full vault, raw evidence, reusable keys, arbitrary egress"]
+    deny["DENIED: full vault, raw prompt/evidence, reusable keys, core mounts, direct egress, tool authority"]
     deny -.-> sandbox
+    deny -.-> model
     deny -.-> assistant
     deny -.-> diagnostics
 ```
 
-PII flow is capability-driven. A connector cannot ask the vault for more data; changing its disclosure schema requires a new reviewed connector release and user-visible diff.
+A connector cannot request additional fields after launch. A model cannot become an actor, connector, policy source, or command producer. Every additional disclosure or authority change returns to the authenticated user/core boundary.

@@ -6,6 +6,8 @@ Operators need to know whether privacy work is progressing without turning diagn
 
 No remote telemetry is enabled by default.
 
+Generic HTTP auto-instrumentation is disabled unless an allowlist processor proves that query strings, headers, peer IPs, exception text, URLs, page titles, and request/response bodies are removed before any exporter or local store. Prefer hand-authored safe spans at domain boundaries.
+
 ## Structured events
 
 Operational logs use an allowlisted schema:
@@ -27,6 +29,8 @@ The log API does not accept arbitrary domain objects. Sensitive values implement
 - scheduler lag and catch-up budget;
 - mail correlation failures;
 - evidence write/hash failures;
+- submission-journal states, stale-fence denials, and `outcome_unknown` age;
+- egress-gateway denial class without raw destination/query data;
 - backup age and last successful restore verification.
 
 ### Product effectiveness
@@ -38,6 +42,8 @@ The log API does not accept arbitrary domain objects. Sensitive values implement
 - manual-intervention rate and reason;
 - connector staleness/quarantine rate;
 - disclosed attribute count per successful case.
+- assertion/one-absence/corroborated/inconclusive counts by verification method;
+- optional assist validation/abstention/latency/resource class, never prompt bodies.
 
 Metrics are local per installation. Public project metrics, if introduced, require explicit export of aggregates reviewed by the user.
 
@@ -74,6 +80,8 @@ The UI names the degraded dependency and the work it affects.
 
 Do not retry automatically. Mark `submission_outcome_unknown`, poll using a non-mutating channel if available, ask the user to inspect their inbox/portal, and deduplicate against external reference or payload digest before a new attempt.
 
+The immutable intent survives connector upgrade/restart. A new attempt may be created only after reconciliation proves `failed_before_send` or a user performs a step-up reviewed exception with the duplicate-disclosure risk displayed.
+
 ### Broker workflow drift
 
 Quarantine changed capabilities, preserve observe only if its contract passes, create maintainer/user tasks, diff the requested disclosure and destinations, update fixtures and sources, and require review before promotion.
@@ -84,7 +92,11 @@ Stop all actions. Restore the key from the separate operator backup. If unavaila
 
 ### Database restore
 
-Restore into isolation, supply key separately, run migrations in dry-run, verify event/evidence hashes, rebuild projections, disable external actions, review active leases/cases, then explicitly resume.
+Restore into isolation, supply KEK and key catalog separately, run migrations in dry-run, verify event/evidence hashes against the last external checkpoint, rebuild projections, keep external actions disabled, mark intents after the trusted backup/journal boundary unknown, reconcile receipts/mail/portals, review active leases/cases, then step-up and explicitly resume.
+
+### Optional assist failure
+
+Cancel inference, discard invalid/uncited output, release the heavy-work lease, record `assist_unavailable` with model/runtime/task digests, and continue the deterministic task. Do not acquire/update a model or retry repeatedly during catch-up.
 
 ## Notifications
 

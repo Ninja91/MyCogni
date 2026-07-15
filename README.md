@@ -1,79 +1,135 @@
 # MyCogni
 
-MyCogni is a local-first, open-source personal data removal orchestrator. It is intended to discover personal information held or published by data brokers, prepare and submit lawful privacy requests, track responses, verify outcomes, and detect resurfacing without centralizing a user's identity in somebody else's SaaS.
+MyCogni is a planned local-first, open-source system for recurring U.S. personal-data removal with auditable evidence and minimum necessary disclosure. It is for technically comfortable people who would rather self-host than give another SaaS a complete identity dossier.
 
-> Project status: architecture and execution planning. This initial commit is intentionally not a runnable release and must not be represented as one.
+> **Status — architecture only.** This repository does not yet contain a runnable remover, Docker image, or live broker connector. It must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
 
-## Product promise
+MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 
-MyCogni should make a difficult recurring process understandable and controllable:
+## The product promise
 
-- keep sensitive identity data encrypted on infrastructure the user controls;
-- automatically execute deterministic work through fresh, trusted connectors covered by the user's setup authorization;
-- stop for review when identity, legal authority, disclosure scope, destination, or match confidence is uncertain;
-- support standard and custom removals without arbitrary quotas;
-- distinguish a request being sent, a broker claiming compliance, and independent verification;
-- show exactly why work is pending, what will happen next, and when it will be rechecked;
-- run on a laptop periodically or as a small always-on cloud service from the same OCI image;
-- expose a narrow, consent-aware integration surface for personal assistants such as OpenClaw.
+The first supported product is intentionally narrow: one consenting U.S. adult, one self-hosted installation, a small disclosed set of high-impact people-search workflows, and proof that distinguishes activity from outcomes.
 
-## Non-goals
+- **Local custody:** sensitive identity data stays encrypted on infrastructure the user controls.
+- **Proof before claims:** `submitted`, `acknowledged`, `broker_asserted_removed`, `observed_absent_once`, `verified_removed`, `inconclusive`, and `resurfaced` are different states.
+- **Minimum disclosure:** every released field, purpose, destination, and authorization is visible in a permanent disclosure ledger.
+- **Hands-off where earned:** fresh, trusted connectors may act automatically inside the user's setup authorization; ambiguity, drift, identity challenges, and unknown outcomes stop.
+- **No mystery queues:** every case exposes its state, reason, owner, last evidence, next action, and next date.
+- **Sporadic operation:** the same core can wake periodically on a laptop or run continuously on a small single-tenant cloud host.
+- **Governed extensions:** connectors expire, are promoted per capability, run outside the core, and have no vault or arbitrary-network access.
 
-MyCogni is not a guarantee of invisibility, an identity-theft insurance product, a CAPTCHA bypass service, a mass-scraper, a legal representative by default, or a way to submit requests for people who have not authorized them.
+The project will not optimize headline broker counts, requests sent, GitHub stars, or a blended “completion” score. It will measure confirmed-match precision, verified outcomes, time and disclosure cost, resurfacing, manual burden, and connector freshness.
+
+## What exists and what is planned
+
+| Area | In this repository today | First stable v1 target | Later, only after evidence |
+| --- | --- | --- | --- |
+| Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |
+| Runtime | architecture and acceptance criteria | signed amd64/arm64 OCI images | broader platform packaging |
+| Discovery | synthetic registry example | small read-only exposure set with explainable matching | larger governed registry |
+| Removal | lifecycle and authorization design | guided flows plus 2–5 trusted automatic connectors | broader/custom automation |
+| Evidence | normative semantics and diagrams | encrypted evidence, disclosure ledger, independent rechecks | additional attestation methods |
+| Deployment | local-lite and cloud-small specifications | local-lite; cloud-small after conformance testing | no multi-tenant SaaS plan |
+| Assistants | bounded integration design | metadata-only integration surface | optional OpenClaw workflows |
+| Local AI | advisory architecture and null adapter plan | no model dependency or bundled weights | opt-in shadow-tested assist, never decision authority |
+
+The public support matrix is deliberately empty until connectors earn a maturity state; see [SUPPORTED_BROKERS.md](SUPPORTED_BROKERS.md).
+
+## Why this shape
+
+Independent studies and community discussions expose the same category failure: automation saves time, but opaque status labels and weak matching can manufacture confidence. A Consumer Reports/Tall Poppy evaluation found only 35% of observed profiles removed across evaluated services within four months in its small study, while manual opt-outs reached 70%. A 2025 PETS study reported 41.1% average user-confirmed record-link accuracy and 48.2% average removal effectiveness across the services it measured. Those figures are not forecasts for MyCogni; they are design warnings.
+
+The referenced Reddit discussion values fast setup, recurring automation, aliases, custom requests, and visible progress. It also contains reports of vague evidence, unknown recheck cadence, stalled custom cases, pricing frustration, and uncertainty about promotional content. MyCogni treats anonymous comments as product hypotheses, not prevalence data. The [research synthesis](docs/01-research-synthesis.md) grades the evidence and links every source.
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    user["User control plane<br/>CLI + local web UI"]
+    core["Deterministic trusted core<br/>vault, policy, cases, journal"]
+    state[("Encrypted state<br/>external wrapping key")]
+    runner["Isolated connector artifact<br/>one action capability"]
+    egress["Mandatory egress gateway<br/>fence + origin + byte policy"]
+    broker["Approved broker endpoint"]
+    assist["Optional local intelligence<br/>untrusted suggestions only"]
+
+    user -->|"setup authorization and exceptions"| core
+    core <-->|"field/object encryption"| state
+    core -->|"sealed minimum bundle + intent fence"| runner
+    runner -->|"all outbound bytes"| egress
+    egress --> broker
+    broker --> egress --> runner
+    runner -->|"structured result + encrypted evidence"| core
+    core -.->|"deterministically sanitized task"| assist
+    assist -.->|"schema-validated suggestion; no tools"| core
+```
+
+The command path is deterministic. Connector code is a separate digest-pinned artifact, not a Python plugin imported into the core. A durable submission journal separates immutable external intent from attempts and treats post-dispatch uncertainty as `outcome_unknown`, never as permission to retry. A mandatory egress gateway enforces the action fence before the first outbound byte.
+
+The optional intelligence seam returns only an `UntrustedSuggestion`. It has no vault, database, network, connector, authorization, status, or submission capability. The default adapter is a no-op; no model or model weight is bundled. See [system architecture](docs/03-system-architecture.md), [security model](docs/05-security-privacy-threat-model.md), and the [diagram index](docs/diagrams/README.md).
+
+## Non-negotiable safety rules
+
+1. No request for another person without separately stored authority.
+2. No automatic action for a name-only or ambiguous match.
+3. No blanket broadcast of a complete identity profile.
+4. No external send after a stale lease, revoked authorization epoch, connector quarantine, or active kill switch.
+5. No automatic retry after dispatch begins unless reconciliation proves no send occurred.
+6. No `verified_removed` state without policy-defined, post-submission corroboration; blocks and challenges are inconclusive.
+7. No connector access to the core image, database, vault, key catalog, Docker socket, host network, or arbitrary egress.
+8. No CAPTCHA/MFA bypass, rate-limit evasion, hidden browser action, or automatic response to changed terms.
+9. No raw PII in logs, metrics, notifications, support bundles, issues, fixtures, or AI prompts.
+10. No AI output can decide identity, legal basis, authorization, disclosure, destination, deadline, connector trust, verification, or execution.
+
+## Release path
+
+The delivery plan is milestone- and evidence-gated rather than a promise of dates:
+
+- **Weeks 0–2 — Foundation:** governance, P0 ADRs, synthetic simulator, secure control-plane skeleton.
+- **Weeks 3–6 — Preview alpha:** encrypted single-adult profile, aliases, read-only exposure preview, evidence UI, local-lite packaging.
+- **Weeks 7–10 — Guided beta:** request plans, disclosure ledger, guided/email drafts, export/delete/restore.
+- **Weeks 11–14 — Controlled automation:** isolated connector artifacts, mandatory egress gateway, 2–5 reviewed connectors, unknown-outcome journal.
+- **Weeks 15–18 — Local v1 hardening:** corroborated verification, resurfacing, signed images, SBOM, restore and usability gates.
+- **Weeks 19–24 — Cloud-small and experiments:** PostgreSQL/object storage profile, conformance matrix, optional local-assist shadow evaluation.
+
+Stable v1 is not reached by elapsed time. All P0 architecture gates, qualified legal review, external security review, accessibility checks, restore drills, and the product-comprehension experiment must pass. The detailed plan is in [ROADMAP.md](ROADMAP.md) and [docs/10-execution-plan.md](docs/10-execution-plan.md).
 
 ## Documentation map
 
-| Start here | Purpose |
+| Document | Purpose |
 | --- | --- |
-| [Product brief](docs/00-product-brief.md) | Scope, principles, and success measures |
-| [Research synthesis](docs/01-research-synthesis.md) | Product evidence and lessons from users and research |
-| [Requirements](docs/02-requirements.md) | Functional and quality requirements |
-| [System architecture](docs/03-system-architecture.md) | Components, boundaries, and key flows |
-| [Data model and lifecycle](docs/04-data-model-and-lifecycle.md) | Records, state machines, and retention |
-| [Security and privacy](docs/05-security-privacy-threat-model.md) | Threat model and controls |
-| [Connector SDK](docs/06-connector-sdk.md) | Broker adapter contract and safety policy |
-| [Deployment](docs/07-deployment-architecture.md) | Local and cloud profiles |
-| [Operations](docs/08-observability-and-operations.md) | Metrics, runbooks, and recovery |
-| [Testing](docs/09-testing-and-quality.md) | Verification strategy and release gates |
-| [Execution plan](docs/10-execution-plan.md) | Phases, workstreams, and acceptance criteria |
-| [Adversarial review](docs/11-adversarial-review.md) | Red-team findings and design changes |
-| [Decision log](docs/12-decisions-and-interview.md) | Assumptions, open decisions, and interview prompts |
-| [Inception audit](docs/13-inception-completion-audit.md) | Deliverable traceability and validation evidence |
-| [Diagram index](docs/diagrams/README.md) | Architecture, trust, sequence, data, and deployment diagrams |
+| [Product brief](docs/00-product-brief.md) | scope, principles, and success measures |
+| [Research synthesis](docs/01-research-synthesis.md) | graded evidence from studies, official guidance, products, and communities |
+| [Requirements](docs/02-requirements.md) | stable functional and quality requirement IDs |
+| [System architecture](docs/03-system-architecture.md) | modules, isolation, external-intent semantics, and integration boundaries |
+| [Data model and lifecycle](docs/04-data-model-and-lifecycle.md) | records, evidence assurance, state machines, and retention |
+| [Security and privacy](docs/05-security-privacy-threat-model.md) | threats, controls, key hierarchy, authentication, and release gates |
+| [Connector SDK](docs/06-connector-sdk.md) | artifact contract, maturity, sandbox, egress, and tests |
+| [Deployment](docs/07-deployment-architecture.md) | local-lite/cloud-small profiles and conformance boundaries |
+| [Operations](docs/08-observability-and-operations.md) | PII-safe diagnostics, runbooks, restore, and incident handling |
+| [Testing](docs/09-testing-and-quality.md) | synthetic, adversarial, security, and release gates |
+| [Execution plan](docs/10-execution-plan.md) | workstreams, dependencies, and acceptance criteria |
+| [Adversarial review](docs/11-adversarial-review.md) | review method, P0 findings, and applied changes |
+| [Maintainer decisions](docs/12-decisions-and-interview.md) | confirmed choices and remaining interview prompts |
+| [Independent role reviews](docs/reviews/README.md) | ML, backend/infra, edge, product, and OSS critiques |
+| [Principal-team synthesis](docs/14-principal-team-synthesis.md) | accepted decisions, owners, dissent, and traceability |
+| [Product-market fit](docs/15-product-market-fit.md) | wedge, experiments, metrics, and stop/go gates |
+| [Local intelligence](docs/16-local-intelligence-architecture.md) | optional post-v1 advisory design and evaluation contract |
+| [Architecture diagrams](docs/diagrams/README.md) | context, components, trust, sequence, lifecycle, data, deployment, and authority |
+| [ADRs](docs/adr/README.md) | decisions constraining security, external actions, deployment, and AI |
 
-## Design at a glance
+## Contributor path
 
-The proposed implementation is a Python modular monolith with a FastAPI/HTML local UI, a Typer CLI, a durable database-backed work queue, and isolated connector runners. CLI implementation leads, with the local web UI in the same early milestone. The core remains deterministic. Optional AI integrations may explain or draft, but they cannot receive raw PII or submit a request unless a user explicitly enables that capability.
+Today, useful contributions are architecture critiques, synthetic broker-simulator cases, registry-schema improvements, legal-source corrections, threat cases, documentation, accessibility review, and test design. Live broker traffic and real personal data never belong in CI or issues.
 
-One image supports three roles: `serve`, `worker`, and `scheduler`. A `local-lite` profile runs them together with encrypted SQLite on a persistent volume. A `cloud-small` profile runs the same image as separate processes with PostgreSQL. Browser automation is isolated and opt-in.
+Read [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md), [SUPPORT.md](SUPPORT.md), and [SECURITY.md](SECURITY.md). Connector proposals begin as facts or `observe` capability and cannot become trusted automatic submission through one unreviewed change. Contributions use DCO sign-off rather than a separate CLA during project bootstrap.
 
-## Safety invariants
+## Honest limitations
 
-1. No request for another person without stored authorization.
-2. No irreversible external action from a read-only scan.
-3. No raw PII in logs, metrics, notifications, issue reports, or AI prompts.
-4. No `verified_removed` status without verification evidence captured after submission.
-5. No connector receives more identity attributes than its reviewed manifest declares.
-6. No automatic bypass of CAPTCHAs, account controls, or broker rate limits.
-7. No cloud deployment without an external secret and encrypted persistent storage.
+Removal cannot erase public records at their source, downstream copies, breach data, unlawful brokers, or future recollection. Some private databases cannot be independently checked. Browser workflows remain brittle. Self-hosting shifts key, backup, and operations risk to the user. Open-source maintainers cannot promise legal representation, emergency response, or service-level guarantees.
 
-## Intended repository shape
+California DROP is an official path for eligible residents. MyCogni will guide users through it and record completion; it will not automate around residency or identity verification or claim access to the broker-side processing API.
 
-```text
-mycogni/
-  apps/                 # API/UI, CLI, worker, scheduler entrypoints
-  packages/             # domain, policy, vault, evidence, orchestration
-  connectors/           # reviewed broker and transport adapters
-  broker-registry/      # versioned broker metadata and schemas
-  tests/                 # unit, contract, integration, end-to-end, adversarial
-  deploy/                # OCI, Compose, and cloud examples
-  docs/                  # architecture and operations source of truth
-```
+## License and project identity
 
-## Contributing and security
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing connectors. Do not include real PII, screenshots of real people-search records, session cookies, broker credentials, or live authorization documents in issues or fixtures. Report vulnerabilities through [SECURITY.md](SECURITY.md).
-
-## License and naming
-
-MyCogni is licensed under Apache-2.0; see [LICENSE](LICENSE), [NOTICE](NOTICE), and [ADR-0005](docs/adr/0005-license-and-project-identity.md). “MyCogni” remains a working project name. It is not affiliated with or endorsed by Incogni, Surfshark, or Nord Security, and a trademark/name review is required before public launch.
+Source code and original documentation are licensed under Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Broker facts, model artifacts, fixtures derived from external material, and imported datasets require separate provenance and license review. No third-party directory or commercial product content may be copied merely because it is publicly visible.

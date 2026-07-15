@@ -9,5 +9,6 @@ These diagrams are normative at the boundary level. Component names, trust zones
 5. [Case lifecycle](05-case-lifecycle.md) — precise outcome semantics.
 6. [Core data model](06-data-model.md) — identities, brokers, cases, events, and evidence.
 7. [Deployment profiles](07-deployment-profiles.md) — local-lite and cloud-small.
+8. [Decision authority and optional local intelligence](08-decision-authority-and-local-intelligence.md) — deterministic truth versus advisory suggestions.
 
 Mermaid source is embedded in each Markdown file so GitHub renders it and reviewers can diff it with the surrounding invariants.
