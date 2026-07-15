@@ -6,6 +6,8 @@ MyCogni is a planned local-first, open-source system for recurring U.S. personal
 
 MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 
+**[Explore the interactive project walkthrough](https://ninja91.github.io/MyCogni/)** to follow the evidence, intended user experience, safety behavior, architecture, adversarial review, and release path without reading the specification front to back.
+
 ## The product promise
 
 The first supported product is intentionally narrow: one consenting U.S. adult, one self-hosted installation, a small disclosed set of high-impact people-search workflows, and proof that distinguishes activity from outcomes.

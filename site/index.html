@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="An interactive walkthrough of MyCogni: a proof-first, local-first architecture for recurring U.S. personal-data removal.">
+    <meta name="theme-color" content="#f3f1eb">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="MyCogni — remove the record, prove what changed">
+    <meta property="og:description" content="Walk through the proof-first product, safety architecture, adversarial review, and release path.">
+    <meta property="og:url" content="https://ninja91.github.io/MyCogni/">
+    <meta property="og:image" content="https://ninja91.github.io/MyCogni/og.png">
+    <meta property="og:image:width" content="1731">
+    <meta property="og:image:height" content="909">
+    <meta property="og:image:alt" content="MyCogni evidence ladder from an uncertain record to a verified outcome, with the words Remove the record. Prove what changed.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="MyCogni — remove the record, prove what changed">
+    <meta name="twitter:description" content="An interactive walkthrough of a proof-first, local-first data-removal architecture.">
+    <meta name="twitter:image" content="https://ninja91.github.io/MyCogni/og.png">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>MyCogni — an interactive project walkthrough</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to the walkthrough</a>
+    <div class="reading-progress" aria-hidden="true"><span id="reading-progress-bar"></span></div>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="MyCogni home">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span>MyCogni</span>
+      </a>
+      <nav class="chapter-nav" aria-label="Walkthrough chapters">
+        <a href="#why" data-nav="why">Why</a>
+        <a href="#promise" data-nav="promise">Promise</a>
+        <a href="#experience" data-nav="experience">Experience</a>
+        <a href="#architecture" data-nav="architecture">System</a>
+        <a href="#safety" data-nav="safety">Safety</a>
+        <a href="#roadmap" data-nav="roadmap">Roadmap</a>
+      </nav>
+      <a class="header-link" href="https://github.com/Ninja91/MyCogni" target="_blank" rel="noreferrer">
+        View source <span aria-hidden="true">↗</span>
+      </a>
+    </header>
+
+    <main id="main">
+      <section class="hero chapter" id="top" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Architecture in public · not yet a working remover</p>
+          <h1 id="hero-title">Remove the record.<br><em>Prove what changed.</em></h1>
+          <p class="hero-lede">MyCogni is a planned open-source system for recurring U.S. personal-data removal. It keeps identity data under the user's control and treats every external action as something that must be explained, constrained, and verified.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#why">Start the walkthrough <span aria-hidden="true">↓</span></a>
+            <a class="button button-quiet" href="https://github.com/Ninja91/MyCogni/blob/main/README.md">Read the specification</a>
+          </div>
+          <ul class="hero-facts" aria-label="Project scope">
+            <li><strong>U.S.-only</strong><span>first jurisdiction</span></li>
+            <li><strong>Local-first</strong><span>single-tenant custody</span></li>
+            <li><strong>2–5</strong><span>trusted v1 connectors</span></li>
+          </ul>
+        </div>
+
+        <div class="hero-console" role="region" aria-label="Illustrative MyCogni case summary">
+          <div class="console-bar">
+            <span>CASE / SYNTHETIC-042</span>
+            <span class="console-live"><i aria-hidden="true"></i> evidence current</span>
+          </div>
+          <div class="console-body">
+            <div class="console-score">
+              <span class="score-ring" aria-hidden="true"><i></i></span>
+              <div><small>OUTCOME</small><strong>Verified removed</strong><span>2 independent observations</span></div>
+            </div>
+            <dl class="console-ledger">
+              <div><dt>Destination</dt><dd>people-search.example.test</dd></div>
+              <div><dt>Disclosed</dt><dd>2 of 8 available fields</dd></div>
+              <div><dt>Last evidence</dt><dd>2026-07-14 · 09:42 PT</dd></div>
+              <div><dt>Next check</dt><dd>2026-08-13</dd></div>
+            </dl>
+            <div class="console-proof" role="group" aria-label="Evidence sequence">
+              <span class="done">Observed</span><i aria-hidden="true"></i>
+              <span class="done">Submitted</span><i aria-hidden="true"></i>
+              <span class="done">Rechecked</span><i aria-hidden="true"></i>
+              <span class="done">Corroborated</span>
+            </div>
+          </div>
+          <p class="console-caption">A fictional reserved-domain example. MyCogni contains no real broker connector or personal data today.</p>
+        </div>
+      </section>
+
+      <section class="chapter evidence-section" id="why" data-chapter="why" aria-labelledby="why-title">
+        <div class="section-kicker"><span>01</span> Why this project</div>
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">The category has a confidence problem</p>
+            <h2 id="why-title">Activity is easy to count.<br>Outcomes are harder.</h2>
+          </div>
+          <p>Existing services can save meaningful time, but independent evaluations and user reports show why a dashboard counter cannot stand in for correct matching or verified removal.</p>
+        </div>
+
+        <div class="evidence-grid">
+          <article class="stat-card stat-lime">
+            <h3 class="stat-source">Consumer Reports / Tall Poppy</h3>
+            <strong>35<sup>%</sup></strong>
+            <p>of profiles assigned to evaluated services were gone at four months in a small, non-representative study.</p>
+            <a href="https://innovation.consumerreports.org/Data-Defense_-Evaluating-People-Search-Site-Removal-Services-.pdf" target="_blank" rel="noreferrer">Read the study <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="stat-card stat-blue">
+            <h3 class="stat-source">PETS 2025 evaluation</h3>
+            <strong>41.1<sup>%</sup></strong>
+            <p>average user-confirmed record-link accuracy across the services measured in the study.</p>
+            <a href="https://petsymposium.org/popets/2025/popets-2025-0125.pdf" target="_blank" rel="noreferrer">Read the paper <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="stat-card stat-coral">
+            <h3 class="stat-source">PETS 2025 evaluation</h3>
+            <strong>48.2<sup>%</sup></strong>
+            <p>average removal effectiveness for identified records, using the study's method and sample.</p>
+            <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/01-research-synthesis.md">See evidence caveats <span aria-hidden="true">→</span></a>
+          </article>
+        </div>
+
+        <aside class="design-lesson">
+          <span class="lesson-label">DESIGN RESPONSE</span>
+          <p>MyCogni preserves the denominator: <code>not checked</code>, <code>ambiguous</code>, <code>blocked</code>, and <code>inconclusive</code> remain visible. A broker's “completed” response is never silently promoted to verified removal.</p>
+        </aside>
+      </section>
+
+      <section class="chapter promise-section" id="promise" data-chapter="promise" aria-labelledby="promise-title">
+        <div class="section-kicker"><span>02</span> Product promise</div>
+        <div class="section-heading">
+          <p class="eyebrow">A different bargain</p>
+          <h2 id="promise-title">Less trust demanded.<br>More truth returned.</h2>
+        </div>
+
+        <div class="promise-explorer">
+          <div class="tab-list" role="tablist" aria-label="Product principles">
+            <button type="button" role="tab" aria-selected="true" aria-controls="promise-panel" id="promise-custody" data-promise="custody">01 · Custody</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="promise-panel" id="promise-proof" data-promise="proof" tabindex="-1">02 · Proof</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="promise-panel" id="promise-automation" data-promise="automation" tabindex="-1">03 · Automation</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="promise-panel" id="promise-clarity" data-promise="clarity" tabindex="-1">04 · Clarity</button>
+          </div>
+          <div class="promise-panel" id="promise-panel" role="tabpanel" tabindex="0" aria-labelledby="promise-custody">
+            <div class="promise-number" id="promise-number" aria-hidden="true">01</div>
+            <div>
+              <p class="panel-label" id="promise-label">LOCAL CUSTODY</p>
+              <h3 id="promise-heading">Your identity profile is not another SaaS dossier.</h3>
+              <p id="promise-copy">Sensitive attributes stay encrypted on infrastructure the user controls. Each profile has an independently random wrapped key, making per-profile cryptographic deletion possible without keeping a reproducible master-derived key.</p>
+              <ul id="promise-points">
+                <li>Encrypted state and evidence</li>
+                <li>External wrapping key</li>
+                <li>Explicit backup-expiry semantics</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="chapter experience-section" id="experience" data-chapter="experience" aria-labelledby="experience-title">
+        <div class="section-kicker"><span>03</span> The intended experience</div>
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">Walk one synthetic case</p>
+            <h2 id="experience-title">From possible match<br>to defensible outcome.</h2>
+          </div>
+          <p>Explore the controls MyCogni intends to place between discovery and a verified result. No step below contacts a real site.</p>
+        </div>
+
+        <div class="case-workbench">
+          <div class="case-steps" role="tablist" aria-label="Synthetic case stages">
+            <button type="button" role="tab" aria-selected="true" aria-controls="case-panel" id="case-observe" data-case="observe"><span>1</span> Observe</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-confirm" data-case="confirm" tabindex="-1"><span>2</span> Confirm</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-plan" data-case="plan" tabindex="-1"><span>3</span> Plan</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-authorize" data-case="authorize" tabindex="-1"><span>4</span> Authorize</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-submit" data-case="submit" tabindex="-1"><span>5</span> Submit</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-verify" data-case="verify" tabindex="-1"><span>6</span> Verify</button>
+          </div>
+
+          <div class="case-panel" id="case-panel" role="tabpanel" tabindex="0" aria-labelledby="case-observe">
+            <div class="case-main">
+              <div class="case-meta"><span id="case-step-label">STEP 1 OF 6</span><span>SYNTHETIC CASE</span></div>
+              <h3 id="case-heading">A candidate record appears.</h3>
+              <p id="case-copy">A read-only connector finds a possible public profile. The system records how the match was made without deciding that the record belongs to the user.</p>
+              <div class="case-callout" id="case-callout"><strong>Control:</strong> name-only candidates can never become automatic confirmed matches.</div>
+            </div>
+            <dl class="case-facts">
+              <div><dt>System state</dt><dd id="case-state">candidate</dd></div>
+              <div><dt>Identity disclosure</dt><dd id="case-disclosure">none</dd></div>
+              <div><dt>Decision owner</dt><dd id="case-owner">user or match policy</dd></div>
+              <div><dt>Next action</dt><dd id="case-next">review attribute explanation</dd></div>
+            </dl>
+            <div class="case-progress" aria-hidden="true"><span id="case-progress-bar"></span></div>
+          </div>
+        </div>
+
+        <div class="proof-ladder">
+          <div class="proof-intro">
+            <p class="eyebrow">Outcome vocabulary</p>
+            <h3>“Done” is not a state.</h3>
+            <p>Each rung makes a narrower, more defensible claim.</p>
+          </div>
+          <ol>
+            <li><span>01</span><div><strong>Submitted</strong><p>A request left the system with transport evidence.</p></div></li>
+            <li><span>02</span><div><strong>Acknowledged</strong><p>The destination confirmed receipt—not deletion.</p></div></li>
+            <li><span>03</span><div><strong>Broker asserted removed</strong><p>The broker claims completion.</p></div></li>
+            <li><span>04</span><div><strong>Observed absent once</strong><p>One independent check could not find the record.</p></div></li>
+            <li class="proof-final"><span>05</span><div><strong>Verified removed</strong><p>Policy-defined timing and corroboration are satisfied.</p></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="chapter architecture-section" id="architecture" data-chapter="architecture" aria-labelledby="architecture-title">
+        <div class="section-kicker section-kicker-dark"><span>04</span> System architecture</div>
+        <div class="section-heading split-heading section-heading-dark">
+          <div>
+            <p class="eyebrow">Authority has a shape</p>
+            <h2 id="architecture-title">The core decides.<br>Extensions do less.</h2>
+          </div>
+          <p>Select a component to see what it can—and deliberately cannot—do.</p>
+        </div>
+
+        <div class="architecture-explorer">
+          <div class="system-map" role="group" aria-label="Interactive system component map">
+            <button type="button" class="system-node node-user is-selected" data-arch="control" aria-pressed="true"><small>01</small><strong>Control plane</strong><span>User intent</span></button>
+            <button type="button" class="system-node node-core" data-arch="core" aria-pressed="false"><small>02</small><strong>Trusted core</strong><span>Policy + journal</span></button>
+            <button type="button" class="system-node node-vault" data-arch="vault" aria-pressed="false"><small>03</small><strong>Encrypted state</strong><span>Profile keys</span></button>
+            <button type="button" class="system-node node-runner" data-arch="runner" aria-pressed="false"><small>04</small><strong>Connector artifact</strong><span>One capability</span></button>
+            <button type="button" class="system-node node-egress" data-arch="egress" aria-pressed="false"><small>05</small><strong>Egress gateway</strong><span>Last-mile fence</span></button>
+            <button type="button" class="system-node node-broker" data-arch="broker" aria-pressed="false"><small>06</small><strong>Broker endpoint</strong><span>Hostile boundary</span></button>
+            <button type="button" class="system-node node-assist" data-arch="assist" aria-pressed="false"><small>OPTIONAL</small><strong>Local assist</strong><span>Suggestion only</span></button>
+            <span class="map-line line-a" aria-hidden="true"></span>
+            <span class="map-line line-b" aria-hidden="true"></span>
+            <span class="map-line line-c" aria-hidden="true"></span>
+          </div>
+          <div class="architecture-detail" aria-live="polite">
+            <p class="panel-label" id="arch-label">AUTHENTICATED USER CONTROL</p>
+            <h3 id="arch-heading">The user establishes intent and exceptions.</h3>
+            <p id="arch-copy">The CLI or local web interface authenticates the actor, records setup authorization, previews disclosures, and demands step-up authentication for dangerous changes.</p>
+            <div class="authority-grid">
+              <div><span>CAN</span><p id="arch-can">Authorize bounded actions, pause, revoke, export, delete.</p></div>
+              <div><span>CANNOT</span><p id="arch-cannot">Turn an ambiguous identity match into a safe automatic request.</p></div>
+            </div>
+          </div>
+        </div>
+        <a class="text-link-on-dark" href="https://github.com/Ninja91/MyCogni/blob/main/docs/03-system-architecture.md">Open the full architecture specification <span aria-hidden="true">→</span></a>
+      </section>
+
+      <section class="chapter safety-section" id="safety" data-chapter="safety" aria-labelledby="safety-title">
+        <div class="section-kicker"><span>05</span> Safety behavior</div>
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">Failure is a product state</p>
+            <h2 id="safety-title">What happens when<br>the happy path breaks?</h2>
+          </div>
+          <p>Choose a scenario. The answer should be a visible safe stop, not hidden optimism.</p>
+        </div>
+
+        <div class="scenario-lab">
+          <div class="scenario-list" role="list" aria-label="Failure scenarios">
+            <button type="button" class="is-selected" data-scenario="ambiguous" aria-pressed="true"><span>01</span> Ambiguous identity match</button>
+            <button type="button" data-scenario="challenge" aria-pressed="false"><span>02</span> CAPTCHA or MFA appears</button>
+            <button type="button" data-scenario="timeout" aria-pressed="false"><span>03</span> Timeout after dispatch</button>
+            <button type="button" data-scenario="drift" aria-pressed="false"><span>04</span> Connector behavior drifts</button>
+            <button type="button" data-scenario="ai" aria-pressed="false"><span>05</span> Local AI suggests an action</button>
+          </div>
+          <div class="scenario-answer" aria-live="polite">
+            <div class="stop-badge" id="scenario-badge">AUTOMATION STOPS</div>
+            <h3 id="scenario-heading">The match stays ambiguous.</h3>
+            <p id="scenario-copy">MyCogni presents the attribute-level explanation and asks the user to confirm or reject it. A name-only or conflicting match cannot enter automatic submission.</p>
+            <dl>
+              <div><dt>Recorded state</dt><dd id="scenario-state">ambiguous_match</dd></div>
+              <div><dt>Recovery</dt><dd id="scenario-recovery">user review or stronger evidence</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <section class="chapter roadmap-section" id="roadmap" data-chapter="roadmap" aria-labelledby="roadmap-title">
+        <div class="section-kicker"><span>06</span> Delivery path</div>
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">Evidence-gated, not calendar-gated</p>
+            <h2 id="roadmap-title">A 24-week route<br>to a narrow local v1.</h2>
+          </div>
+          <p>The week ranges show order and size. Passing safety, legal, usability, and evidence gates—not elapsed time—unlocks the next release.</p>
+        </div>
+
+        <div class="roadmap-track" role="tablist" aria-label="Roadmap phases">
+          <button type="button" role="tab" aria-selected="true" aria-controls="phase-panel" id="phase-foundation" data-phase="foundation"><span>00–02</span><strong>Foundation</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-preview" data-phase="preview" tabindex="-1"><span>03–06</span><strong>Preview alpha</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-guided" data-phase="guided" tabindex="-1"><span>07–10</span><strong>Guided beta</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-automation" data-phase="automation" tabindex="-1"><span>11–14</span><strong>Automation</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-v1" data-phase="v1" tabindex="-1"><span>15–18</span><strong>Local v1</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-cloud" data-phase="cloud" tabindex="-1"><span>19–24</span><strong>Cloud-small</strong></button>
+        </div>
+        <div class="phase-panel" id="phase-panel" role="tabpanel" tabindex="0" aria-labelledby="phase-foundation">
+          <div><p class="panel-label" id="phase-label">WEEKS 0–2</p><h3 id="phase-heading">Build the foundation that can say “no.”</h3><p id="phase-copy">Land the P0 decisions in code contracts, stand up a synthetic broker simulator, and create an authenticated control-plane skeleton without real PII or traffic.</p></div>
+          <div class="phase-gates"><span>EXIT GATES</span><ul id="phase-gates"><li>P0 ADRs accepted</li><li>Synthetic-only test path</li><li>Threat-to-requirement traceability</li></ul></div>
+        </div>
+        <p class="roadmap-note">Optional local-assist evaluation comes <strong>after v1</strong> and only ships if it reduces review time without changing safety outcomes or leaking PII.</p>
+      </section>
+
+      <section class="chapter review-section" id="reviews" data-chapter="reviews" aria-labelledby="reviews-title">
+        <div class="section-kicker"><span>07</span> Adversarial review</div>
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">Five independent critique tracks</p>
+            <h2 id="reviews-title">The design was attacked<br>before code was trusted.</h2>
+          </div>
+          <p>These were AI-assisted role reviews—not claims of human security certification. Each track reviewed the same snapshot independently before the principal-role synthesis.</p>
+        </div>
+
+        <div class="review-list">
+          <details>
+            <summary><span>ML engineering</span><strong>Keep intelligence out of authority.</strong><i aria-hidden="true">+</i></summary>
+            <div><p>No model in v1. A future local runtime receives only sanitized bounded tasks and returns a schema-validated <code>UntrustedSuggestion</code> with supporting spans.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/01-ml-engineering.md">Read review →</a></div>
+          </details>
+          <details>
+            <summary><span>Backend &amp; infrastructure</span><strong>External effects need a real journal.</strong><i aria-hidden="true">+</i></summary>
+            <div><p>Separate immutable intent from attempts, mark dispatch before the first byte, and reconcile unknown outcomes instead of pretending network actions are exactly-once.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/02-backend-infrastructure.md">Read review →</a></div>
+          </details>
+          <details>
+            <summary><span>Edge engineering</span><strong>Small machines need one heavy-work budget.</strong><i aria-hidden="true">+</i></summary>
+            <div><p>Browser work and optional inference cannot compete on the minimum tier. Deterministic deadlines win, and the shared resource manager grants one heavy-work lease.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/03-edge-engineering.md">Read review →</a></div>
+          </details>
+          <details>
+            <summary><span>Product management</span><strong>Win on proof, not broker count.</strong><i aria-hidden="true">+</i></summary>
+            <div><p>The stable-v1 wedge is one consenting adult, a small public preview set, guided flows, and only 2–5 reviewed automatic connectors.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/04-product-management.md">Read review →</a></div>
+          </details>
+          <details>
+            <summary><span>Open-source contributor</span><strong>Connector authority must be earned.</strong><i aria-hidden="true">+</i></summary>
+            <div><p>Capability-specific maturity, expiry, provenance, synthetic tests, and a qualified second reviewer guard the path to trusted submission.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/05-open-source-contributor.md">Read review →</a></div>
+          </details>
+        </div>
+      </section>
+
+      <section class="chapter next-section" id="next" aria-labelledby="next-title">
+        <p class="eyebrow">Choose your way in</p>
+        <h2 id="next-title">The architecture is ready.<br>The implementation is next.</h2>
+        <div class="path-grid">
+          <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/10-execution-plan.md"><span>BUILD</span><h3>Start with Phase 0</h3><p>Trace the first work packages, dependencies, acceptance criteria, and release gates.</p><i aria-hidden="true">→</i></a>
+          <a href="https://github.com/Ninja91/MyCogni/blob/main/CONTRIBUTING.md"><span>CONTRIBUTE</span><h3>Take a synthetic task</h3><p>Improve tests, threat cases, accessibility, broker facts, or architecture without using real PII.</p><i aria-hidden="true">→</i></a>
+          <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/15-product-market-fit.md"><span>RESEARCH</span><h3>Test the wedge</h3><p>Run exposure-preview, proof-comprehension, switching, and recurring-burden experiments.</p><i aria-hidden="true">→</i></a>
+        </div>
+        <div class="final-cta">
+          <div><span class="status-dot" aria-hidden="true"></span><p><strong>Current truth:</strong> architecture complete; no runnable remover or supported real-broker connector yet.</p></div>
+          <a class="button button-primary" href="https://github.com/Ninja91/MyCogni">Explore the repository <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand"><span class="brand-mark" aria-hidden="true">M</span><span>MyCogni</span></div>
+      <p>Proof-first personal-data removal, designed in public.</p>
+      <div><a href="https://github.com/Ninja91/MyCogni/blob/main/LICENSE">Apache-2.0</a><a href="https://github.com/Ninja91/MyCogni/blob/main/SECURITY.md">Security</a><a href="https://github.com/Ninja91/MyCogni">GitHub</a></div>
+    </footer>
+
+    <noscript><div class="noscript-note">The full project story remains readable without JavaScript. Enable JavaScript to explore the interactive panels.</div></noscript>
+  </body>
+</html>
