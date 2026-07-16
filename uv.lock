@@ -574,6 +574,12 @@ dev = [
 name = "mycogni-connector-sdk"
 version = "0.0.0"
 source = { editable = "packages/mycogni-connector-sdk" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.10,<3" }]
 
 [[package]]
 name = "mypy"

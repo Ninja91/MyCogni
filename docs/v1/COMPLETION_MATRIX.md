@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack and interactive walkthrough, but no remover runtime, Docker image, database migration, simulator or connector.
+Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline and versioned connector contracts. It does not yet contain a remover runtime, accepted Docker image, simulator or live connector.
 
 ## Status vocabulary
 
@@ -21,7 +21,7 @@ Documentation describing a future component is not implementation evidence for t
 | Product/research architecture | `VERIFIED` | `README.md`, `docs/00`–`16`, source-graded research, requirements and threat model | keep synchronized with implementation findings |
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
-| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001 and DB-001 independently accepted; frozen 55-package lock, four import contracts and 56 tests pass on Python 3.12.12 on 2026-07-15 | PF-002 needs real two-architecture build evidence |
+| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001, DB-001 and CT-001 independently accepted; frozen 55-package lock, four import contracts and 536 tests pass on Python 3.12.12 and 3.13.11 on 2026-07-15 | PF-002 needs real two-architecture build evidence; remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
@@ -40,7 +40,7 @@ Documentation describing a future component is not implementation evidence for t
 | PR CI, frozen inputs and safety/claim guards | CI-001 | `COMPLETE` | `73c097a`, `56f40e6`; Python 3.12.12/3.13.11, immutable Actions and 12 negative CI fixtures independently reproduced | retain full-SHA Actions and update claim baseline explicitly |
 | Safe diagnostics and traceability catalog | TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | CI foundation is accepted |
 | SQLite and migration baseline | DB-001 | `COMPLETE` | `4b8e154`, `da7f406`; fail-closed physical-file/WAL/FULL/FK/timeout policy and Alembic round trips independently reproduced | locking/backup/filesystem qualification remain later packages |
-| Shared contracts | CT-001 | `NOT_STARTED` | — | freeze before parallel adapters |
+| Shared contracts | CT-001 | `COMPLETE` | `da973f1`, `cbdd9de`, `d788d49`; strict core primitives, versioned manifest/action/result schemas, schema snapshots and 484 focused adversarial tests; final independent review found zero P0/P1 | preserve connector-fact provenance at ingestion; add Pydantic min/latest compatibility CI before public SDK release |
 | Synthetic corpus and deterministic simulator | SIM-001 | `NOT_STARTED` | — | create reserved-domain fixtures |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
@@ -134,10 +134,10 @@ These do not block M0 foundation work, but they block their named milestones:
 
 ## Next executable slice
 
-Current next slice after the accepted toolchain, boundary, CI and database packages:
+Current next slice after the accepted toolchain, boundary, CI, database and shared-contract packages:
 
 1. restore a responsive Docker engine and capture successful PF-002 amd64/arm64 build and inspection logs;
-2. freeze CT-001 before adapters diverge;
-3. start TEL-001/THREAT-CATALOG-001/GOV-001 and the deterministic SIM-001 corpus;
-4. land NET-001 before any HTTP/browser/mail adapter can enter CI;
-5. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence.
+2. start TEL-001/THREAT-CATALOG-001/GOV-001 and the deterministic SIM-001 corpus;
+3. land NET-001 before any HTTP/browser/mail adapter can enter CI;
+4. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence;
+5. add connector SDK minimum/latest Pydantic compatibility coverage before any public SDK release.
