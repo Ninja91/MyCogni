@@ -1,12 +1,543 @@
-{"schema_version":1,"registry_version":"1.0.0","milestone_attestations":[],"packages":[
-  {"id":"CI-001","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"CT-001","status":"IN_PROGRESS","evidence_ids":["EVD-CT-001"]},
-  {"id":"DB-001","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"GOV-001","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"PF-001","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"PF-002","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"PF-BOUNDARY","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"PF-CORE","status":"IN_PROGRESS","evidence_ids":[]},
-  {"id":"TEL-001","status":"IN_PROGRESS","evidence_ids":["EVD-TEL-001"]},
-  {"id":"THREAT-CATALOG-001","status":"IN_PROGRESS","evidence_ids":["EVD-THREAT-CATALOG-001"]}
-]}
+{
+  "schema_version": 1,
+  "registry_version": "1.1.0",
+  "milestone_attestations": [],
+  "packages": [
+    {
+      "id": "A11Y-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "ACTION-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AI-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "ALPHA-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "ARTIFACT-VERIFY-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTH-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTH-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTH-003",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTHORITY-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTHZ-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTO-CONSENT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "AUTO-ELIGIBILITY-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "BAK-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "BAK-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "BAK-RESTORE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "BETA-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "BROW-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CANARY-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CASE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CASE-RESP-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CHECKPOINT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CI-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "CLAIM-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CON-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CONN-SEL",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CONSENT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CRED-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "CT-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": [
+        "EVD-CT-001"
+      ]
+    },
+    {
+      "id": "CUSTOM-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "DATA-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "DB-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "DELETE-FINALIZE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "DELETE-PREFLIGHT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "DIG-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "DIGEST-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "EVD-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "EVT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "EXT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "EXT-PRE-AUTO",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "GATEWAY-BASE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "GOV-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "GUIDE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "GW-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "HUMAN-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "INTENT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "JOB-STATE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "KEY-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "KEY-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "MAIL-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "MATCH-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "MIG-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "NET-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OBS-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OBS-AUTH-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OFF-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OFF-PRE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OPS-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OSS-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "OUTBOX-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PAUSE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PERMIT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PF-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "PF-002",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "PF-BOUNDARY",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "PF-CORE",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "PILOT-AUTO",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PILOT-GUIDED",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PILOT-PREVIEW",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PLAN-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PLAN-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PMF-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "POL-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "PROOF-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "RC-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REC-BASE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REC-BROWSER-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REC-MAIL-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REG-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REG-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REL-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "RES-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "RESEARCH-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "RESTORE-INTENT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "REVIEWER-RECRUIT-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "RUN-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SCHED-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SIM-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-AUTH",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-BACKUP",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-BROWSER",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-EGRESS",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-KEY",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SPIKE-RUNNER",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "SQLITE-DUR-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "STABLE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "TEL-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": [
+        "EVD-TEL-001"
+      ]
+    },
+    {
+      "id": "THREAT-CATALOG-001",
+      "status": "IN_PROGRESS",
+      "evidence_ids": [
+        "EVD-THREAT-CATALOG-001"
+      ]
+    },
+    {
+      "id": "TRUST-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "UPDATE-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "UPG-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "UX-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "UX-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "UX-003",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "VER-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "VER-002",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "VER-SIM-001",
+      "status": "NOT_STARTED",
+      "evidence_ids": []
+    }
+  ]
+}

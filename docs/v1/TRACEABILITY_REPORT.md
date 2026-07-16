@@ -4,7 +4,7 @@ Deterministic machine-registry report. No Markdown statement promotes package st
 
 ## Actual package state
 
-- Structured accepted records: `CT-001`, `TEL-001`, `THREAT-CATALOG-001`
+- Structured accepted records: None
 - Canonical COMPLETE packages: None
 - Canonical VERIFIED packages: None
 
@@ -14,9 +14,12 @@ Deterministic machine-registry report. No Markdown statement promotes package st
 - Work packages (106): `A11Y-001`, `ACTION-001`, `AI-001`, `ALPHA-001`, `ARTIFACT-VERIFY-001`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTHORITY-001`, `AUTHZ-001`, `AUTO-CONSENT-001`, `AUTO-ELIGIBILITY-001`, `BAK-001`, `BAK-002`, `BAK-RESTORE-001`, `BETA-001`, `BROW-001`, `CANARY-001`, `CASE-001`, `CASE-RESP-001`, `CHECKPOINT-001`, `CI-001`, `CLAIM-001`, `CON-001`, `CONN-SEL`, `CONSENT-001`, `CRED-001`, `CT-001`, `CUSTOM-001`, `DATA-001`, `DB-001`, `DELETE-FINALIZE-001`, `DELETE-PREFLIGHT-001`, `DIG-001`, `DIGEST-001`, `EVD-001`, `EVT-001`, `EXT-001`, `EXT-PRE-AUTO`, `GATEWAY-BASE-001`, `GOV-001`, `GUIDE-001`, `GW-001`, `HUMAN-001`, `INTENT-001`, `JOB-STATE-001`, `KEY-001`, `KEY-002`, `MAIL-001`, `MATCH-001`, `MIG-001`, `NET-001`, `OBS-001`, `OBS-AUTH-001`, `OFF-002`, `OFF-PRE-001`, `OPS-001`, `OSS-001`, `OUTBOX-001`, `PAUSE-001`, `PERMIT-001`, `PF-001`, `PF-002`, `PF-BOUNDARY`, `PF-CORE`, `PILOT-AUTO`, `PILOT-GUIDED`, `PILOT-PREVIEW`, `PLAN-001`, `PLAN-002`, `PMF-001`, `POL-001`, `PROOF-001`, `RC-001`, `REC-BASE-001`, `REC-BROWSER-001`, `REC-MAIL-001`, `REG-001`, `REG-002`, `REL-001`, `RES-001`, `RESEARCH-001`, `RESTORE-INTENT-001`, `REVIEWER-RECRUIT-001`, `RUN-001`, `SCHED-001`, `SIM-001`, `SPIKE-AUTH`, `SPIKE-BACKUP`, `SPIKE-BROWSER`, `SPIKE-EGRESS`, `SPIKE-KEY`, `SPIKE-RUNNER`, `SQLITE-DUR-001`, `STABLE-001`, `TEL-001`, `THREAT-CATALOG-001`, `TRUST-001`, `UPDATE-001`, `UPG-001`, `UX-001`, `UX-002`, `UX-003`, `VER-001`, `VER-002`, `VER-SIM-001`
 - ADRs (11): `ADR-0001`, `ADR-0002`, `ADR-0003`, `ADR-0004`, `ADR-0005`, `ADR-0006`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `ADR-0010`, `ADR-0011`
 - Trace records (3): `TRC-CT-001`, `TRC-TEL-001`, `TRC-THREAT-CATALOG-001`
+- Threats (8): `THR-AUTH-001`, `THR-DISPATCH-001`, `THR-EGRESS-001`, `THR-GOV-001`, `THR-KEYS-001`, `THR-LOGS-001`, `THR-RUNNER-001`, `THR-VERIFY-001`
+- Verification tests (8): `VFY-AUTH-001`, `VFY-CATALOG-001`, `VFY-DISPATCH-001`, `VFY-EGRESS-001`, `VFY-KEYS-001`, `VFY-LOGS-001`, `VFY-RUNNER-001`, `VFY-VERIFY-001`
+- Canonical package-status scope (106): `A11Y-001`, `ACTION-001`, `AI-001`, `ALPHA-001`, `ARTIFACT-VERIFY-001`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTHORITY-001`, `AUTHZ-001`, `AUTO-CONSENT-001`, `AUTO-ELIGIBILITY-001`, `BAK-001`, `BAK-002`, `BAK-RESTORE-001`, `BETA-001`, `BROW-001`, `CANARY-001`, `CASE-001`, `CASE-RESP-001`, `CHECKPOINT-001`, `CI-001`, `CLAIM-001`, `CON-001`, `CONN-SEL`, `CONSENT-001`, `CRED-001`, `CT-001`, `CUSTOM-001`, `DATA-001`, `DB-001`, `DELETE-FINALIZE-001`, `DELETE-PREFLIGHT-001`, `DIG-001`, `DIGEST-001`, `EVD-001`, `EVT-001`, `EXT-001`, `EXT-PRE-AUTO`, `GATEWAY-BASE-001`, `GOV-001`, `GUIDE-001`, `GW-001`, `HUMAN-001`, `INTENT-001`, `JOB-STATE-001`, `KEY-001`, `KEY-002`, `MAIL-001`, `MATCH-001`, `MIG-001`, `NET-001`, `OBS-001`, `OBS-AUTH-001`, `OFF-002`, `OFF-PRE-001`, `OPS-001`, `OSS-001`, `OUTBOX-001`, `PAUSE-001`, `PERMIT-001`, `PF-001`, `PF-002`, `PF-BOUNDARY`, `PF-CORE`, `PILOT-AUTO`, `PILOT-GUIDED`, `PILOT-PREVIEW`, `PLAN-001`, `PLAN-002`, `PMF-001`, `POL-001`, `PROOF-001`, `RC-001`, `REC-BASE-001`, `REC-BROWSER-001`, `REC-MAIL-001`, `REG-001`, `REG-002`, `REL-001`, `RES-001`, `RESEARCH-001`, `RESTORE-INTENT-001`, `REVIEWER-RECRUIT-001`, `RUN-001`, `SCHED-001`, `SIM-001`, `SPIKE-AUTH`, `SPIKE-BACKUP`, `SPIKE-BROWSER`, `SPIKE-EGRESS`, `SPIKE-KEY`, `SPIKE-RUNNER`, `SQLITE-DUR-001`, `STABLE-001`, `TEL-001`, `THREAT-CATALOG-001`, `TRUST-001`, `UPDATE-001`, `UPG-001`, `UX-001`, `UX-002`, `UX-003`, `VER-001`, `VER-002`, `VER-SIM-001`
 
 ## Claim boundary
 
-An ACCEPT attestation establishes only the named reviewed package evidence. Canonical package status remains IN_PROGRESS until dependency closure and status-promotion rules pass.
+Implemented records are not acceptance. An ACCEPT attestation requires protected-base authorization and exact reviewed-commit evidence/review digests; canonical status remains below COMPLETE until every promotion rule passes.
 No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.
 GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.

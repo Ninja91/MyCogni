@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
@@ -15,7 +16,10 @@ ID_TEXT = "2cb84782-ad9f-47ab-9fa1-7487ad1ff40c"
 
 
 @pytest.mark.governance_acceptance
-def test_opaque_id_requires_canonical_uuid4() -> None:
+def test_opaque_id_requires_canonical_uuid4(
+    governance_criterion: Callable[[str], None],
+) -> None:
+    governance_criterion("ACC-CT-001")
     identifier = OpaqueId.parse(ID_TEXT)
     assert str(identifier) == ID_TEXT
     assert OpaqueId.new().value.version == 4

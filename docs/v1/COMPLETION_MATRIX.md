@@ -38,11 +38,11 @@ Documentation describing a future component is not implementation evidence for t
 | Connector protocol boundary | PF-BOUNDARY | `IN_PROGRESS` | `5c51d23`, `cef7b0b`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`; pinned indexes, semantic hardening/shebang checks and build-attempt record | Docker engine must produce successful amd64/arm64 build and runtime-inspection logs before `COMPLETE` |
 | PR CI, frozen inputs and safety/claim guards | CI-001 | `IN_PROGRESS` | `73c097a`, `56f40e6`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
-| Typed local diagnostics | TEL-001 | `IN_PROGRESS` | structured acceptance exists, but canonical prerequisite CI-001 is not structurally accepted | complete prerequisite attestations before package completion |
-| Selected threat/test catalog | THREAT-CATALOG-001 | `IN_PROGRESS` | structured acceptance exists, but canonical prerequisite CI-001 is not structurally accepted | complete prerequisite attestations; selected catalog remains non-exhaustive |
+| Typed local diagnostics | TEL-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization before package completion |
+| Selected threat/test catalog | THREAT-CATALOG-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization; selected catalog remains non-exhaustive |
 | Full traceability validator | GOV-001 | `IN_PROGRESS` | machine registries and adversarial fixtures are under review | remain in progress until independent acceptance |
 | SQLite and migration baseline | DB-001 | `IN_PROGRESS` | `4b8e154`, `da7f406`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
-| Shared contracts | CT-001 | `IN_PROGRESS` | structured acceptance exists, but canonical prerequisites PF-CORE and PF-BOUNDARY are not structurally accepted | complete prerequisite attestations before package completion |
+| Shared contracts | CT-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisites and protected-review authorization before package completion |
 | Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6` plus remediation; canonical reserved-domain corpus/scenario goldens, synchronized transactional clock/web/mail protocol and 86 focused tests are integrated | complete independent adversarial re-review; NET-001 remains separate |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
@@ -136,10 +136,97 @@ These do not block M0 foundation work, but they block their named milestones:
 
 ## Next executable slice
 
-Current next slice after the accepted toolchain, boundary, CI, database and shared-contract packages:
+Current next slice after the implemented toolchain, boundary, CI, database and shared-contract foundations:
 
 1. restore a responsive Docker engine and capture successful PF-002 amd64/arm64 build and inspection logs;
 2. complete GOV-001 and independently review the deterministic SIM-001 corpus/simulator;
 3. land NET-001 before any non-simulator HTTP/browser/mail adapter can enter CI;
 4. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence;
 5. add connector SDK minimum/latest Pydantic compatibility coverage before any public SDK release.
+
+## Canonical work-package inventory
+
+Every work package has a machine-equal status row; detailed evidence remains in the milestone sections above.
+
+| Scope | Work package | Status | Evidence | Remaining |
+| --- | --- | --- | --- | --- |
+| Canonical inventory: A11Y-001 | A11Y-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: ACTION-001 | ACTION-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: ALPHA-001 | ALPHA-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: ARTIFACT-VERIFY-001 | ARTIFACT-VERIFY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTH-001 | AUTH-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTH-002 | AUTH-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTH-003 | AUTH-003 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTHORITY-001 | AUTHORITY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTHZ-001 | AUTHZ-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTO-CONSENT-001 | AUTO-CONSENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTO-ELIGIBILITY-001 | AUTO-ELIGIBILITY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: BAK-001 | BAK-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: BAK-002 | BAK-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: BAK-RESTORE-001 | BAK-RESTORE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: BROW-001 | BROW-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CANARY-001 | CANARY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CASE-001 | CASE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CASE-RESP-001 | CASE-RESP-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CHECKPOINT-001 | CHECKPOINT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CON-001 | CON-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CONSENT-001 | CONSENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: CUSTOM-001 | CUSTOM-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: DATA-001 | DATA-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: DELETE-FINALIZE-001 | DELETE-FINALIZE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: DELETE-PREFLIGHT-001 | DELETE-PREFLIGHT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: DIGEST-001 | DIGEST-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: EVD-001 | EVD-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: EVT-001 | EVT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: EXT-PRE-AUTO | EXT-PRE-AUTO | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: GATEWAY-BASE-001 | GATEWAY-BASE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: GUIDE-001 | GUIDE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: GW-001 | GW-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: HUMAN-001 | HUMAN-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: INTENT-001 | INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: JOB-STATE-001 | JOB-STATE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: KEY-001 | KEY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: KEY-002 | KEY-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: MAIL-001 | MAIL-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: MATCH-001 | MATCH-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: MIG-001 | MIG-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OBS-001 | OBS-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OBS-AUTH-001 | OBS-AUTH-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OFF-002 | OFF-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OFF-PRE-001 | OFF-PRE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OPS-001 | OPS-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: OUTBOX-001 | OUTBOX-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PAUSE-001 | PAUSE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PERMIT-001 | PERMIT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PILOT-AUTO | PILOT-AUTO | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PILOT-GUIDED | PILOT-GUIDED | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PILOT-PREVIEW | PILOT-PREVIEW | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PLAN-001 | PLAN-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PLAN-002 | PLAN-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PMF-001 | PMF-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: POL-001 | POL-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: PROOF-001 | PROOF-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REC-BASE-001 | REC-BASE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REC-BROWSER-001 | REC-BROWSER-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REC-MAIL-001 | REC-MAIL-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REG-001 | REG-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REG-002 | REG-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: REL-001 | REL-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: RES-001 | RES-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: RESEARCH-001 | RESEARCH-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: RESTORE-INTENT-001 | RESTORE-INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: RUN-001 | RUN-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SCHED-001 | SCHED-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-KEY | SPIKE-KEY | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: TRUST-001 | TRUST-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: UPDATE-001 | UPDATE-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: UPG-001 | UPG-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: UX-002 | UX-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: VER-001 | VER-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: VER-002 | VER-002 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: VER-SIM-001 | VER-SIM-001 | `NOT_STARTED` | — | follow work-package dependency order |

@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from scripts.ci import threat_catalog_guard as threat_guard
 ROOT = Path(__file__).parents[2]
 GOVERNANCE = ROOT / "governance"
 REPORT_PATH = ROOT / "docs/v1/TRACEABILITY_REPORT.md"
+PROTECTED_APPROVALS_PATH = GOVERNANCE / "protected-approvals.v1.json"
 DOCUMENTS = {
     "manifest": GOVERNANCE / "traceability.v1.json",
     "status": GOVERNANCE / "package-status.v1.json",
@@ -32,10 +34,10 @@ SCHEMAS = {
     "attestations": GOVERNANCE / "review-attestations.schema.json",
 }
 SCHEMA_HASHES = {
-    "manifest": "9da36145fa0970a415d0568c31aba863149a030a5543ae3253625a78698042af",
-    "status": "8f117ed3a28e0bffca00d70357ef63a18773bee4e5ff51678babd75daa8cbbf9",
-    "acceptance": "29996058fa7108738b9f30fcd0b7cc97a8408b01c28acade02b14d87df5cbe75",
-    "attestations": "e5a9c33c79052960be1c9a97eec046a7b38a803f3d1de37edfdbea0fc458092a",
+    "manifest": "a6e1b479f24c89109980643c147c756480af0d93ce1b87cac8f0e6614013cfbd",
+    "status": "f414f057b8bbf1166e1b72c0edd01e859fed139b75e5f419840f53edee3e4ded",
+    "acceptance": "37ab391d8d4f6c5d3877f8af7d7d2de108b57102b75f63905bbb0abd150670c2",
+    "attestations": "18125f4f61814f6a5c748f093491e70bb2f782766a958e57d2578124b6249700",
 }
 STATUSES = {"NOT_STARTED", "IN_PROGRESS", "BLOCKED", "COMPLETE", "VERIFIED"}
 STATUS_RANK = {"NOT_STARTED": 0, "BLOCKED": 1, "IN_PROGRESS": 1, "COMPLETE": 2, "VERIFIED": 3}
@@ -46,6 +48,19 @@ ADR_STATUSES = {
 }
 ACCEPTING_ADR_STATUSES = {"Accepted", "Accepted for initial build"}
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+MILESTONE_GATES = {
+    "M0": {
+        "M0_ALL_PACKAGES_COMPLETE",
+        "M0_ALL_SPIKES_DISPOSITIONED",
+        "M0_SIMULATOR_ONLY_EXTERNAL_IO",
+    },
+    "M1": {"M1_CONFORMANCE", "M1_FAILURE_INJECTION", "M1_SYNTHETIC_E2E"},
+    "M2": {"M2_DISCLOSURE", "M2_OBSERVATION_AUTHORITY", "M2_SYNTHETIC_E2E"},
+    "M3": {"LG-2", "LG-3", "M3_GUIDED_E2E"},
+    "M4": {"M4_AUTOMATION_AUTHORITY", "M4_CANARY", "M4_RECOVERY"},
+    "M5": {"M5_CONFORMANCE", "M5_RESOURCE_BUDGET", "M5_SECURITY_RELEASE"},
+    "M6": {"M6_DAY90_EVIDENCE", "M6_STABLE_CLAIMS", "M6_ZERO_ENABLED_P0_P1"},
+}
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -153,7 +168,10 @@ def parse_adrs(root: Path) -> tuple[dict[str, str], list[str]]:
         if match is None:
             errors.append("malformed ADR index row")
             continue
-        index[f"ADR-{match.group(1)}"] = cells[1]
+        adr_id = f"ADR-{match.group(1)}"
+        if adr_id in index:
+            errors.append(f"duplicate ADR index row {adr_id}")
+        index[adr_id] = cells[1]
     if index != adrs:
         errors.append("ADR index is not losslessly equal to canonical ADR files/statuses")
     return adrs, sorted(set(errors))
@@ -206,7 +224,21 @@ def _git_commit_is_ancestor(root: Path, commit: str) -> bool:
     return ancestor.returncode == 0
 
 
-def _acceptance_node(root: Path, evidence: Mapping[str, Any]) -> bool:
+def _meaningful_assertion(function: ast.FunctionDef) -> bool:
+    """Require a direct, data-dependent assertion in the executed test body."""
+
+    dynamic = (ast.Call, ast.Name, ast.Attribute, ast.Subscript)
+    for statement in function.body:
+        if not isinstance(statement, ast.Assert):
+            continue
+        if isinstance(statement.test, ast.Constant):
+            continue
+        if any(isinstance(node, dynamic) for node in ast.walk(statement.test)):
+            return True
+    return False
+
+
+def _acceptance_node(root: Path, evidence: Mapping[str, Any], criterion_ids: Sequence[str]) -> bool:
     reference = evidence.get("ref")
     if not isinstance(reference, str) or reference.count("::") != 1:
         return False
@@ -230,26 +262,71 @@ def _acceptance_node(root: Path, evidence: Mapping[str, Any]) -> bool:
         return False
     if any(item.startswith(("pytest.mark.skip", "pytest.mark.xfail")) for item in decorators):
         return False
-    calls = {ast.unparse(node.func) for node in ast.walk(function) if isinstance(node, ast.Call)}
-    return not (calls & {"pytest.skip", "pytest.xfail"}) and any(
-        isinstance(node, ast.Assert) for node in ast.walk(function)
-    )
+    direct_criterion_calls = [
+        statement.value
+        for statement in function.body
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "governance_criterion"
+    ]
+    invoked = [
+        call.args[0].value
+        for call in direct_criterion_calls
+        if len(call.args) == 1
+        and not call.keywords
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    ]
+    return sorted(invoked) == sorted(criterion_ids) and _meaningful_assertion(function)
 
 
-def _execute_node(root: Path, reference: str) -> bool:
+def _execute_node(root: Path, reference: str, criterion_ids: Sequence[str]) -> bool:
+    with tempfile.TemporaryDirectory(prefix="mycogni-governance-") as directory:
+        artifact = Path(directory) / "result.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "--runxfail", "-rA", "-q", reference],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={
+                **os.environ,
+                "MYCOGNI_GOVERNANCE_EVIDENCE_SUBPROCESS": "1",
+                "MYCOGNI_GOVERNANCE_ARTIFACT": str(artifact),
+            },
+        )
+        if result.returncode != 0 or not artifact.is_file():
+            return False
+        try:
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        expected_node = reference.split("::", 1)[1]
+        return (
+            payload.get("outcome") == "passed"
+            and payload.get("wasxfail") is False
+            and payload.get("skip_or_xfail_markers") == []
+            and payload.get("criteria") == sorted(criterion_ids)
+            and payload.get("nodeid", "").endswith(f"::{expected_node}")
+            and re.search(rf"^PASSED {re.escape(reference)}$", result.stdout, re.MULTILINE)
+            is not None
+        )
+
+
+def _git_file_bytes(root: Path, commit: str, path: str) -> bytes | None:
+    canonical = threat_guard._canonical_repo_file(root, path)
+    if canonical is None:
+        return None
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--runxfail", "-rA", "-q", reference],
+        ["git", "show", f"{commit}:{canonical.relative_to(root).as_posix()}"],
         cwd=root,
         check=False,
         capture_output=True,
-        text=True,
-        timeout=30,
-        env={**os.environ, "MYCOGNI_GOVERNANCE_EVIDENCE_SUBPROCESS": "1"},
+        timeout=20,
     )
-    return (
-        result.returncode == 0
-        and re.search(rf"^PASSED {re.escape(reference)}$", result.stdout, re.MULTILINE) is not None
-    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def _validate_schemas(documents: Mapping[str, Mapping[str, Any]]) -> list[str]:
@@ -308,6 +385,10 @@ def validate_governance(
     criteria_rows = acceptance.get("criteria", [])
     evidence_rows = acceptance.get("evidence", [])
     attestation_rows = attestations_doc.get("attestations", [])
+    for name, document in documents.items():
+        version = document.get("manifest_version") or document.get("registry_version")
+        if _semver_tuple(version) is None:
+            errors.append(f"{name}: registry version must be semantic x.y.z")
     for name, rows in (
         ("records", records),
         ("packages", status_rows),
@@ -343,6 +424,10 @@ def validate_governance(
         for row in attestation_rows
         if isinstance(row, dict) and isinstance(row.get("id"), str)
     }
+    if set(status_by_id) != set(packages) or set(matrix) != set(packages):
+        errors.append(
+            "package inventories must be exactly equal across work packages, status registry, and matrix"
+        )
     for package_id, row in status_by_id.items():
         if package_id not in packages:
             errors.append(f"status registry has unknown package {package_id}")
@@ -361,6 +446,8 @@ def validate_governance(
                 errors.append(f"{package_id}: incomplete prerequisites {sorted(missing)}")
     threat_catalog = _load(root / "security/threat-catalog.v1.json")
     threat_registry = _load(root / "security/verification-tests.v1.json")
+    threats_by_id = {item["id"]: item for item in threat_catalog["threats"]}
+    tests_by_id = {item["id"]: item for item in threat_registry["tests"]}
     mapping_ids = {
         "REQUIREMENT": requirements,
         "WORK_PACKAGE": set(packages),
@@ -399,6 +486,41 @@ def validate_governance(
                     )
                     if vfy is None or vfy["status"] != "IMPLEMENTED":
                         errors.append(f"{record.get('id')}: planned VFY cannot count as accepted")
+        if record.get("state") in {"INDEPENDENTLY_ACCEPTED", "MILESTONE_VERIFIED"}:
+            mapped_threats = {
+                item.get("id")
+                for item in mappings or []
+                if isinstance(item, dict) and item.get("kind") == "THREAT"
+            }
+            mapped_tests = {
+                item.get("id")
+                for item in mappings or []
+                if isinstance(item, dict) and item.get("kind") == "VERIFICATION_TEST"
+            }
+            required_tests = {
+                test_id
+                for threat_id in mapped_threats
+                if threat_id in threats_by_id
+                for test_id in threats_by_id[threat_id]["verification_tests"]
+            }
+            required_threats = {
+                threat_id
+                for test_id in mapped_tests
+                if test_id in tests_by_id
+                for threat_id in tests_by_id[test_id]["threats"]
+            }
+            if mapped_tests != required_tests or mapped_threats != required_threats:
+                errors.append(
+                    f"{record.get('id')}: threat and VFY mappings are not bidirectionally closed"
+                )
+            for threat_id in mapped_threats:
+                threat = threats_by_id.get(threat_id)
+                if threat is None or threat.get("status") != "CONTROL_TESTED":
+                    errors.append(f"{record.get('id')}: planned threat cannot count as accepted")
+            for test_id in mapped_tests:
+                test = tests_by_id.get(test_id)
+                if test is None or test.get("status") != "IMPLEMENTED":
+                    errors.append(f"{record.get('id')}: planned VFY cannot count as accepted")
         criterion_ids = record.get("acceptance_criteria", [])
         evidence_ids = record.get("evidence_ids", [])
         attestation = attestations.get(record.get("attestation_id"))
@@ -419,12 +541,12 @@ def validate_governance(
             if (
                 item is None
                 or item.get("package") != package_id
-                or not _acceptance_node(root, item)
+                or not _acceptance_node(root, item, criterion_ids)
             ):
                 errors.append(
                     f"{record.get('id')}: invalid package acceptance evidence {evidence_id}"
                 )
-            elif execute and not _execute_node(root, item["ref"]):
+            elif execute and not _execute_node(root, item["ref"], criterion_ids):
                 errors.append(f"{record.get('id')}: acceptance evidence did not PASS {evidence_id}")
         if record.get("state") == "INDEPENDENTLY_ACCEPTED":
             if (
@@ -443,16 +565,38 @@ def validate_governance(
                 if not isinstance(commit, str) or not _git_commit_is_ancestor(root, commit):
                     errors.append(f"{record.get('id')}: reviewed commit is not an ancestor")
                 review = attestation.get("review_record", {})
-                review_path = (
-                    threat_guard._canonical_repo_file(root, review.get("path", ""))
-                    if isinstance(review, dict)
+                review_bytes = (
+                    _git_file_bytes(root, commit, review.get("path", ""))
+                    if isinstance(commit, str) and isinstance(review, dict)
                     else None
                 )
-                if review_path is None or _sha256(review_path) != review.get("sha256"):
+                if review_bytes is None or hashlib.sha256(review_bytes).hexdigest() != review.get(
+                    "sha256"
+                ):
                     errors.append(f"{record.get('id')}: review record digest mismatch")
+                for evidence_id in evidence_ids:
+                    evidence_item = evidence.get(evidence_id, {})
+                    source_path = str(evidence_item.get("ref", "")).split("::", 1)[0]
+                    source_bytes = (
+                        _git_file_bytes(root, commit, source_path)
+                        if isinstance(commit, str)
+                        else None
+                    )
+                    if source_bytes is None or hashlib.sha256(
+                        source_bytes
+                    ).hexdigest() != evidence_item.get("content_sha256"):
+                        errors.append(
+                            f"{record.get('id')}: evidence digest is not bound to reviewed commit"
+                        )
                 if not attestation.get("residuals"):
                     errors.append(f"{record.get('id')}: attestation residuals must be explicit")
+    evidence_by_package: dict[str, set[str]] = {package_id: set() for package_id in packages}
+    for record in records if isinstance(records, list) else []:
+        if isinstance(record, dict) and record.get("package") in evidence_by_package:
+            evidence_by_package[record["package"]].update(record.get("evidence_ids", []))
     for package_id, row in status_by_id.items():
+        if set(row.get("evidence_ids", [])) != evidence_by_package.get(package_id, set()):
+            errors.append(f"{package_id}: status evidence_ids do not exactly match trace records")
         if row.get("status") in {"COMPLETE", "VERIFIED"}:
             matching = [
                 record
@@ -463,7 +607,43 @@ def validate_governance(
             ]
             if len(matching) != 1:
                 errors.append(f"{package_id}: completion lacks exactly one accepted trace record")
+    used_criteria = {
+        value
+        for record in (records if isinstance(records, list) else [])
+        if isinstance(record, dict)
+        for value in record.get("acceptance_criteria", [])
+    }
+    used_evidence = {
+        value
+        for record in (records if isinstance(records, list) else [])
+        if isinstance(record, dict)
+        for value in record.get("evidence_ids", [])
+    }
+    used_attestations = {
+        record.get("attestation_id")
+        for record in (records if isinstance(records, list) else [])
+        if isinstance(record, dict) and record.get("attestation_id")
+    }
+    if used_criteria != set(criteria):
+        errors.append("criteria registry contains missing or unused entries")
+    if used_evidence != set(evidence):
+        errors.append("evidence registry contains missing or unused entries")
+    if used_attestations != set(attestations):
+        errors.append("attestation registry contains missing or unused entries")
     milestones = status_doc.get("milestone_attestations", [])
+    milestone_ids = [
+        item.get("id") for item in milestones if isinstance(item, dict) and item.get("id")
+    ]
+    if milestone_ids != sorted(milestone_ids):
+        errors.append("milestone attestations must be sorted by canonical ID")
+    for duplicate in sorted(_duplicates(milestone_ids)):
+        errors.append(f"duplicate milestone attestation ID {duplicate}")
+    verified_ids = {
+        package_id for package_id, row in status_by_id.items() if row.get("status") == "VERIFIED"
+    }
+    for milestone in milestones:
+        if isinstance(milestone, dict) and not (set(milestone.get("packages", [])) & verified_ids):
+            errors.append(f"unused milestone attestation {milestone.get('id')}")
     for package_id, row in status_by_id.items():
         if row.get("status") == "VERIFIED":
             covering = [
@@ -475,12 +655,57 @@ def validate_governance(
             ]
             if len(covering) != 1:
                 errors.append(f"{package_id}: VERIFIED lacks one structured milestone attestation")
+                continue
+            milestone = covering[0]
+            dependency_closure: set[str] = set()
+
+            def add_dependencies(item: str, closure: set[str]) -> None:
+                for dependency in packages.get(item, set()):
+                    if dependency not in closure:
+                        closure.add(dependency)
+                        add_dependencies(dependency, closure)
+
+            for covered_package in milestone.get("packages", []):
+                add_dependencies(covered_package, dependency_closure)
+            if set(milestone.get("dependency_packages", [])) != dependency_closure:
+                errors.append(
+                    f"{package_id}: milestone attestation has partial dependency coverage"
+                )
+            expected_gates = MILESTONE_GATES.get(milestone.get("milestone"))
+            if expected_gates is None or set(milestone.get("gates", [])) != expected_gates:
+                errors.append(f"{package_id}: milestone attestation has partial gate coverage")
+            milestone_commit = milestone.get("reviewed_commit")
+            if not isinstance(milestone_commit, str) or not _git_commit_is_ancestor(
+                root, milestone_commit
+            ):
+                errors.append(f"{package_id}: milestone reviewed commit is not an ancestor")
+            milestone_review = milestone.get("review_record", {})
+            milestone_bytes = (
+                _git_file_bytes(root, milestone_commit, milestone_review.get("path", ""))
+                if isinstance(milestone_commit, str) and isinstance(milestone_review, dict)
+                else None
+            )
+            if milestone_bytes is None or hashlib.sha256(
+                milestone_bytes
+            ).hexdigest() != milestone_review.get("sha256"):
+                errors.append(f"{package_id}: milestone review digest mismatch")
+            gate_evidence = set(milestone.get("gate_evidence_ids", []))
+            expected_evidence = {
+                item
+                for covered_package in milestone.get("packages", [])
+                for item in evidence_by_package.get(covered_package, set())
+            }
+            if gate_evidence != expected_evidence:
+                errors.append(f"{package_id}: milestone gate evidence is partial or nonexistent")
     errors.extend(_validate_schemas(documents))
     counts = {
         "requirements": sorted(requirements),
         "packages": sorted(packages),
         "adrs": sorted(adrs),
         "records": sorted(record["id"] for record in records if isinstance(record, dict)),
+        "threats": sorted(threats_by_id),
+        "verification_tests": sorted(tests_by_id),
+        "registry_packages": sorted(status_by_id),
         "accepted_packages": sorted(
             record["package"]
             for record in records
@@ -507,7 +732,9 @@ def _semver_tuple(value: Any) -> tuple[int, int, int] | None:
 
 
 def validate_against_base(
-    current: Mapping[str, Mapping[str, Any]], baseline: Mapping[str, Mapping[str, Any]]
+    current: Mapping[str, Mapping[str, Any]],
+    baseline: Mapping[str, Mapping[str, Any]],
+    protected_approvals: Mapping[str, Mapping[str, Any]],
 ) -> list[str]:
     errors: list[str] = []
     for name in DOCUMENTS:
@@ -532,13 +759,48 @@ def validate_against_base(
     for attestation_id in sorted(set(before) & set(after)):
         if before[attestation_id] != after[attestation_id]:
             errors.append(f"trusted attestation mutated: {attestation_id}")
+    for attestation_id in sorted(set(after) - set(before)):
+        attestation = after[attestation_id]
+        approval = protected_approvals.get(attestation_id)
+        if (
+            approval is None
+            or approval.get("reviewer_id") != attestation.get("reviewer", {}).get("id")
+            or approval.get("attestation_sha256") != threat_guard._canonical_json_hash(attestation)
+        ):
+            errors.append(f"new attestation lacks allowlisted protected approval: {attestation_id}")
+    before_status = {
+        item["id"]: item.get("status") for item in baseline["status"].get("packages", [])
+    }
+    after_status = {
+        item["id"]: item.get("status") for item in current["status"].get("packages", [])
+    }
+    records_by_package = {
+        item.get("package"): item for item in current["manifest"].get("records", [])
+    }
+    for package_id, status in after_status.items():
+        prior = before_status.get(package_id, "NOT_STARTED")
+        if STATUS_RANK.get(status, -1) < 2 or STATUS_RANK.get(prior, -1) >= 2:
+            continue
+        attestation_id = records_by_package.get(package_id, {}).get("attestation_id")
+        if not attestation_id or attestation_id not in protected_approvals:
+            errors.append(f"{package_id}: promotion lacks protected-base authorization")
     return errors
 
 
-def _load_base_documents(root: Path, revision: str) -> dict[str, dict[str, Any]] | None:
+def _load_base_documents(root: Path, revision: str) -> dict[str, dict[str, Any]]:
     if re.fullmatch(r"[0-9a-fA-F]{40,64}", revision) is None:
         raise ValueError("governance base revision must be a full hexadecimal object ID")
+    commit = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        timeout=20,
+    )
+    if commit.returncode != 0:
+        raise ValueError("governance base revision is unavailable")
     result: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
     for name, path in DOCUMENTS.items():
         relative = path.relative_to(root).as_posix()
         shown = subprocess.run(
@@ -550,9 +812,62 @@ def _load_base_documents(root: Path, revision: str) -> dict[str, dict[str, Any]]
             timeout=20,
         )
         if shown.returncode != 0:
-            return None
+            missing.append(name)
+            continue
         result[name] = threat_guard._load_json_text(shown.stdout, f"governance base {name}")
+    if missing and len(missing) != len(DOCUMENTS):
+        raise ValueError(f"trusted base has partial governance-document disappearance: {missing}")
     return result
+
+
+def _load_protected_approvals(root: Path, revision: str) -> dict[str, Mapping[str, Any]]:
+    relative = PROTECTED_APPROVALS_PATH.relative_to(root).as_posix()
+    shown = subprocess.run(
+        ["git", "show", f"{revision}:{relative}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if shown.returncode != 0:
+        return {}
+    document = threat_guard._load_json_text(shown.stdout, "protected governance approvals")
+    if set(document) != {"schema_version", "approvals"} or document.get("schema_version") != 1:
+        raise ValueError("protected approval registry is malformed")
+    approvals = document.get("approvals")
+    if not isinstance(approvals, list):
+        raise ValueError("protected approval registry approvals must be an array")
+    result: dict[str, Mapping[str, Any]] = {}
+    for item in approvals:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"attestation_id", "reviewer_id", "attestation_sha256"}
+            or not isinstance(item.get("attestation_id"), str)
+            or not isinstance(item.get("reviewer_id"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(item.get("attestation_sha256"))) is None
+            or item["attestation_id"] in result
+        ):
+            raise ValueError("protected approval registry entry is malformed or duplicated")
+        result[item["attestation_id"]] = item
+    return result
+
+
+def _untrusted_promotions(documents: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    if documents["attestations"].get("attestations"):
+        errors.append("trusted base is required for ACCEPT attestations")
+    if any(
+        item.get("state") in {"INDEPENDENTLY_ACCEPTED", "MILESTONE_VERIFIED"}
+        for item in documents["manifest"].get("records", [])
+    ):
+        errors.append("trusted base is required for accepted trace states")
+    if any(
+        item.get("status") in {"COMPLETE", "VERIFIED"}
+        for item in documents["status"].get("packages", [])
+    ):
+        errors.append("trusted base is required for package promotion")
+    return errors
 
 
 def render_report(data: Mapping[str, Any]) -> str:
@@ -577,10 +892,13 @@ def render_report(data: Mapping[str, Any]) -> str:
             f"- Work packages ({len(data['packages'])}): {listed(data['packages'])}",
             f"- ADRs ({len(data['adrs'])}): {listed(data['adrs'])}",
             f"- Trace records ({len(data['records'])}): {listed(data['records'])}",
+            f"- Threats ({len(data['threats'])}): {listed(data['threats'])}",
+            f"- Verification tests ({len(data['verification_tests'])}): {listed(data['verification_tests'])}",
+            f"- Canonical package-status scope ({len(data['registry_packages'])}): {listed(data['registry_packages'])}",
             "",
             "## Claim boundary",
             "",
-            "An ACCEPT attestation establishes only the named reviewed package evidence. Canonical package status remains IN_PROGRESS until dependency closure and status-promotion rules pass.",
+            "Implemented records are not acceptance. An ACCEPT attestation requires protected-base authorization and exact reviewed-commit evidence/review digests; canonical status remains below COMPLETE until every promotion rule passes.",
             "No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.",
             "GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.",
             "",
@@ -605,14 +923,18 @@ def main() -> int:
     if base_ref:
         try:
             baseline = _load_base_documents(ROOT, base_ref)
+            approvals = _load_protected_approvals(ROOT, base_ref)
         except ValueError as error:
             errors.append(str(error))
         else:
-            if baseline is None:
-                base_state = "BOOTSTRAP NOT VERIFIED"
+            if not baseline:
+                errors.extend(_untrusted_promotions(documents))
+                base_state = "BOOTSTRAP"
             else:
-                errors.extend(validate_against_base(documents, baseline))
+                errors.extend(validate_against_base(documents, baseline, approvals))
                 base_state = "VERIFIED"
+    else:
+        errors.extend(_untrusted_promotions(documents))
     if errors:
         print("\n".join(sorted(set(errors))))
         return 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -166,7 +167,10 @@ def _assert_closure_safe(closure: dict[str, Path]) -> None:
 
 
 @pytest.mark.governance_acceptance
-def test_complete_diagnostic_dependency_closure_has_no_export_or_logging_dependency() -> None:
+def test_complete_diagnostic_dependency_closure_has_no_export_or_logging_dependency(
+    governance_criterion: Callable[[str], None],
+) -> None:
+    governance_criterion("ACC-TEL-001")
     closure = _diagnostic_dependency_closure()
     assert {
         "mycogni.application.diagnostics",

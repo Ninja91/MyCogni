@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "manifest_version": "2.0.0",
+  "manifest_version": "2.1.0",
   "records": [
-    {"id":"TRC-CT-001","package":"CT-001","state":"INDEPENDENTLY_ACCEPTED","mappings":[{"kind":"ADR","id":"ADR-0001"},{"kind":"REQUIREMENT","id":"OPS-02"}],"acceptance_criteria":["ACC-CT-001"],"evidence_ids":["EVD-CT-001"],"attestation_id":"ATT-CT-001"},
-    {"id":"TRC-TEL-001","package":"TEL-001","state":"INDEPENDENTLY_ACCEPTED","mappings":[{"kind":"REQUIREMENT","id":"SEC-03"}],"acceptance_criteria":["ACC-TEL-001"],"evidence_ids":["EVD-TEL-001"],"attestation_id":"ATT-TEL-001"},
-    {"id":"TRC-THREAT-CATALOG-001","package":"THREAT-CATALOG-001","state":"INDEPENDENTLY_ACCEPTED","mappings":[{"kind":"REQUIREMENT","id":"GOV-03"},{"kind":"THREAT","id":"THR-GOV-001"},{"kind":"VERIFICATION_TEST","id":"VFY-CATALOG-001"}],"acceptance_criteria":["ACC-THREAT-CATALOG-001"],"evidence_ids":["EVD-THREAT-CATALOG-001"],"attestation_id":"ATT-THREAT-CATALOG-001"}
+    {"id":"TRC-CT-001","package":"CT-001","state":"IMPLEMENTED","mappings":[{"kind":"ADR","id":"ADR-0001"},{"kind":"REQUIREMENT","id":"OPS-02"}],"acceptance_criteria":["ACC-CT-001"],"evidence_ids":["EVD-CT-001"],"attestation_id":null},
+    {"id":"TRC-TEL-001","package":"TEL-001","state":"IMPLEMENTED","mappings":[{"kind":"REQUIREMENT","id":"SEC-03"}],"acceptance_criteria":["ACC-TEL-001"],"evidence_ids":["EVD-TEL-001"],"attestation_id":null},
+    {"id":"TRC-THREAT-CATALOG-001","package":"THREAT-CATALOG-001","state":"IMPLEMENTED","mappings":[{"kind":"REQUIREMENT","id":"GOV-03"},{"kind":"THREAT","id":"THR-GOV-001"},{"kind":"VERIFICATION_TEST","id":"VFY-CATALOG-001"}],"acceptance_criteria":["ACC-THREAT-CATALOG-001"],"evidence_ids":["EVD-THREAT-CATALOG-001"],"attestation_id":null}
   ]
 }

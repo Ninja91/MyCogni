@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,10 @@ def test_repository_catalog_is_valid_and_report_is_current() -> None:
 
 @pytest.mark.threat_evidence
 @pytest.mark.governance_acceptance
-def test_threat_catalog_integrity_evidence() -> None:
+def test_threat_catalog_integrity_evidence(
+    governance_criterion: Callable[[str], None],
+) -> None:
+    governance_criterion("ACC-THREAT-CATALOG-001")
     catalog, registry, history = _documents()
     assert (
         threat_catalog_guard.validate_catalog(
