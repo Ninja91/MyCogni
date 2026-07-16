@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from mycogni.adapters.persistence import (
     create_session_factory,
     create_sqlite_engine,
 )
+from mycogni.adapters.persistence.database import _assert_sqlite_connection_policy
 
 
 def _settings(path: Path, *, busy_timeout_ms: int = 5_000) -> SQLiteSettings:
@@ -37,10 +39,60 @@ def test_busy_timeout_is_bounded(tmp_path: Path, busy_timeout_ms: int) -> None:
         _settings(tmp_path / "invalid.sqlite", busy_timeout_ms=busy_timeout_ms)
 
 
-@pytest.mark.parametrize("url", ["sqlite://", "sqlite:///:memory:", "postgresql:///mycogni"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "sqlite://",
+        "sqlite:///:memory:",
+        "sqlite:///file::memory:?cache=shared&uri=true",
+        "sqlite:///file:memdb1?mode=memory&cache=shared&uri=true",
+        "sqlite:///real.sqlite?mode=rwc&uri=true",
+        "sqlite:///file:real.sqlite",
+        "postgresql:///mycogni",
+    ],
+)
 def test_only_file_backed_sqlite_is_accepted(url: str) -> None:
     with pytest.raises(ValueError):
         SQLiteSettings(url=url)
+
+
+def test_connection_policy_fails_closed_when_wal_is_unsupported(tmp_path: Path) -> None:
+    connection = sqlite3.connect(":memory:")
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=FULL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        with pytest.raises(RuntimeError, match="PRAGMA journal_mode.*'wal'.*'memory'"):
+            _assert_sqlite_connection_policy(
+                cursor,
+                database_path=(tmp_path / "expected.sqlite").resolve(),
+                busy_timeout_ms=5_000,
+            )
+    finally:
+        cursor.close()
+        connection.close()
+
+
+def test_connection_policy_rejects_an_unexpected_physical_file(tmp_path: Path) -> None:
+    actual_path = tmp_path / "actual.sqlite"
+    connection = sqlite3.connect(actual_path)
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=FULL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        with pytest.raises(RuntimeError, match="opened unexpected database file"):
+            _assert_sqlite_connection_policy(
+                cursor,
+                database_path=(tmp_path / "expected.sqlite").resolve(),
+                busy_timeout_ms=5_000,
+            )
+    finally:
+        cursor.close()
+        connection.close()
 
 
 def test_unit_of_work_requires_explicit_commit_and_closes_sessions(tmp_path: Path) -> None:

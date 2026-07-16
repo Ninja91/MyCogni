@@ -10,6 +10,9 @@ SQLite database can move between `base` and the current revision.
 
 The default URL in `alembic.ini` is a development placeholder. Operators and
 tests must supply the target URL with Alembic's `sqlalchemy.url` configuration
-option. This baseline does not yet provide the maintenance lock, pre-migration
+option. `mycogni.busy_timeout_ms` configures the same bounded, fail-closed
+SQLite connection policy used by the application. SQLite URI/query modes,
+in-memory targets, and non-SQLite URLs are rejected. This baseline does not yet
+provide the maintenance lock, pre-migration
 backup, disk-space preflight, encrypted fields, restore proof, or compatibility
 matrix required by later work packages.
