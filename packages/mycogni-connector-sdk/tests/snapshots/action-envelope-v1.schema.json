@@ -1,0 +1,162 @@
+{
+  "$defs": {
+    "ActionBudget": {
+      "additionalProperties": false,
+      "description": "Positive hard bounds supplied to separate runtime enforcement.",
+      "properties": {
+        "response_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Response Bytes",
+          "type": "integer"
+        },
+        "wall_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Wall Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "wall_seconds",
+        "response_bytes"
+      ],
+      "title": "ActionBudget",
+      "type": "object"
+    },
+    "Capability": {
+      "description": "Independently granted connector capability.",
+      "enum": [
+        "observe",
+        "prepare",
+        "submit",
+        "poll",
+        "verify"
+      ],
+      "title": "Capability",
+      "type": "string"
+    },
+    "SealedAttribute": {
+      "additionalProperties": false,
+      "description": "One opaque attribute sealed to a one-time action key.",
+      "properties": {
+        "attribute_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Attribute Type",
+          "type": "string"
+        },
+        "ciphertext": {
+          "maxLength": 1048576,
+          "minLength": 1,
+          "title": "Ciphertext",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute_type",
+        "ciphertext"
+      ],
+      "title": "SealedAttribute",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Short-lived declarative input; validation does not authorize dispatch.",
+  "properties": {
+    "action_id": {
+      "format": "uuid4",
+      "title": "Action Id",
+      "type": "string"
+    },
+    "allowed_origins": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Allowed Origins",
+      "type": "array"
+    },
+    "attempt": {
+      "minimum": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "attempt_id": {
+      "format": "uuid4",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "attributes": {
+      "items": {
+        "$ref": "#/$defs/SealedAttribute"
+      },
+      "maxItems": 64,
+      "title": "Attributes",
+      "type": "array"
+    },
+    "authorization_epoch": {
+      "minimum": 0,
+      "title": "Authorization Epoch",
+      "type": "integer"
+    },
+    "budget": {
+      "$ref": "#/$defs/ActionBudget"
+    },
+    "capability": {
+      "$ref": "#/$defs/Capability"
+    },
+    "connector_release": {
+      "maxLength": 193,
+      "minLength": 7,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "title": "Connector Release",
+      "type": "string"
+    },
+    "deadline_utc": {
+      "format": "date-time",
+      "title": "Deadline Utc",
+      "type": "string"
+    },
+    "fence": {
+      "minimum": 0,
+      "title": "Fence",
+      "type": "integer"
+    },
+    "intent_id": {
+      "format": "uuid4",
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "profile_ref": {
+      "format": "uuid4",
+      "title": "Profile Ref",
+      "type": "string"
+    },
+    "protocol_version": {
+      "const": 1,
+      "title": "Protocol Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "action_id",
+    "intent_id",
+    "attempt_id",
+    "fence",
+    "authorization_epoch",
+    "capability",
+    "connector_release",
+    "profile_ref",
+    "attributes",
+    "allowed_origins",
+    "deadline_utc",
+    "attempt",
+    "budget"
+  ],
+  "title": "ActionEnvelope",
+  "type": "object"
+}

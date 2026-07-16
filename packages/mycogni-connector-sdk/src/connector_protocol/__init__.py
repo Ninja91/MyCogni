@@ -3,6 +3,7 @@
 from connector_protocol.manifest import (
     Capability,
     ConnectorManifest,
+    DisclosureDeclaration,
     RuntimeBoundary,
     Transport,
 )
@@ -10,6 +11,9 @@ from connector_protocol.protocol import ActionBudget, ActionEnvelope, SealedAttr
 from connector_protocol.result import (
     DisclosureRecord,
     EvidenceReference,
+    NextStep,
+    NextStepKind,
+    ReasonCode,
     ResultCode,
     ResultEnvelope,
 )
@@ -19,8 +23,12 @@ __all__ = (
     "ActionEnvelope",
     "Capability",
     "ConnectorManifest",
+    "DisclosureDeclaration",
     "DisclosureRecord",
     "EvidenceReference",
+    "NextStep",
+    "NextStepKind",
+    "ReasonCode",
     "ResultCode",
     "ResultEnvelope",
     "RuntimeBoundary",

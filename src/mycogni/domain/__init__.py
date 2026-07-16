@@ -5,4 +5,12 @@ They must not import application orchestration, adapters, entrypoints, bootstrap
 composition, or third-party frameworks.
 """
 
-__all__: tuple[str, ...] = ()
+from mycogni.domain.contracts import (
+    Ciphertext,
+    OpaqueId,
+    OptimisticVersion,
+    Redacted,
+    Sensitive,
+)
+
+__all__ = ("Ciphertext", "OpaqueId", "OptimisticVersion", "Redacted", "Sensitive")

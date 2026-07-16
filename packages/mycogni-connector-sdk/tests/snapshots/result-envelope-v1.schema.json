@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "DisclosureRecord": {
+      "additionalProperties": false,
+      "description": "Typed summary of an attribute category disclosed by this action.",
+      "properties": {
+        "attribute_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Attribute Type",
+          "type": "string"
+        },
+        "destination": {
+          "maxLength": 253,
+          "minLength": 4,
+          "title": "Destination",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute_type",
+        "destination"
+      ],
+      "title": "DisclosureRecord",
+      "type": "object"
+    },
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "description": "Opaque reference to bounded ciphertext already uploaded to the mailbox.",
+      "properties": {
+        "byte_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "ciphertext_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Ciphertext Digest",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mailbox_object_id": {
+          "format": "uuid4",
+          "title": "Mailbox Object Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "mailbox_object_id",
+        "ciphertext_digest",
+        "byte_count"
+      ],
+      "title": "EvidenceReference",
+      "type": "object"
+    },
+    "NextStep": {
+      "additionalProperties": false,
+      "description": "Declarative handoff; never an executable command.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/NextStepKind"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "NextStep",
+      "type": "object"
+    },
+    "NextStepKind": {
+      "description": "Finite handoff requested from the trusted core or user.",
+      "enum": [
+        "none",
+        "user_review",
+        "retry_later",
+        "reauthorize"
+      ],
+      "title": "NextStepKind",
+      "type": "string"
+    },
+    "ReasonCode": {
+      "description": "Finite machine reason vocabulary for protocol version 1.",
+      "enum": [
+        "no_candidate",
+        "name_address_match",
+        "exact_match",
+        "partial_match",
+        "multiple_candidates",
+        "insufficient_match",
+        "captcha_required",
+        "mfa_required",
+        "login_required",
+        "manual_review_required",
+        "timeout",
+        "rate_limited",
+        "schema_drift",
+        "evidence_unavailable",
+        "unexpected_response",
+        "invalid_action",
+        "revoked_authority",
+        "stale_fence",
+        "budget_exceeded",
+        "connector_error"
+      ],
+      "title": "ReasonCode",
+      "type": "string"
+    },
+    "ResultCode": {
+      "description": "Finite action result vocabulary; never a removal-verification claim.",
+      "enum": [
+        "not_found",
+        "candidate_found",
+        "ambiguous",
+        "challenge",
+        "inconclusive",
+        "failed"
+      ],
+      "title": "ResultCode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Structured attempt result without outcome or verification inference.",
+  "properties": {
+    "action_id": {
+      "format": "uuid4",
+      "title": "Action Id",
+      "type": "string"
+    },
+    "attempt_id": {
+      "format": "uuid4",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "disclosures": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DisclosureRecord"
+      },
+      "maxItems": 64,
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 64,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "external_reference": {
+      "anyOf": [
+        {
+          "maxLength": 1048576,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "External Reference"
+    },
+    "next": {
+      "$ref": "#/$defs/NextStep",
+      "default": {
+        "kind": "none"
+      }
+    },
+    "protocol_version": {
+      "const": 1,
+      "title": "Protocol Version",
+      "type": "integer"
+    },
+    "reason_code": {
+      "$ref": "#/$defs/ReasonCode"
+    },
+    "result": {
+      "$ref": "#/$defs/ResultCode"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "action_id",
+    "attempt_id",
+    "result",
+    "reason_code"
+  ],
+  "title": "ResultEnvelope",
+  "type": "object"
+}

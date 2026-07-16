@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = "Apache-2.0"
 authors = [{ name = "MyCogni contributors" }]
-dependencies = []
+dependencies = ["pydantic>=2.10,<3"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/connector_protocol"]

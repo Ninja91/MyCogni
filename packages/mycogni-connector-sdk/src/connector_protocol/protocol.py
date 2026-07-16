@@ -1,42 +1,98 @@
-"""Minimal typed input envelope for one isolated connector action."""
+"""Validated protocol-version-1 input envelope for an isolated action."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from datetime import datetime
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
-from connector_protocol.manifest import Capability
+from pydantic import UUID4, AwareDatetime, Field, field_validator
+
+from connector_protocol.manifest import (
+    MAX_ORIGINS,
+    AttributeType,
+    Capability,
+    FrozenWireModel,
+    require_unique,
+    validate_https_origin,
+    validate_utc,
+)
+
+PROTOCOL_VERSION = 1
+MAX_WALL_SECONDS = 3_600
+MAX_RESPONSE_BYTES = 67_108_864
+MAX_ATTRIBUTES = 64
+_CONNECTOR_RELEASE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@"
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
-@dataclass(frozen=True, slots=True)
-class SealedAttribute:
-    """One opaque attribute released for this action only."""
+class SealedAttribute(FrozenWireModel):
+    """One opaque attribute sealed to a one-time action key."""
 
-    attribute_type: str
-    ciphertext: str
-
-
-@dataclass(frozen=True, slots=True)
-class ActionBudget:
-    """Bounds supplied to runtime enforcement layers."""
-
-    wall_seconds: int
-    response_bytes: int
+    attribute_type: AttributeType
+    ciphertext: Annotated[str, Field(min_length=1, max_length=1_048_576)]
 
 
-@dataclass(frozen=True, slots=True)
-class ActionEnvelope:
-    """Short-lived declarative input for one connector attempt."""
+class ActionBudget(FrozenWireModel):
+    """Positive hard bounds supplied to separate runtime enforcement."""
 
-    protocol_version: int
-    action_id: str
-    intent_id: str
-    attempt_id: str
-    fence: int
-    authorization_epoch: int
+    wall_seconds: Annotated[int, Field(gt=0, le=MAX_WALL_SECONDS)]
+    response_bytes: Annotated[int, Field(gt=0, le=MAX_RESPONSE_BYTES)]
+
+
+class ActionEnvelope(FrozenWireModel):
+    """Short-lived declarative input; validation does not authorize dispatch."""
+
+    protocol_version: Literal[1]
+    action_id: UUID4
+    intent_id: UUID4
+    attempt_id: UUID4
+    fence: Annotated[int, Field(ge=0)]
+    authorization_epoch: Annotated[int, Field(ge=0)]
     capability: Capability
-    connector_release: str
-    profile_ref: str
-    attributes: tuple[SealedAttribute, ...]
-    allowed_origins: tuple[str, ...]
-    deadline_utc: str
+    connector_release: Annotated[
+        str, Field(min_length=7, max_length=193, pattern=_CONNECTOR_RELEASE.pattern)
+    ]
+    profile_ref: UUID4
+    attributes: Annotated[tuple[SealedAttribute, ...], Field(max_length=MAX_ATTRIBUTES)]
+    allowed_origins: Annotated[tuple[str, ...], Field(min_length=1, max_length=MAX_ORIGINS)]
+    deadline_utc: AwareDatetime
+    attempt: Annotated[int, Field(ge=0)]
     budget: ActionBudget
+
+    @field_validator("action_id", "intent_id", "attempt_id", "profile_ref")
+    @classmethod
+    def ids_are_rfc4122(cls, value: UUID) -> UUID:
+        if value.variant != UUID("00000000-0000-4000-8000-000000000000").variant:
+            raise ValueError("opaque IDs must use the RFC 4122 UUID variant")
+        return value
+
+    @field_validator("connector_release")
+    @classmethod
+    def release_parts_are_individually_valid(cls, value: str) -> str:
+        connector_id, release = value.split("@", 1)
+        if not connector_id or not release:
+            raise ValueError("connector_release must contain connector ID and version")
+        return value
+
+    @field_validator("attributes")
+    @classmethod
+    def attributes_are_unique(
+        cls, value: tuple[SealedAttribute, ...]
+    ) -> tuple[SealedAttribute, ...]:
+        return require_unique(value, "attributes")
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def origins_are_exact_and_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        validated = tuple(validate_https_origin(origin) for origin in value)
+        return require_unique(validated, "allowed_origins")
+
+    @field_validator("deadline_utc")
+    @classmethod
+    def deadline_is_utc(cls, value: datetime, info: Any) -> datetime:
+        return validate_utc(value, info.field_name)
