@@ -43,7 +43,7 @@ Documentation describing a future component is not implementation evidence for t
 | Full traceability validator | GOV-001 | `NOT_STARTED` | — | consume accepted threat catalog without promoting planned controls |
 | SQLite and migration baseline | DB-001 | `COMPLETE` | `4b8e154`, `da7f406`; fail-closed physical-file/WAL/FULL/FK/timeout policy and Alembic round trips independently reproduced | locking/backup/filesystem qualification remain later packages |
 | Shared contracts | CT-001 | `COMPLETE` | `da973f1`, `cbdd9de`, `d788d49`; strict core primitives, versioned manifest/action/result schemas, schema snapshots and 484 focused adversarial tests; final independent review found zero P0/P1 | preserve connector-fact provenance at ingestion; add Pydantic min/latest compatibility CI before public SDK release |
-| Synthetic corpus and deterministic simulator | SIM-001 | `COMPLETE` | `simulator/`, `tests/simulator/`; canonical reserved-domain corpus/scenario goldens, typed clock/web/mail protocol and 40 focused tests | independently reproduce dual-Python gates; NET-001 remains separate |
+| Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6`; canonical reserved-domain corpus/scenario goldens, typed clock/web/mail protocol and 40 focused tests are integrated | independent adversarial acceptance is pending; NET-001 remains separate |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
