@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from io import StringIO
-from uuid import UUID
+from typing import TextIO, cast
 
 import pytest
 
@@ -19,15 +19,13 @@ from mycogni.application.diagnostics import (
     ActionCode,
     DiagnosticComponent,
     DiagnosticEvent,
+    DiagnosticJobId,
     DiagnosticLevel,
     DiagnosticResultCode,
     EventId,
     FieldName,
     classify_exception,
 )
-from mycogni.domain import OpaqueId
-
-ACTION_ID_TEXT = "2cb84782-ad9f-47ab-9fa1-7487ad1ff40c"
 
 
 def _exception_event(exception: BaseException) -> DiagnosticEvent:
@@ -40,7 +38,7 @@ def _exception_event(exception: BaseException) -> DiagnosticEvent:
             FieldName.ACTION: ActionCode.EXECUTE,
             FieldName.RESULT_CODE: DiagnosticResultCode.FAILED,
             FieldName.ERROR_CATEGORY: classify_exception(exception),
-            FieldName.JOB_ID: OpaqueId(UUID(ACTION_ID_TEXT)),
+            FieldName.JOB_ID: DiagnosticJobId.new(),
         },
     )
 
@@ -64,12 +62,18 @@ def _synthetic_canaries() -> tuple[str, ...]:
 def test_json_rendering_is_deterministic_and_contains_only_catalog_fields() -> None:
     event = _exception_event(RuntimeError("synthetic message must not be rendered"))
     rendered = render_event_json(event)
-    assert rendered == (
-        '{"action":"execute","component":"worker","error_category":"unexpected",'
-        '"event_id":"exception_classified","job_id":"2cb84782-ad9f-47ab-9fa1-7487ad1ff40c",'
-        '"level":"error","result_code":"failed","time":"2030-01-01T00:00:00.123456Z"}'
-    )
-    assert json.loads(rendered)["error_category"] == "unexpected"
+    assert render_event_json(event) == rendered
+    parsed = json.loads(rendered)
+    assert parsed == {
+        "action": "execute",
+        "component": "worker",
+        "error_category": "unexpected",
+        "event_id": "exception_classified",
+        "job_id": str(event.fields[FieldName.JOB_ID]),
+        "level": "error",
+        "result_code": "failed",
+        "time": "2030-01-01T00:00:00.123456Z",
+    }
     assert "synthetic message" not in rendered
 
 
@@ -89,6 +93,22 @@ def test_sink_rejects_untyped_input_without_fallback_stringification() -> None:
     with pytest.raises(TypeError, match="only DiagnosticEvent"):
         LocalJsonSink(stream).emit("unsafe raw event")  # type: ignore[arg-type]
     assert stream.getvalue() == ""
+
+
+class _ShortWriter:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def write(self, text: str) -> int:
+        self.value += text[:-1]
+        return len(text) - 1
+
+
+def test_sink_raises_when_stream_reports_a_short_write() -> None:
+    stream = _ShortWriter()
+    sink = LocalJsonSink(cast(TextIO, stream))
+    with pytest.raises(OSError, match="complete event"):
+        sink.emit(_exception_event(RuntimeError("synthetic message")))
 
 
 def test_all_unsafe_automatic_capture_and_export_defaults_are_false() -> None:

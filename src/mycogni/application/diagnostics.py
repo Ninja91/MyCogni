@@ -7,18 +7,64 @@ tracebacks. Validation is a representation guard, not a PII classifier.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Protocol
-
-from mycogni.domain import OpaqueId
+from typing import Protocol, Self
+from uuid import UUID, uuid4
 
 MAX_DURATION_MS = 86_400_000
 MAX_RETRY_NUMBER = 10_000
 MAX_COUNT = 1_000_000
+_CORRELATION_FACTORY_TOKEN = object()
+
+
+class _DiagnosticCorrelationId:
+    """Factory-only base for purpose-specific local diagnostic correlation."""
+
+    __slots__ = ("__value",)
+    __value: UUID
+
+    def __init__(self, token: object, value: UUID) -> None:
+        if token is not _CORRELATION_FACTORY_TOKEN or type(value) is not UUID:
+            raise TypeError("diagnostic correlation IDs must be created with new()")
+        object.__setattr__(self, "_DiagnosticCorrelationId__value", value)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        del name, value
+        raise AttributeError("diagnostic correlation IDs are immutable")
+
+    @classmethod
+    def new(cls) -> Self:
+        """Create a fresh local-only correlation with the operating-system RNG."""
+        return cls(_CORRELATION_FACTORY_TOKEN, uuid4())
+
+    def __str__(self) -> str:
+        return str(self.__value)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}([OPAQUE])"
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is type(self) and str(other) == str(self)
+
+    def __hash__(self) -> int:
+        return hash((type(self), self.__value))
+
+
+class DiagnosticJobId(_DiagnosticCorrelationId):
+    """Correlation for one local diagnostic job view only."""
+
+
+class DiagnosticActionId(_DiagnosticCorrelationId):
+    """Correlation for one local diagnostic external-action view only."""
+
+
+class DiagnosticTraceId(_DiagnosticCorrelationId):
+    """Correlation for one local diagnostic trace view only."""
 
 
 class DiagnosticLevel(StrEnum):
@@ -143,7 +189,9 @@ class ConnectorVersionCode(StrEnum):
 
 type DiagnosticValue = (
     int
-    | OpaqueId
+    | DiagnosticJobId
+    | DiagnosticActionId
+    | DiagnosticTraceId
     | ErrorCategory
     | ActionCode
     | DiagnosticResultCode
@@ -153,67 +201,266 @@ type DiagnosticValue = (
 
 
 @dataclass(frozen=True, slots=True)
+class EventCombination:
+    """One allowed component/action/result/level combination."""
+
+    component: DiagnosticComponent
+    action: ActionCode
+    result: DiagnosticResultCode
+    level: DiagnosticLevel
+
+
+@dataclass(frozen=True, slots=True)
 class EventSpec:
-    """Required and optional fields for one immutable event identity."""
+    """Exact field and enum-combination contract for one event identity."""
 
     required_fields: frozenset[FieldName]
-    optional_fields: frozenset[FieldName] = frozenset()
+    optional_fields: frozenset[FieldName]
+    combinations: frozenset[EventCombination]
+    connector_releases: frozenset[tuple[ConnectorCode, ConnectorVersionCode]] = frozenset()
+    exception_results: Mapping[ErrorCategory, DiagnosticResultCode] | None = None
 
     @property
     def allowed_fields(self) -> frozenset[FieldName]:
         return self.required_fields | self.optional_fields
 
 
+def _combinations(
+    components: frozenset[DiagnosticComponent],
+    rules: Mapping[ActionCode, Mapping[DiagnosticResultCode, frozenset[DiagnosticLevel]]],
+) -> frozenset[EventCombination]:
+    return frozenset(
+        EventCombination(component, action, result, level)
+        for component in components
+        for action, results in rules.items()
+        for result, levels in results.items()
+        for level in levels
+    )
+
+
+_INFO = frozenset({DiagnosticLevel.INFO})
+_WARN = frozenset({DiagnosticLevel.WARNING})
+_ERROR = frozenset({DiagnosticLevel.ERROR})
+_ERROR_CRITICAL = frozenset({DiagnosticLevel.ERROR, DiagnosticLevel.CRITICAL})
+_DEBUG_INFO = frozenset({DiagnosticLevel.DEBUG, DiagnosticLevel.INFO})
+_ACTION_RESULT_FIELDS = frozenset({FieldName.ACTION, FieldName.RESULT_CODE})
+_CORRELATION_FIELDS = frozenset({FieldName.TRACE_ID})
+_SYNTHETIC_RELEASES = frozenset(
+    {(ConnectorCode.SYNTHETIC_PEOPLE_SEARCH, ConnectorVersionCode.SYNTHETIC_0_1_0)}
+)
+
 EVENT_CATALOG: Mapping[EventId, EventSpec] = MappingProxyType(
     {
-        EventId.SERVICE_LIFECYCLE: EventSpec(frozenset({FieldName.ACTION, FieldName.RESULT_CODE})),
+        EventId.SERVICE_LIFECYCLE: EventSpec(
+            _ACTION_RESULT_FIELDS,
+            frozenset(),
+            _combinations(
+                frozenset(
+                    {
+                        DiagnosticComponent.API,
+                        DiagnosticComponent.WORKER,
+                        DiagnosticComponent.SCHEDULER,
+                    }
+                ),
+                {
+                    ActionCode.START: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.FAILED: _ERROR_CRITICAL,
+                    },
+                    ActionCode.STOP: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.FAILED: _ERROR_CRITICAL,
+                    },
+                },
+            ),
+        ),
         EventId.JOB_TRANSITION: EventSpec(
-            frozenset({FieldName.JOB_ID, FieldName.ACTION, FieldName.RESULT_CODE}),
+            _ACTION_RESULT_FIELDS | {FieldName.JOB_ID},
             frozenset({FieldName.DURATION_MS, FieldName.RETRY_NUMBER, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset({DiagnosticComponent.WORKER, DiagnosticComponent.SCHEDULER}),
+                {
+                    ActionCode.LEASE: {
+                        DiagnosticResultCode.ACCEPTED: _DEBUG_INFO,
+                        DiagnosticResultCode.DENIED: _WARN,
+                        DiagnosticResultCode.CONFLICT: _WARN,
+                        DiagnosticResultCode.STALE: _WARN,
+                    },
+                    ActionCode.EXECUTE: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.RETRY: _WARN,
+                        DiagnosticResultCode.TIMEOUT: _WARN,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                    },
+                },
+            ),
         ),
         EventId.CONNECTOR_ATTEMPT: EventSpec(
-            frozenset(
-                {
-                    FieldName.ACTION_ID,
-                    FieldName.CONNECTOR_ID,
-                    FieldName.CONNECTOR_VERSION,
-                    FieldName.ACTION,
-                    FieldName.RESULT_CODE,
-                }
-            ),
+            _ACTION_RESULT_FIELDS
+            | {
+                FieldName.ACTION_ID,
+                FieldName.CONNECTOR_ID,
+                FieldName.CONNECTOR_VERSION,
+            },
             frozenset({FieldName.DURATION_MS, FieldName.RETRY_NUMBER, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset({DiagnosticComponent.CONNECTOR_BOUNDARY}),
+                {
+                    ActionCode.OBSERVE: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INCONCLUSIVE: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.TIMEOUT: _WARN,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                    },
+                    ActionCode.PREPARE: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INVALID: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                    },
+                    ActionCode.SUBMIT: {
+                        DiagnosticResultCode.ACCEPTED: _INFO,
+                        DiagnosticResultCode.DENIED: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.TIMEOUT: _WARN,
+                        DiagnosticResultCode.INCONCLUSIVE: _WARN,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                        DiagnosticResultCode.REVOKED: _WARN,
+                        DiagnosticResultCode.STALE: _WARN,
+                    },
+                    ActionCode.POLL: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INCONCLUSIVE: _WARN,
+                        DiagnosticResultCode.RETRY: _INFO,
+                        DiagnosticResultCode.TIMEOUT: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                    },
+                    ActionCode.VERIFY: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INCONCLUSIVE: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.TIMEOUT: _WARN,
+                        DiagnosticResultCode.CANCELLED: _INFO,
+                    },
+                },
+            ),
+            connector_releases=_SYNTHETIC_RELEASES,
         ),
         EventId.EGRESS_DECISION: EventSpec(
-            frozenset(
-                {
-                    FieldName.ACTION_ID,
-                    FieldName.CONNECTOR_ID,
-                    FieldName.ACTION,
-                    FieldName.RESULT_CODE,
-                }
-            ),
+            _ACTION_RESULT_FIELDS
+            | {FieldName.ACTION_ID, FieldName.CONNECTOR_ID, FieldName.CONNECTOR_VERSION},
             frozenset({FieldName.DURATION_MS, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset({DiagnosticComponent.EGRESS_GATEWAY}),
+                {
+                    ActionCode.DIAL: {
+                        DiagnosticResultCode.ACCEPTED: _INFO,
+                        DiagnosticResultCode.DENIED: _WARN,
+                        DiagnosticResultCode.STALE: _WARN,
+                        DiagnosticResultCode.REVOKED: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                        DiagnosticResultCode.TIMEOUT: _ERROR,
+                    }
+                },
+            ),
+            connector_releases=_SYNTHETIC_RELEASES,
         ),
         EventId.EVIDENCE_OPERATION: EventSpec(
-            frozenset({FieldName.ACTION_ID, FieldName.ACTION, FieldName.RESULT_CODE}),
+            _ACTION_RESULT_FIELDS | {FieldName.ACTION_ID},
             frozenset({FieldName.COUNT, FieldName.DURATION_MS, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset({DiagnosticComponent.PERSISTENCE}),
+                {
+                    action: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INVALID: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                    }
+                    for action in (ActionCode.WRITE, ActionCode.READ, ActionCode.DELETE)
+                },
+            ),
         ),
         EventId.BACKUP_OPERATION: EventSpec(
-            frozenset({FieldName.ACTION, FieldName.RESULT_CODE}),
+            _ACTION_RESULT_FIELDS,
             frozenset({FieldName.COUNT, FieldName.DURATION_MS, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset({DiagnosticComponent.BACKUP}),
+                {
+                    action: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.INVALID: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                    }
+                    for action in (ActionCode.CREATE, ActionCode.RESTORE, ActionCode.CHECK)
+                },
+            ),
         ),
         EventId.AUTH_DECISION: EventSpec(
-            frozenset({FieldName.ACTION, FieldName.RESULT_CODE}),
-            frozenset({FieldName.TRACE_ID}),
+            _ACTION_RESULT_FIELDS,
+            _CORRELATION_FIELDS,
+            _combinations(
+                frozenset({DiagnosticComponent.AUTH}),
+                {
+                    ActionCode.AUTHENTICATE: {
+                        DiagnosticResultCode.ACCEPTED: _INFO,
+                        DiagnosticResultCode.DENIED: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                    },
+                    ActionCode.AUTHORIZE: {
+                        DiagnosticResultCode.ACCEPTED: _INFO,
+                        DiagnosticResultCode.DENIED: _WARN,
+                        DiagnosticResultCode.REVOKED: _WARN,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                    },
+                    ActionCode.ROTATE: {
+                        DiagnosticResultCode.SUCCEEDED: _INFO,
+                        DiagnosticResultCode.FAILED: _ERROR,
+                    },
+                },
+            ),
         ),
         EventId.EXCEPTION_CLASSIFIED: EventSpec(
-            frozenset({FieldName.ACTION, FieldName.RESULT_CODE, FieldName.ERROR_CATEGORY}),
+            _ACTION_RESULT_FIELDS | {FieldName.ERROR_CATEGORY},
             frozenset({FieldName.JOB_ID, FieldName.ACTION_ID, FieldName.TRACE_ID}),
+            _combinations(
+                frozenset(
+                    {
+                        DiagnosticComponent.API,
+                        DiagnosticComponent.WORKER,
+                        DiagnosticComponent.SCHEDULER,
+                        DiagnosticComponent.CONNECTOR_BOUNDARY,
+                        DiagnosticComponent.EGRESS_GATEWAY,
+                        DiagnosticComponent.PERSISTENCE,
+                        DiagnosticComponent.BACKUP,
+                        DiagnosticComponent.AUTH,
+                    }
+                ),
+                {
+                    ActionCode.EXECUTE: {
+                        DiagnosticResultCode.FAILED: _ERROR_CRITICAL,
+                        DiagnosticResultCode.TIMEOUT: _ERROR,
+                        DiagnosticResultCode.CANCELLED: _WARN,
+                    }
+                },
+            ),
+            exception_results=MappingProxyType(
+                {
+                    ErrorCategory.TIMEOUT: DiagnosticResultCode.TIMEOUT,
+                    ErrorCategory.CANCELLED: DiagnosticResultCode.CANCELLED,
+                    ErrorCategory.PERMISSION: DiagnosticResultCode.FAILED,
+                    ErrorCategory.VALIDATION: DiagnosticResultCode.FAILED,
+                    ErrorCategory.CONFLICT: DiagnosticResultCode.FAILED,
+                    ErrorCategory.RESOURCE_EXHAUSTED: DiagnosticResultCode.FAILED,
+                    ErrorCategory.IO: DiagnosticResultCode.FAILED,
+                    ErrorCategory.UNEXPECTED: DiagnosticResultCode.FAILED,
+                }
+            ),
         ),
     }
 )
-
-_OPAQUE_ID_FIELDS = frozenset({FieldName.JOB_ID, FieldName.ACTION_ID, FieldName.TRACE_ID})
 
 
 def _validate_bounded_int(value: DiagnosticValue, field_name: FieldName) -> None:
@@ -228,33 +475,32 @@ def _validate_bounded_int(value: DiagnosticValue, field_name: FieldName) -> None
         raise ValueError(f"diagnostic field {field_name.value} is outside its safe bound")
 
 
+def _require_exact_type(value: object, expected: type[object], field_name: FieldName) -> None:
+    if type(value) is not expected:
+        raise TypeError(f"diagnostic field {field_name.value} must be a {expected.__name__}")
+
+
 def _validate_field_value(field_name: FieldName, value: DiagnosticValue) -> None:
-    if field_name in _OPAQUE_ID_FIELDS:
-        if type(value) is not OpaqueId:
-            raise TypeError(f"diagnostic field {field_name.value} must be an OpaqueId")
+    expected_id_types: dict[FieldName, type[object]] = {
+        FieldName.JOB_ID: DiagnosticJobId,
+        FieldName.ACTION_ID: DiagnosticActionId,
+        FieldName.TRACE_ID: DiagnosticTraceId,
+    }
+    if field_name in expected_id_types:
+        _require_exact_type(value, expected_id_types[field_name], field_name)
         return
-    if field_name is FieldName.ACTION:
-        if type(value) is not ActionCode:
-            raise TypeError("diagnostic field action must be an ActionCode")
-        return
-    if field_name is FieldName.RESULT_CODE:
-        if type(value) is not DiagnosticResultCode:
-            raise TypeError("diagnostic field result_code must be a DiagnosticResultCode")
-        return
-    if field_name is FieldName.CONNECTOR_ID:
-        if type(value) is not ConnectorCode:
-            raise TypeError("diagnostic field connector_id must be a ConnectorCode")
-        return
-    if field_name is FieldName.CONNECTOR_VERSION:
-        if type(value) is not ConnectorVersionCode:
-            raise TypeError("diagnostic field connector_version must be a ConnectorVersionCode")
+    expected_enum_types: dict[FieldName, type[object]] = {
+        FieldName.ACTION: ActionCode,
+        FieldName.RESULT_CODE: DiagnosticResultCode,
+        FieldName.CONNECTOR_ID: ConnectorCode,
+        FieldName.CONNECTOR_VERSION: ConnectorVersionCode,
+        FieldName.ERROR_CATEGORY: ErrorCategory,
+    }
+    if field_name in expected_enum_types:
+        _require_exact_type(value, expected_enum_types[field_name], field_name)
         return
     if field_name in {FieldName.DURATION_MS, FieldName.RETRY_NUMBER, FieldName.COUNT}:
         _validate_bounded_int(value, field_name)
-        return
-    if field_name is FieldName.ERROR_CATEGORY:
-        if type(value) is not ErrorCategory:
-            raise TypeError("diagnostic field error_category must be an ErrorCategory")
         return
     raise ValueError("diagnostic field is not implemented by protocol version 1")
 
@@ -292,17 +538,39 @@ class DiagnosticEvent:
 
         spec = EVENT_CATALOG[self.event_id]
         present = frozenset(normalized)
-        missing = spec.required_fields - present
-        unknown = present - spec.allowed_fields
-        if missing:
+        if spec.required_fields - present:
             raise ValueError("diagnostic event is missing required fields")
-        if unknown:
+        if present - spec.allowed_fields:
             raise ValueError("diagnostic event contains fields outside its catalog entry")
+
+        action = normalized[FieldName.ACTION]
+        result = normalized[FieldName.RESULT_CODE]
+        assert type(action) is ActionCode
+        assert type(result) is DiagnosticResultCode
+        combination = EventCombination(self.component, action, result, self.level)
+        if combination not in spec.combinations:
+            raise ValueError("diagnostic event has an impossible enum combination")
+
+        if spec.connector_releases:
+            connector = normalized[FieldName.CONNECTOR_ID]
+            version = normalized[FieldName.CONNECTOR_VERSION]
+            assert type(connector) is ConnectorCode
+            assert type(version) is ConnectorVersionCode
+            if (connector, version) not in spec.connector_releases:
+                raise ValueError("diagnostic event has an unreviewed connector release pair")
+
+        if spec.exception_results is not None:
+            category = normalized[FieldName.ERROR_CATEGORY]
+            assert type(category) is ErrorCategory
+            if spec.exception_results[category] is not result:
+                raise ValueError("diagnostic exception category and result are inconsistent")
         object.__setattr__(self, "fields", MappingProxyType(normalized))
 
 
 def classify_exception(exception: BaseException) -> ErrorCategory:
     """Return only a finite category; never inspect or retain exception text."""
+    if isinstance(exception, asyncio.CancelledError):
+        return ErrorCategory.CANCELLED
     if isinstance(exception, TimeoutError):
         return ErrorCategory.TIMEOUT
     if isinstance(exception, PermissionError):

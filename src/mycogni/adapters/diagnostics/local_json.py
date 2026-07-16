@@ -7,14 +7,20 @@ from datetime import UTC
 from enum import StrEnum
 from typing import TextIO, cast
 
-from mycogni.application.diagnostics import DiagnosticEvent
-from mycogni.domain import OpaqueId
+from mycogni.application.diagnostics import (
+    DiagnosticActionId,
+    DiagnosticEvent,
+    DiagnosticJobId,
+    DiagnosticTraceId,
+)
 
 MAX_JSON_LINE_BYTES = 4_096
 
 
-def _wire_value(value: str | int | OpaqueId | StrEnum) -> str | int:
-    if type(value) is OpaqueId:
+def _wire_value(
+    value: str | int | DiagnosticJobId | DiagnosticActionId | DiagnosticTraceId | StrEnum,
+) -> str | int:
+    if type(value) in {DiagnosticJobId, DiagnosticActionId, DiagnosticTraceId}:
         return str(value)
     if isinstance(value, StrEnum):
         return value.value
@@ -56,4 +62,7 @@ class LocalJsonSink:
 
     def emit(self, event: DiagnosticEvent) -> None:
         """Write one canonical JSON line without flushing or remote export."""
-        self._stream.write(render_event_json(event) + "\n")
+        line = render_event_json(event) + "\n"
+        written = self._stream.write(line)
+        if written != len(line):
+            raise OSError("local diagnostic stream did not accept the complete event")

@@ -20,8 +20,9 @@ connector_version, duration_ms, retry_number, job_id, trace_id
 ```
 
 The log API does not accept arbitrary domain objects. Its action/result values and exception
-categories are finite, event fields are catalog-bound, and correlations require opaque UUIDv4
-IDs. Sensitive values implement a type that renders as `[REDACTED:<category>]`, but even redacted
+categories are finite, event fields and enum combinations are catalog-bound, and job/action/trace
+correlations require distinct factory-only diagnostic UUIDv4 types. Sensitive values implement a
+type that renders as `[REDACTED:<category>]`, but even redacted
 domain values are not accepted as diagnostic fields. CI seeds synthetic canary names, emails,
 phones, URLs, headers, HTML, mail, proxy/browser content, and secrets and fails if they appear in
 the local JSON sink. Uvicorn access/default logs and future proxy/browser/mail automatic logs are

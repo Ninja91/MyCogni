@@ -1,19 +1,19 @@
-"""Static TEL-001 dependency, field, and no-export assertions."""
+"""Static TEL-001 dependency-closure, field, and no-export assertions."""
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
 from pathlib import Path
 
 from mycogni.application.diagnostics import ConnectorCode, ConnectorVersionCode, FieldName
 
 ROOT = Path(__file__).parents[2]
-DIAGNOSTIC_SOURCES = (
-    ROOT / "src/mycogni/application/diagnostics.py",
-    ROOT / "src/mycogni/adapters/diagnostics/local_json.py",
-    ROOT / "src/mycogni/adapters/diagnostics/policy.py",
-)
+SOURCE_ROOT = ROOT / "src"
+ROOT_MODULES = {
+    "mycogni.application.diagnostics",
+    "mycogni.adapters.diagnostics",
+}
+DIAGNOSTIC_PACKAGE_ROOT = SOURCE_ROOT / "mycogni/adapters/diagnostics"
 FORBIDDEN_IMPORTS = {
     "httpx",
     "logging",
@@ -44,19 +44,76 @@ FORBIDDEN_FIELD_PARTS = {
 }
 
 
-def _imports(path: Path) -> Iterator[str]:
+def _module_path(module: str) -> Path | None:
+    relative = Path(*module.split("."))
+    module_file = SOURCE_ROOT / relative.with_suffix(".py")
+    if module_file.is_file():
+        return module_file
+    package_file = SOURCE_ROOT / relative / "__init__.py"
+    return package_file if package_file.is_file() else None
+
+
+def _local_imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module]
+        for name in names:
+            if not name.startswith("mycogni"):
+                continue
+            parts = name.split(".")
+            imports.update(".".join(parts[:index]) for index in range(1, len(parts) + 1))
+    return imports
+
+
+def _diagnostic_dependency_closure() -> dict[str, Path]:
+    package_modules = {
+        ".".join(path.relative_to(SOURCE_ROOT).with_suffix("").parts).removesuffix(".__init__")
+        for path in DIAGNOSTIC_PACKAGE_ROOT.rglob("*.py")
+    }
+    pending = list(ROOT_MODULES | package_modules)
+    closure: dict[str, Path] = {}
+    while pending:
+        module = pending.pop()
+        if module in closure:
+            continue
+        path = _module_path(module)
+        assert path is not None, f"cannot resolve local module {module}"
+        closure[module] = path
+        pending.extend(_local_imports(path) - closure.keys())
+    return closure
+
+
+def _external_import_roots(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    roots: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            yield from (alias.name.partition(".")[0] for alias in node.names)
+            roots.update(alias.name.partition(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
-            yield (node.module or "").partition(".")[0]
+            roots.add((node.module or "").partition(".")[0])
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in {"__import__", "eval", "exec"}, (
+                f"{path} uses dynamic execution/import"
+            )
+    return roots - {"mycogni"}
 
 
-def test_diagnostic_modules_have_no_network_export_or_framework_logging_dependency() -> None:
-    for path in DIAGNOSTIC_SOURCES:
-        imported = set(_imports(path))
-        assert not imported & FORBIDDEN_IMPORTS, f"{path}: {imported & FORBIDDEN_IMPORTS}"
+def test_complete_diagnostic_dependency_closure_has_no_export_or_logging_dependency() -> None:
+    closure = _diagnostic_dependency_closure()
+    assert {
+        "mycogni.application.diagnostics",
+        "mycogni.adapters.diagnostics",
+        "mycogni.adapters.diagnostics.local_json",
+        "mycogni.adapters.diagnostics.policy",
+    } <= set(closure)
+    for module, path in closure.items():
+        imported = _external_import_roots(path)
+        assert not imported & FORBIDDEN_IMPORTS, f"{module}: {imported & FORBIDDEN_IMPORTS}"
 
 
 def test_field_catalog_cannot_represent_raw_capture_surfaces() -> None:
