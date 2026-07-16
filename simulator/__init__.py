@@ -4,7 +4,7 @@ This package deliberately has no dependency on the trusted ``mycogni`` package.
 """
 
 from simulator.clock import ControllableClock
-from simulator.corpus import SyntheticCorpus, SyntheticIdentity, build_corpus
+from simulator.corpus import CorpusSeedID, SyntheticCorpus, build_corpus
 from simulator.engine import ScenarioEngine, default_scenarios
 from simulator.mail import InMemoryMailCapture
 from simulator.protocol import (
@@ -14,23 +14,32 @@ from simulator.protocol import (
     ScenarioState,
     SimulatorProtocolError,
 )
-from simulator.web import LocalWebSimulator, WebRequest, WebResponse, create_loopback_server
+from simulator.web import (
+    LocalWebSimulator,
+    PreparedWebResponse,
+    WebRequest,
+    WebResponse,
+    create_loopback_server,
+    deliver_prepared,
+)
 
 __all__ = [
     "ControllableClock",
+    "CorpusSeedID",
     "InMemoryMailCapture",
     "LocalWebSimulator",
     "MailFixture",
+    "PreparedWebResponse",
     "ScenarioEngine",
     "ScenarioName",
     "ScenarioResult",
     "ScenarioState",
     "SimulatorProtocolError",
     "SyntheticCorpus",
-    "SyntheticIdentity",
     "WebRequest",
     "WebResponse",
     "build_corpus",
     "create_loopback_server",
     "default_scenarios",
+    "deliver_prepared",
 ]

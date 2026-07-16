@@ -10,19 +10,28 @@ database, vault, policy, authorization, or execution authority.
 
 ## What is implemented
 
-- a seeded corpus of clearly fictional identities using only reserved `.test` mailboxes;
+- a closed corpus generated only from reviewed integer seed IDs and fictional lexicons, using
+  strict reserved `.test` mailboxes;
 - canonical JSON and SHA-256 hashes for the corpus and scenario catalog;
 - a caller-controlled UTC clock with no wall-clock or random fallback;
 - finite scripted scenarios for happy, not found, ambiguous, CAPTCHA, MFA, rate limit,
   timeout/unknown, schema drift, partial, denied, and resurfacing behavior;
 - a pure typed web boundary and optional standard-library server fixed to numeric
-  `127.0.0.1`, with a bind path that performs no hostname lookup;
-- an in-memory mail capture with no SMTP/IMAP client or delivery method;
+  `127.0.0.1`, exact loopback Host/Origin policy, deterministic headers, bounded concurrency,
+  read timeouts, and a bind path that performs no hostname lookup;
+- a synchronized in-memory mail capture with capacity reservations and no SMTP/IMAP client or
+  delivery method;
 - hard caps on sessions, requests, request/response bodies, evidence, and mail; and
 - source guards plus golden, property, negative, and mutation tests.
 
+The engine uses synchronized per-session transition reservations. The web adapter validates and
+renders the bounded response and reserves any mail capacity before returning a prepared response;
+state and mail commit only after the local writer reports success. Rendering, capacity, protocol,
+or writer failure rolls reservations back so an identical request can be retried safely.
+
 The protocol fails closed on undeclared scenarios, sessions, states, transitions, methods,
-routes, path traversal, authority-form paths, invalid delays, and exceeded resource budgets.
+routes, path traversal, authority-form paths, invalid/missing/duplicate Host, Origin or content
+length, transfer encoding, invalid UTF-8/JSON, invalid delays, and exceeded resource budgets.
 The only way time advances is an explicit `ControllableClock.advance(seconds=...)` call.
 
 ## Developer use
@@ -48,11 +57,19 @@ clock = ControllableClock()
 mail = InMemoryMailCapture()
 fixture = LocalWebSimulator(ScenarioEngine(clock=clock), mail)
 result = fixture.handle(
-    WebRequest("GET", "/v1/scenarios/happy/sessions/example-session/next/start")
+    WebRequest(
+        "GET",
+        "/v1/scenarios/happy/sessions/example-session/next/start",
+        (
+            ("Host", "127.0.0.1"),
+            ("Origin", "http://127.0.0.1"),
+            ("Content-Length", "0"),
+        ),
+    )
 )
 ```
 
-Golden files are `fixtures/corpus.v1.json` and `fixtures/scenarios.v1.json`. Changing a seed,
+Golden files are `fixtures/corpus.v2.json` and `fixtures/scenarios.v1.json`. Changing a seed ID,
 identity, scenario, transition, response, or delay changes the canonical document/hash and must
 be reviewed as an explicit fixture-contract change.
 
@@ -64,7 +81,8 @@ SMTP delivery, or external network client. Scenario states describe fixture obse
 `simulated_absent` is not `verified_removed` and must never be promoted into product evidence.
 
 Binding to loopback is defense in depth, not network isolation. Python source guards are narrow
-regression checks, not an operating-system sandbox. SIM-001 does not prove DNS, IP, redirect,
+regression checks, not an operating-system sandbox, and deliberate language-level bypass remains
+outside their claim. SIM-001 does not prove DNS, IP, redirect,
 TLS, proxy, alternate-protocol, or malicious-process containment.
 
 ## NET-001 handoff

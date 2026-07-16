@@ -1,21 +1,29 @@
-"""Static fail-closed guards for simulator determinism and network isolation."""
+"""Recursive structural guards for simulator imports and deterministic source."""
 
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
-FORBIDDEN_OUTBOUND_IMPORTS = {
+FORBIDDEN_ESCAPE_IMPORTS = {
+    "asyncio",
+    "builtins",
+    "ctypes",
     "ftplib",
     "http.client",
     "httpx",
     "importlib",
+    "os",
     "requests",
     "smtplib",
     "socket",
+    "ssl",
+    "subprocess",
     "urllib.request",
 }
 FORBIDDEN_NONDETERMINISTIC_IMPORTS = {"random", "secrets", "uuid"}
+FORBIDDEN_DYNAMIC_CALLS = {"__import__", "compile", "eval", "exec"}
 FORBIDDEN_NONDETERMINISTIC_CALLS = {
     "urandom",
     "uuid1",
@@ -40,23 +48,94 @@ def _imports(tree: ast.AST) -> set[str]:
     return imported
 
 
+def _module_name(root: Path, path: Path, package: str) -> str:
+    relative = path.relative_to(root).with_suffix("")
+    parts = relative.parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join((package, *parts)) if parts else package
+
+
+def _resolve_from(module: str, path: Path, node: ast.ImportFrom) -> str:
+    if node.level == 0:
+        return node.module or ""
+    package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    parts = package.split(".")
+    remove = node.level - 1
+    if remove >= len(parts):
+        raise AssertionError(f"{path.name}: relative import escapes simulator package")
+    anchor = parts[: len(parts) - remove]
+    if node.module:
+        anchor.extend(node.module.split("."))
+    return ".".join(anchor)
+
+
+def _module_file(root: Path, package: str, module: str) -> Path | None:
+    if module == package:
+        return root / "__init__.py"
+    prefix = f"{package}."
+    if not module.startswith(prefix):
+        return None
+    relative = Path(*module.removeprefix(prefix).split("."))
+    file_path = (root / relative).with_suffix(".py")
+    if file_path.is_file():
+        return file_path
+    package_path = root / relative / "__init__.py"
+    return package_path if package_path.is_file() else None
+
+
+def assert_structural_import_boundary(path: Path, *, root: Path, package: str) -> None:
+    tree = _tree(path)
+    module = _module_name(root, path, package)
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolve_from(module, path, node)
+            names = [base]
+            for alias in node.names:
+                candidate = f"{base}.{alias.name}"
+                if alias.name != "*" and _module_file(root, package, candidate) is not None:
+                    names.append(candidate)
+        for name in names:
+            top = name.partition(".")[0]
+            if top == package:
+                if _module_file(root, package, name) is None:
+                    raise AssertionError(f"{path.name}: unresolved simulator import: {name}")
+            elif top not in sys.stdlib_module_names:
+                raise AssertionError(f"{path.name}: third-party import denied: {name}")
+
+
 def assert_no_outbound_network_source(path: Path) -> None:
     tree = _tree(path)
     imported = _imports(tree)
     violations = {
         forbidden
-        for forbidden in FORBIDDEN_OUTBOUND_IMPORTS
+        for forbidden in FORBIDDEN_ESCAPE_IMPORTS
         if any(name == forbidden or name.startswith(f"{forbidden}.") for name in imported)
     }
     if violations:
-        raise AssertionError(f"{path.name}: outbound network import denied: {sorted(violations)}")
-    if any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "__import__"
-        for node in ast.walk(tree)
-    ):
-        raise AssertionError(f"{path.name}: dynamic import denied in simulator boundary")
+        raise AssertionError(
+            f"{path.name}: process/network escape import denied: {sorted(violations)}"
+        )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        dynamic_call = isinstance(node.func, ast.Name) and name in FORBIDDEN_DYNAMIC_CALLS
+        process_call = name in {
+            "system",
+            "popen",
+            "create_subprocess_exec",
+            "create_subprocess_shell",
+        }
+        if dynamic_call or process_call:
+            raise AssertionError(f"{path.name}: dynamic/process escape call denied: {name}")
 
 
 def assert_deterministic_source(path: Path) -> None:
@@ -102,3 +181,15 @@ def assert_deterministic_source(path: Path) -> None:
         )
         if wall_clock_call:
             raise AssertionError(f"{path.name}: nondeterministic wall-clock call denied")
+
+
+def assert_simulator_tree(root: Path, *, package: str = "simulator") -> None:
+    paths = sorted(root.rglob("*.py"))
+    if not paths:
+        raise AssertionError("simulator source tree is empty")
+    for path in paths:
+        if path.is_symlink():
+            raise AssertionError(f"{path.name}: simulator source symlink denied")
+        assert_structural_import_boundary(path, root=root, package=package)
+        assert_no_outbound_network_source(path)
+        assert_deterministic_source(path)

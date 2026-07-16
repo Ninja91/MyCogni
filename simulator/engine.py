@@ -5,14 +5,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from hashlib import sha256
+from threading import RLock
 from typing import Any
 
-from simulator.clock import ControllableClock
+from simulator.clock import ControllableClock, canonical_instant
 from simulator.corpus import canonical_json
 from simulator.protocol import (
     MAX_REQUESTS_PER_SESSION,
+    MAX_SCENARIOS,
     MAX_SESSIONS,
+    MAX_TOTAL_SCENARIO_BYTES,
     MailFixture,
+    ReservationError,
     ResourceLimitError,
     ScenarioDefinition,
     ScenarioName,
@@ -195,6 +199,7 @@ def scenario_catalog_payload(
     scenarios: tuple[ScenarioDefinition, ...] | None = None,
 ) -> dict[str, Any]:
     definitions = default_scenarios() if scenarios is None else scenarios
+    _validate_catalog(definitions)
     return {
         "schema": SCENARIO_CATALOG_SCHEMA,
         "scenarios": [
@@ -243,6 +248,41 @@ class _Session:
     transitioned_at_seconds: int
 
 
+@dataclass(frozen=True, slots=True)
+class EnginePlan:
+    token: int
+    session_id: str
+    result: ScenarioResult
+
+
+@dataclass(frozen=True, slots=True)
+class _Reservation:
+    plan: EnginePlan
+    next_session: _Session
+    is_new_session: bool
+
+
+def _validate_catalog(definitions: tuple[ScenarioDefinition, ...]) -> None:
+    if not 1 <= len(definitions) <= MAX_SCENARIOS:
+        raise ResourceLimitError("scenario catalog count is outside the finite cap")
+    names = [definition.name for definition in definitions]
+    if any(type(name) is not ScenarioName for name in names) or len(set(names)) != len(names):
+        raise ValueError("scenario catalog names must be unique reviewed enum values")
+    aggregate_bytes = sum(
+        len(step.body)
+        + len(step.evidence)
+        + (
+            len(step.mail.subject.encode()) + len(step.mail.body.encode())
+            if step.mail is not None
+            else 0
+        )
+        for definition in definitions
+        for step in definition.steps
+    )
+    if aggregate_bytes > MAX_TOTAL_SCENARIO_BYTES:
+        raise ResourceLimitError("scenario catalog aggregate bytes exceed hard cap")
+
+
 class ScenarioEngine:
     def __init__(
         self,
@@ -251,50 +291,81 @@ class ScenarioEngine:
         scenarios: tuple[ScenarioDefinition, ...] | None = None,
     ) -> None:
         definitions = default_scenarios() if scenarios is None else scenarios
+        _validate_catalog(definitions)
         self._scenarios = {definition.name: definition for definition in definitions}
-        if len(self._scenarios) != len(definitions):
-            raise ValueError("scenario names must be unique")
         self._clock = clock
         self._sessions: dict[str, _Session] = {}
+        self._reservations: dict[int, _Reservation] = {}
+        self._reserved_sessions: set[str] = set()
+        self._next_token = 1
+        self._lock = RLock()
 
     @property
     def scenario_names(self) -> tuple[ScenarioName, ...]:
-        return tuple(sorted(self._scenarios, key=lambda item: item.value))
+        with self._lock:
+            return tuple(sorted(self._scenarios, key=lambda item: item.value))
 
     def state(self, session_id: str) -> ScenarioState:
-        session = self._sessions.get(session_id)
-        if session is None:
-            raise UnknownTransitionError("unknown simulator session")
-        return session.state
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise UnknownTransitionError("unknown simulator session")
+            return session.state
 
-    def advance(
+    @property
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+    def prepare(
         self,
         *,
         scenario_name: ScenarioName,
         session_id: str,
         expected_state: ScenarioState,
-    ) -> ScenarioResult:
+    ) -> EnginePlan:
+        with self._lock:
+            return self._prepare_locked(
+                scenario_name=scenario_name,
+                session_id=session_id,
+                expected_state=expected_state,
+            )
+
+    def _prepare_locked(
+        self,
+        *,
+        scenario_name: ScenarioName,
+        session_id: str,
+        expected_state: ScenarioState,
+    ) -> EnginePlan:
         if not SESSION_ID.fullmatch(session_id):
             raise ValueError("session ID is outside the closed fixture grammar")
+        if session_id in self._reserved_sessions:
+            raise ResourceLimitError("session transition is already reserved")
         definition = self._scenarios.get(scenario_name)
         if definition is None:
             raise UnknownScenarioError("unknown simulator scenario")
+        instant = self._clock.now()
+        now_seconds = int(instant.timestamp())
         session = self._sessions.get(session_id)
+        is_new = session is None
         if session is None:
-            if len(self._sessions) >= MAX_SESSIONS:
+            reserved_new = sum(
+                reservation.is_new_session for reservation in self._reservations.values()
+            )
+            if len(self._sessions) + reserved_new >= MAX_SESSIONS:
                 raise ResourceLimitError("simulator session hard cap reached")
             session = _Session(
                 scenario=scenario_name,
                 state=ScenarioState.START,
                 step_index=0,
                 request_count=0,
-                transitioned_at_seconds=int(self._clock.now().timestamp()),
+                transitioned_at_seconds=now_seconds,
             )
-            self._sessions[session_id] = session
         if session.scenario is not scenario_name:
             raise UnknownTransitionError("session is bound to a different scenario")
-        session.request_count += 1
-        if session.request_count > MAX_REQUESTS_PER_SESSION:
+        next_request_count = session.request_count + 1
+        if next_request_count > MAX_REQUESTS_PER_SESSION:
             raise ResourceLimitError("simulator request hard cap reached")
         if session.state is not expected_state:
             raise UnknownTransitionError("expected state does not match scripted state")
@@ -304,18 +375,60 @@ class ScenarioEngine:
         step = definition.steps[session.step_index]
         if step.from_state is not session.state:
             raise UnknownTransitionError("scenario transition is not declared")
-        now_seconds = int(self._clock.now().timestamp())
         if now_seconds - session.transitioned_at_seconds < step.available_after_seconds:
             raise TransitionNotReadyError("scripted transition is not ready")
-        session.state = step.to_state
-        session.step_index += 1
-        session.transitioned_at_seconds = now_seconds
-        return ScenarioResult(
+        result = ScenarioResult(
             scenario=scenario_name,
             state=step.to_state,
             status_code=step.status_code,
             body=step.body,
             evidence=step.evidence,
-            occurred_at=self._clock.canonical_now(),
+            occurred_at=canonical_instant(instant),
             mail=step.mail,
         )
+        token = self._next_token
+        self._next_token += 1
+        plan = EnginePlan(token=token, session_id=session_id, result=result)
+        self._reservations[token] = _Reservation(
+            plan=plan,
+            next_session=_Session(
+                scenario=scenario_name,
+                state=step.to_state,
+                step_index=session.step_index + 1,
+                request_count=next_request_count,
+                transitioned_at_seconds=now_seconds,
+            ),
+            is_new_session=is_new,
+        )
+        self._reserved_sessions.add(session_id)
+        return plan
+
+    def commit(self, plan: EnginePlan) -> None:
+        with self._lock:
+            reservation = self._reservations.pop(plan.token, None)
+            if reservation is None or reservation.plan != plan:
+                raise ReservationError("engine transition reservation is stale")
+            self._reserved_sessions.remove(plan.session_id)
+            self._sessions[plan.session_id] = reservation.next_session
+
+    def rollback(self, plan: EnginePlan) -> None:
+        with self._lock:
+            reservation = self._reservations.pop(plan.token, None)
+            if reservation is None or reservation.plan != plan:
+                raise ReservationError("engine transition reservation is stale")
+            self._reserved_sessions.remove(plan.session_id)
+
+    def advance(
+        self,
+        *,
+        scenario_name: ScenarioName,
+        session_id: str,
+        expected_state: ScenarioState,
+    ) -> ScenarioResult:
+        plan = self.prepare(
+            scenario_name=scenario_name,
+            session_id=session_id,
+            expected_state=expected_state,
+        )
+        self.commit(plan)
+        return plan.result

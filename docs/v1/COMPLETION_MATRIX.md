@@ -43,7 +43,7 @@ Documentation describing a future component is not implementation evidence for t
 | Full traceability validator | GOV-001 | `IN_PROGRESS` | machine registries and adversarial fixtures are under review | remain in progress until independent acceptance |
 | SQLite and migration baseline | DB-001 | `IN_PROGRESS` | `4b8e154`, `da7f406`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Shared contracts | CT-001 | `IN_PROGRESS` | structured acceptance exists, but canonical prerequisites PF-CORE and PF-BOUNDARY are not structurally accepted | complete prerequisite attestations before package completion |
-| Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6`; deterministic synthetic simulator implementation is in adversarial remediation | close concurrency, atomicity, synthetic-data, source-egress and raw-HTTP review findings; NET-001 remains separate |
+| Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6` plus remediation; canonical reserved-domain corpus/scenario goldens, synchronized transactional clock/web/mail protocol and 86 focused tests are integrated | complete independent adversarial re-review; NET-001 remains separate |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
