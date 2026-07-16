@@ -44,7 +44,7 @@ def test_package_has_no_runtime_or_trusted_core_dependency() -> None:
                 )
 
 
-def test_evidence_references_cannot_express_filesystem_paths() -> None:
+def test_evidence_reference_has_no_explicit_filesystem_path_field() -> None:
     evidence_fields = {item.name.lower() for item in fields(EvidenceReference)}
     assert not evidence_fields & FORBIDDEN_EVIDENCE_FIELD_PARTS
     assert all("path" not in field_name for field_name in evidence_fields)

@@ -15,6 +15,10 @@ dependencies = []
 [tool.hatch.build.targets.wheel]
 packages = ["src/connector_protocol"]
 
+[tool.hatch.build.targets.sdist.force-include]
+"../../LICENSE" = "LICENSE"
+"../../NOTICE" = "NOTICE"
+
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]

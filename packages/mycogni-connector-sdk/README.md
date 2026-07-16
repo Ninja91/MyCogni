@@ -9,6 +9,8 @@ The runtime-boundary record documents mandatory deny-by-default properties. It i
 implementation or security boundary. Container/runtime enforcement belongs to later egress and
 runner work packages and must satisfy ADR-0003 and ADR-0008.
 
-The record fields are intentionally minimal until CT-001 freezes the versioned cross-lane
-contracts. Evidence crosses the boundary only by opaque mailbox object ID, ciphertext digest, and
-bounded byte count—never by a connector-local filesystem path.
+The record fields are intentionally minimal, unvalidated declarations until CT-001 freezes the
+versioned cross-lane contracts and RUN-001 supplies enforcement. The schema offers no explicit
+filesystem-path field. It declares an opaque mailbox object ID, a ciphertext digest, and a byte
+count whose bounds must be enforced by the mailbox/runtime. No consumer may treat these dataclasses
+as validated authority, origin, budget, digest, expiry, or path-safe values.
