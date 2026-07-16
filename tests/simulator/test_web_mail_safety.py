@@ -13,7 +13,7 @@ import pytest
 
 from simulator.clock import ControllableClock
 from simulator.engine import ScenarioEngine
-from simulator.mail import InMemoryMailCapture
+from simulator.mail import InMemoryMailCapture, MailReservation
 from simulator.protocol import (
     MAX_CONCURRENT_REQUESTS,
     MAX_MAIL_BODY_BYTES,
@@ -39,7 +39,6 @@ from simulator.web import (
     LoopbackHTTPServer,
     WebRequest,
     create_loopback_server,
-    deliver_prepared,
 )
 
 SIMULATOR_ROOT = Path(__file__).parents[2] / "simulator"
@@ -85,21 +84,103 @@ def test_typed_web_boundary_commits_scenario_and_mail_after_local_write() -> Non
 
 def test_write_failure_rolls_back_engine_and_mail_then_retry_succeeds() -> None:
     fixture, mail, engine = _fixture()
-    prepared = fixture.prepare(_request())
 
     def fail_write(data: bytes) -> None:
         raise OSError("injected write failure")
 
     with pytest.raises(OSError, match="injected write failure"):
-        deliver_prepared(prepared, fail_write)
+        fixture.deliver(_request(), fail_write)
     with pytest.raises(UnknownTransitionError):
         engine.state("web-happy")
     assert mail.messages == ()
 
-    retry = fixture.prepare(_request())
-    deliver_prepared(retry, lambda _: None)
+    fixture.deliver(_request(), lambda _: None)
     assert engine.state("web-happy") is ScenarioState.CANDIDATE
     assert len(mail.messages) == 1
+
+
+class FailCommitMail(InMemoryMailCapture):
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_once = True
+
+    def commit_reservation_locked(self, reservation: MailReservation) -> None:
+        super().commit_reservation_locked(reservation)
+        if self._fail_once:
+            self._fail_once = False
+            raise RuntimeError("injected mail commit edge")
+
+
+def test_fail_commit_mail_rolls_back_both_without_wire_then_retries() -> None:
+    mail = FailCommitMail()
+    engine = ScenarioEngine(clock=ControllableClock())
+    fixture = LocalWebSimulator(engine, mail)
+    written: list[bytes] = []
+    with pytest.raises(RuntimeError, match="mail commit edge"):
+        fixture.deliver(_request(), written.append)
+    assert written == []
+    assert mail.messages == ()
+    with pytest.raises(UnknownTransitionError):
+        engine.state("web-happy")
+
+    fixture.deliver(_request(), written.append)
+    assert len(written) == 1
+    assert len(mail.messages) == 1
+    assert engine.state("web-happy") is ScenarioState.CANDIDATE
+
+
+@pytest.mark.parametrize(
+    ("target_name", "method_name"),
+    [
+        ("engine", "validate_reservation_locked"),
+        ("mail", "validate_reservation_locked"),
+        ("engine", "snapshot_locked"),
+        ("mail", "snapshot_locked"),
+        ("engine", "commit_reservation_locked"),
+        ("mail", "commit_reservation_locked"),
+        ("engine", "finalize_reservation_locked"),
+        ("mail", "finalize_reservation_locked"),
+    ],
+)
+def test_each_atomic_commit_edge_rolls_back_without_wire_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    method_name: str,
+) -> None:
+    fixture, mail, engine = _fixture()
+    target = engine if target_name == "engine" else mail
+    original = getattr(target, method_name)
+    failed = False
+
+    def fail_once(*args: object) -> object:
+        nonlocal failed
+        result = original(*args)
+        if not failed:
+            failed = True
+            raise RuntimeError(f"injected {target_name} {method_name}")
+        return result
+
+    monkeypatch.setattr(target, method_name, fail_once)
+    written: list[bytes] = []
+    with pytest.raises(RuntimeError, match="injected"):
+        fixture.deliver(_request(), written.append)
+    assert written == []
+    assert mail.messages == ()
+    with pytest.raises(UnknownTransitionError):
+        engine.state("web-happy")
+
+    fixture.deliver(_request(), written.append)
+    assert len(written) == 1
+    assert len(mail.messages) == 1
+    assert engine.state("web-happy") is ScenarioState.CANDIDATE
+
+
+def test_no_public_prepare_or_prepared_response_can_abandon_reservations() -> None:
+    fixture, _, engine = _fixture()
+    assert not hasattr(fixture, "prepare")
+    assert not hasattr(engine, "prepare")
+    assert not hasattr(InMemoryMailCapture(), "reserve")
+    assert "PreparedWebResponse" not in __import__("simulator").__all__
 
 
 def test_render_failure_rolls_back_then_retry_succeeds(
@@ -428,6 +509,8 @@ def test_recursive_from_import_reaches_nested_escape_mutation(tmp_path: Path) ->
         "import ctypes\n",
         "import importlib\n",
         "import builtins\n",
+        "from urllib import request\nrequest.urlopen('fixture')\n",
+        "import urllib as u\nu.request.urlopen('fixture')\n",
         "eval('fixture')\n",
         "exec('fixture')\n",
         "compile('fixture', 'fixture', 'exec')\n",

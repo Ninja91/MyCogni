@@ -108,13 +108,13 @@ def test_unknown_scenario_transition_and_active_reservation_fail_closed() -> Non
             session_id="unknown-scenario",
             expected_state=ScenarioState.START,
         )
-    plan = engine.prepare(
+    plan = engine._reserve(
         scenario_name=ScenarioName.HAPPY,
         session_id="reserved",
         expected_state=ScenarioState.START,
     )
     with pytest.raises(ResourceLimitError, match="already reserved"):
-        engine.prepare(
+        engine._reserve(
             scenario_name=ScenarioName.HAPPY,
             session_id="reserved",
             expected_state=ScenarioState.START,
@@ -133,7 +133,7 @@ def test_unknown_scenario_transition_and_active_reservation_fail_closed() -> Non
 def test_rollback_does_not_create_session_or_consume_request_budget() -> None:
     _, engine = _engine()
     for _ in range(MAX_REQUESTS_PER_SESSION + 2):
-        plan = engine.prepare(
+        plan = engine._reserve(
             scenario_name=ScenarioName.HAPPY,
             session_id="retryable",
             expected_state=ScenarioState.START,

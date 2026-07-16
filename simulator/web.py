@@ -67,37 +67,6 @@ class WebResponse:
     content_type: str = "application/json"
 
 
-class PreparedWebResponse:
-    def __init__(
-        self,
-        *,
-        owner: LocalWebSimulator,
-        response: WebResponse,
-        engine_plan: EnginePlan | None = None,
-        mail_reservation: MailReservation | None = None,
-    ) -> None:
-        self.response = response
-        self._owner = owner
-        self._engine_plan = engine_plan
-        self._mail_reservation = mail_reservation
-        self._finalized = False
-        self._lock = RLock()
-
-    def commit_after_write(self) -> None:
-        with self._lock:
-            if self._finalized:
-                raise RuntimeError("prepared response is already finalized")
-            self._owner._commit(self._engine_plan, self._mail_reservation)
-            self._finalized = True
-
-    def rollback(self) -> None:
-        with self._lock:
-            if self._finalized:
-                raise RuntimeError("prepared response is already finalized")
-            self._owner._rollback(self._engine_plan, self._mail_reservation)
-            self._finalized = True
-
-
 def _error(status_code: int, code: str) -> WebResponse:
     return WebResponse(status_code, canonical_json({"error": code}))
 
@@ -136,44 +105,40 @@ class LocalWebSimulator:
     def __init__(self, engine: ScenarioEngine, mail: InMemoryMailCapture) -> None:
         self._engine = engine
         self._mail = mail
-        self._transaction_lock = RLock()
 
-    def _prepared_error(self, response: WebResponse) -> PreparedWebResponse:
-        return PreparedWebResponse(owner=self, response=response)
-
-    def prepare(
+    def _prepare(
         self,
         request: WebRequest,
         *,
         expected_authority: str = LOOPBACK_ADDRESS,
-    ) -> PreparedWebResponse:
+    ) -> tuple[WebResponse, EnginePlan | None, MailReservation | None]:
         envelope_error = _validate_envelope(request, expected_authority)
         if envelope_error is not None:
-            return self._prepared_error(envelope_error)
+            return envelope_error, None, None
         if len(request.path.encode("utf-8")) > MAX_PATH_BYTES:
-            return self._prepared_error(_error(414, "path_too_large"))
+            return _error(414, "path_too_large"), None, None
         parsed = urlsplit(request.path)
         if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
-            return self._prepared_error(_error(400, "noncanonical_path"))
+            return _error(400, "noncanonical_path"), None, None
         decoded = unquote(parsed.path)
         if "\\" in decoded or "\x00" in decoded or ".." in decoded.split("/"):
-            return self._prepared_error(_error(400, "noncanonical_path"))
+            return _error(400, "noncanonical_path"), None, None
         match = ROUTE.fullmatch(decoded)
         if match is None:
-            return self._prepared_error(_error(404, "unknown_fixture_route"))
+            return _error(404, "unknown_fixture_route"), None, None
 
         plan: EnginePlan | None = None
         mail_reservation: MailReservation | None = None
         try:
             scenario = ScenarioName(match.group("scenario"))
             expected = ScenarioState(match.group("expected"))
-            plan = self._engine.prepare(
+            plan = self._engine._reserve(
                 scenario_name=scenario,
                 session_id=match.group("session"),
                 expected_state=expected,
             )
             if plan.result.mail is not None:
-                mail_reservation = self._mail.reserve(plan.result.mail)
+                mail_reservation = self._mail._reserve(plan.result.mail)
             body = self._render_result(plan)
             if len(body) > MAX_RESPONSE_BODY_BYTES:
                 raise ResourceLimitError("rendered response exceeds hard cap")
@@ -181,23 +146,18 @@ class LocalWebSimulator:
             if len(_wire_response(response)) > MAX_HTTP_RESPONSE_BYTES:
                 raise ResourceLimitError("aggregate HTTP response exceeds hard cap")
         except ValueError:
-            self._rollback(plan, mail_reservation)
-            return self._prepared_error(_error(400, "unknown_fixture_value"))
+            self._cancel(plan, mail_reservation)
+            return _error(400, "unknown_fixture_value"), None, None
         except ResourceLimitError:
-            self._rollback(plan, mail_reservation)
-            return self._prepared_error(_error(429, "fixture_resource_limit"))
+            self._cancel(plan, mail_reservation)
+            return _error(429, "fixture_resource_limit"), None, None
         except SimulatorProtocolError:
-            self._rollback(plan, mail_reservation)
-            return self._prepared_error(_error(409, "fixture_transition_denied"))
+            self._cancel(plan, mail_reservation)
+            return _error(409, "fixture_transition_denied"), None, None
         except Exception:
-            self._rollback(plan, mail_reservation)
-            return self._prepared_error(_error(500, "fixture_render_failed"))
-        return PreparedWebResponse(
-            owner=self,
-            response=response,
-            engine_plan=plan,
-            mail_reservation=mail_reservation,
-        )
+            self._cancel(plan, mail_reservation)
+            return _error(500, "fixture_render_failed"), None, None
+        return response, plan, mail_reservation
 
     def _render_result(self, plan: EnginePlan) -> bytes:
         return canonical_json(
@@ -210,28 +170,81 @@ class LocalWebSimulator:
             }
         )
 
-    def _commit(
+    def _cancel(
         self,
         engine_plan: EnginePlan | None,
         mail_reservation: MailReservation | None,
     ) -> None:
-        if engine_plan is None:
-            return
-        with self._transaction_lock:
-            self._engine.commit(engine_plan)
-            if mail_reservation is not None:
-                self._mail.commit(mail_reservation)
-
-    def _rollback(
-        self,
-        engine_plan: EnginePlan | None,
-        mail_reservation: MailReservation | None,
-    ) -> None:
-        with self._transaction_lock:
+        try:
             if mail_reservation is not None:
                 self._mail.rollback(mail_reservation)
+        finally:
             if engine_plan is not None:
                 self._engine.rollback(engine_plan)
+
+    def _atomic_deliver(
+        self,
+        engine_plan: EnginePlan,
+        mail_reservation: MailReservation | None,
+        wire: bytes,
+        writer: Callable[[bytes], Any],
+    ) -> None:
+        engine_snapshot = None
+        engine_snapshot_taken = False
+        mail_snapshot: int | None = None
+        with self._engine.transaction_lock(), self._mail.transaction_lock():
+            try:
+                self._engine.validate_reservation_locked(engine_plan)
+                if mail_reservation is not None:
+                    self._mail.validate_reservation_locked(mail_reservation)
+                engine_snapshot = self._engine.snapshot_locked(engine_plan)
+                engine_snapshot_taken = True
+                if mail_reservation is not None:
+                    mail_snapshot = self._mail.snapshot_locked(mail_reservation)
+                self._engine.commit_reservation_locked(engine_plan)
+                if mail_reservation is not None:
+                    self._mail.commit_reservation_locked(mail_reservation)
+                self._engine.finalize_reservation_locked(engine_plan)
+                if mail_reservation is not None:
+                    self._mail.finalize_reservation_locked(mail_reservation)
+            except BaseException:
+                if engine_snapshot_taken:
+                    self._engine.restore_snapshot_locked(engine_plan, engine_snapshot)
+                if mail_snapshot is not None:
+                    self._mail.restore_snapshot_locked(mail_snapshot)
+                self._engine.cancel_reservation_locked(engine_plan)
+                if mail_reservation is not None:
+                    self._mail.cancel_reservation_locked(mail_reservation)
+                raise
+            try:
+                writer(wire)
+            except BaseException:
+                self._engine.restore_snapshot_locked(engine_plan, engine_snapshot)
+                if mail_snapshot is not None:
+                    self._mail.restore_snapshot_locked(mail_snapshot)
+                raise
+
+    def deliver(
+        self,
+        request: WebRequest,
+        writer: Callable[[bytes], Any],
+        *,
+        expected_authority: str = LOOPBACK_ADDRESS,
+    ) -> WebResponse:
+        response, engine_plan, mail_reservation = self._prepare(
+            request,
+            expected_authority=expected_authority,
+        )
+        try:
+            wire = _wire_response(response)
+        except BaseException:
+            self._cancel(engine_plan, mail_reservation)
+            raise
+        if engine_plan is None:
+            writer(wire)
+        else:
+            self._atomic_deliver(engine_plan, mail_reservation, wire, writer)
+        return response
 
     def handle(
         self,
@@ -239,18 +252,7 @@ class LocalWebSimulator:
         *,
         expected_authority: str = LOOPBACK_ADDRESS,
     ) -> WebResponse:
-        prepared = self.prepare(request, expected_authority=expected_authority)
-        deliver_prepared(prepared, lambda _: None)
-        return prepared.response
-
-
-def deliver_prepared(prepared: PreparedWebResponse, writer: Callable[[bytes], Any]) -> None:
-    try:
-        writer(_wire_response(prepared.response))
-    except BaseException:
-        prepared.rollback()
-        raise
-    prepared.commit_after_write()
+        return self.deliver(request, lambda _: None, expected_authority=expected_authority)
 
 
 def _wire_response(response: WebResponse) -> bytes:
@@ -350,11 +352,11 @@ def _handler_for(fixture: LocalWebSimulator) -> type[BaseHTTPRequestHandler]:
             if not isinstance(self.server, LoopbackHTTPServer):
                 raise RuntimeError("unexpected simulator server type")
             authority = f"{LOOPBACK_ADDRESS}:{self.server.server_port}"
-            prepared = fixture.prepare(
+            fixture.deliver(
                 WebRequest(self.command, self.path, raw_headers, b""),
+                self.wfile.write,
                 expected_authority=authority,
             )
-            deliver_prepared(prepared, self.wfile.write)
             self.close_connection = True
 
         def send_error(

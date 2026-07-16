@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from _thread import RLock as RLockType
 from dataclasses import dataclass
 from hashlib import sha256
 from threading import RLock
@@ -317,7 +318,7 @@ class ScenarioEngine:
         with self._lock:
             return len(self._sessions)
 
-    def prepare(
+    def _reserve(
         self,
         *,
         scenario_name: ScenarioName,
@@ -403,20 +404,54 @@ class ScenarioEngine:
         self._reserved_sessions.add(session_id)
         return plan
 
+    def transaction_lock(self) -> RLockType:
+        return self._lock
+
+    def validate_reservation_locked(self, plan: EnginePlan) -> None:
+        reservation = self._reservations.get(plan.token)
+        if reservation is None or reservation.plan != plan:
+            raise ReservationError("engine transition reservation is stale")
+        if plan.session_id not in self._reserved_sessions:
+            raise ReservationError("engine session reservation is missing")
+
+    def snapshot_locked(self, plan: EnginePlan) -> _Session | None:
+        self.validate_reservation_locked(plan)
+        return self._sessions.get(plan.session_id)
+
+    def commit_reservation_locked(self, plan: EnginePlan) -> None:
+        self.validate_reservation_locked(plan)
+        self._sessions[plan.session_id] = self._reservations[plan.token].next_session
+
+    def restore_snapshot_locked(self, plan: EnginePlan, snapshot: _Session | None) -> None:
+        if snapshot is None:
+            self._sessions.pop(plan.session_id, None)
+        else:
+            self._sessions[plan.session_id] = snapshot
+
+    def finalize_reservation_locked(self, plan: EnginePlan) -> None:
+        self.validate_reservation_locked(plan)
+        self._reservations.pop(plan.token)
+        self._reserved_sessions.remove(plan.session_id)
+
+    def cancel_reservation_locked(self, plan: EnginePlan) -> None:
+        self._reservations.pop(plan.token, None)
+        self._reserved_sessions.discard(plan.session_id)
+
     def commit(self, plan: EnginePlan) -> None:
         with self._lock:
-            reservation = self._reservations.pop(plan.token, None)
-            if reservation is None or reservation.plan != plan:
-                raise ReservationError("engine transition reservation is stale")
-            self._reserved_sessions.remove(plan.session_id)
-            self._sessions[plan.session_id] = reservation.next_session
+            snapshot = self.snapshot_locked(plan)
+            try:
+                self.commit_reservation_locked(plan)
+                self.finalize_reservation_locked(plan)
+            except BaseException:
+                self.restore_snapshot_locked(plan, snapshot)
+                self.cancel_reservation_locked(plan)
+                raise
 
     def rollback(self, plan: EnginePlan) -> None:
         with self._lock:
-            reservation = self._reservations.pop(plan.token, None)
-            if reservation is None or reservation.plan != plan:
-                raise ReservationError("engine transition reservation is stale")
-            self._reserved_sessions.remove(plan.session_id)
+            self.validate_reservation_locked(plan)
+            self.cancel_reservation_locked(plan)
 
     def advance(
         self,
@@ -425,7 +460,7 @@ class ScenarioEngine:
         session_id: str,
         expected_state: ScenarioState,
     ) -> ScenarioResult:
-        plan = self.prepare(
+        plan = self._reserve(
             scenario_name=scenario_name,
             session_id=session_id,
             expected_state=expected_state,

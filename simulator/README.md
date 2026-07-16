@@ -24,10 +24,12 @@ database, vault, policy, authorization, or execution authority.
 - hard caps on sessions, requests, request/response bodies, evidence, and mail; and
 - source guards plus golden, property, negative, and mutation tests.
 
-The engine uses synchronized per-session transition reservations. The web adapter validates and
-renders the bounded response and reserves any mail capacity before returning a prepared response;
-state and mail commit only after the local writer reports success. Rendering, capacity, protocol,
-or writer failure rolls reservations back so an identical request can be retried safely.
+The engine uses synchronized per-session transition reservations. The one-shot web delivery API
+validates and renders the bounded response, reserves mail capacity, then holds both engine and
+mail locks while it validates, snapshots, applies, finalizes and invokes the local writer. No
+writer call occurs unless both state changes are guaranteed; any validation, commit-edge or
+writer failure restores both snapshots so an identical request can be retried safely. There is
+no public prepared-response object that can retain an abandoned reservation.
 
 The protocol fails closed on undeclared scenarios, sessions, states, transitions, methods,
 routes, path traversal, authority-form paths, invalid/missing/duplicate Host, Origin or content

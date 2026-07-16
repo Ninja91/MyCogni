@@ -16,11 +16,9 @@ from simulator.protocol import (
 )
 from simulator.web import (
     LocalWebSimulator,
-    PreparedWebResponse,
     WebRequest,
     WebResponse,
     create_loopback_server,
-    deliver_prepared,
 )
 
 __all__ = [
@@ -29,7 +27,6 @@ __all__ = [
     "InMemoryMailCapture",
     "LocalWebSimulator",
     "MailFixture",
-    "PreparedWebResponse",
     "ScenarioEngine",
     "ScenarioName",
     "ScenarioResult",
@@ -41,5 +38,4 @@ __all__ = [
     "build_corpus",
     "create_loopback_server",
     "default_scenarios",
-    "deliver_prepared",
 ]

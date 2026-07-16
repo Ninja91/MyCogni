@@ -45,7 +45,21 @@ def _imports(tree: ast.AST) -> set[str]:
             imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             imported.add(node.module)
+            imported.update(
+                f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"
+            )
     return imported
+
+
+def _attribute_name(node: ast.AST) -> str:
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+    return ".".join(reversed(parts))
 
 
 def _module_name(root: Path, path: Path, package: str) -> str:
@@ -110,10 +124,31 @@ def assert_structural_import_boundary(path: Path, *, root: Path, package: str) -
 def assert_no_outbound_network_source(path: Path) -> None:
     tree = _tree(path)
     imported = _imports(tree)
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases.update((alias.asname or alias.name, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            aliases.update(
+                (alias.asname or alias.name, f"{node.module}.{alias.name}")
+                for alias in node.names
+                if alias.name != "*"
+            )
+    resolved_attributes: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        dotted = _attribute_name(node)
+        root, separator, suffix = dotted.partition(".")
+        resolved = aliases.get(root, root)
+        resolved_attributes.add(f"{resolved}.{suffix}" if separator else resolved)
     violations = {
         forbidden
         for forbidden in FORBIDDEN_ESCAPE_IMPORTS
-        if any(name == forbidden or name.startswith(f"{forbidden}.") for name in imported)
+        if any(
+            name == forbidden or name.startswith(f"{forbidden}.")
+            for name in imported | resolved_attributes
+        )
     }
     if violations:
         raise AssertionError(
