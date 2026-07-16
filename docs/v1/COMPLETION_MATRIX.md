@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline and versioned connector contracts. It does not yet contain a remover runtime, accepted Docker image, simulator or live connector.
+Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary and selected machine-checked threat catalog. It does not yet contain a remover runtime, accepted Docker image, simulator or live connector.
 
 ## Status vocabulary
 
@@ -21,7 +21,7 @@ Documentation describing a future component is not implementation evidence for t
 | Product/research architecture | `VERIFIED` | `README.md`, `docs/00`–`16`, source-graded research, requirements and threat model | keep synchronized with implementation findings |
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
-| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001, DB-001 and CT-001 independently accepted; frozen 55-package lock, four import contracts and 536 tests pass on Python 3.12.12 and 3.13.11 on 2026-07-15 | PF-002 needs real two-architecture build evidence; remaining M0 packages are open |
+| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001, DB-001, CT-001, TEL-001 and THREAT-CATALOG-001 independently accepted; frozen 55-package lock, four import contracts and 677 tests pass on Python 3.12.12 and 3.13.11 on 2026-07-15 | PF-002 needs real two-architecture build evidence; remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
@@ -38,7 +38,9 @@ Documentation describing a future component is not implementation evidence for t
 | Connector protocol boundary | PF-BOUNDARY | `COMPLETE` | `5c51d23`, `cef7b0b`; isolated typed package plus independently reproduced legal/package artifact inspection | validation and enforcement remain CT-001/RUN-001 work |
 | Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`; pinned indexes, semantic hardening/shebang checks and build-attempt record | Docker engine must produce successful amd64/arm64 build and runtime-inspection logs before `COMPLETE` |
 | PR CI, frozen inputs and safety/claim guards | CI-001 | `COMPLETE` | `73c097a`, `56f40e6`; Python 3.12.12/3.13.11, immutable Actions and 12 negative CI fixtures independently reproduced | retain full-SHA Actions and update claim baseline explicitly |
-| Safe diagnostics and traceability catalog | TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | CI foundation is accepted |
+| Typed local diagnostics | TEL-001 | `COMPLETE` | `34b5820`, `9525778`, `57cdb47`; 85 focused contract/adversarial tests, complete diagnostic dependency-closure mutations and final independent review with zero P0/P1 | runtime composition, file lifecycle and deliberate language-level bypass remain explicit non-claims |
+| Selected threat/test catalog | THREAT-CATALOG-001 | `COMPLETE` | `f1f57ac`, `2924ca3`, `3000ddc`; 51 focused tests, trusted Git-base allocation comparison, real-passed pytest evidence and three enforced pinned schemas; final independent review found zero P0/P1/P2 | requires protected trusted PR base; selected catalog is not exhaustive GOV coverage |
+| Full traceability validator | GOV-001 | `NOT_STARTED` | — | consume accepted threat catalog without promoting planned controls |
 | SQLite and migration baseline | DB-001 | `COMPLETE` | `4b8e154`, `da7f406`; fail-closed physical-file/WAL/FULL/FK/timeout policy and Alembic round trips independently reproduced | locking/backup/filesystem qualification remain later packages |
 | Shared contracts | CT-001 | `COMPLETE` | `da973f1`, `cbdd9de`, `d788d49`; strict core primitives, versioned manifest/action/result schemas, schema snapshots and 484 focused adversarial tests; final independent review found zero P0/P1 | preserve connector-fact provenance at ingestion; add Pydantic min/latest compatibility CI before public SDK release |
 | Synthetic corpus and deterministic simulator | SIM-001 | `NOT_STARTED` | — | create reserved-domain fixtures |
