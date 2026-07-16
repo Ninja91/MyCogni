@@ -1,0 +1,1 @@
+{"operation":"add","document":"registry","path":["unexpected"],"value":true,"expected":"top-level fields must exactly match schema v1"}

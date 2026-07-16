@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "history_version": "1.0.0",
+  "allocations": [
+    {"id":"THR-AUTH-001","kind":"THREAT","identity":"control-plane-actor-takeover","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-DISPATCH-001","kind":"THREAT","identity":"duplicate-stale-or-unauthorized-external-dispatch","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-EGRESS-001","kind":"THREAT","identity":"connector-exfiltration-or-network-policy-bypass","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-GOV-001","kind":"THREAT","identity":"threat-control-traceability-silently-drifts","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-KEYS-001","kind":"THREAT","identity":"backup-theft-or-false-cryptographic-deletion","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-LOGS-001","kind":"THREAT","identity":"raw-identity-data-escapes-through-diagnostics","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-RUNNER-001","kind":"THREAT","identity":"connector-reads-trusted-core-secrets","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"THR-VERIFY-001","kind":"THREAT","identity":"product-reports-false-proof-of-removal","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-AUTH-001","kind":"VERIFICATION_TEST","identity":"control-plane-actor-authority-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-CATALOG-001","kind":"VERIFICATION_TEST","identity":"threat-catalog-integrity-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-DISPATCH-001","kind":"VERIFICATION_TEST","identity":"external-dispatch-fencing-and-reconciliation-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-EGRESS-001","kind":"VERIFICATION_TEST","identity":"connector-egress-policy-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-KEYS-001","kind":"VERIFICATION_TEST","identity":"profile-key-and-deletion-truth-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-LOGS-001","kind":"VERIFICATION_TEST","identity":"diagnostic-personal-data-exclusion-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-RUNNER-001","kind":"VERIFICATION_TEST","identity":"connector-runtime-isolation-verification","state":"ACTIVE","introduced_in":"1.0.0"},
+    {"id":"VFY-VERIFY-001","kind":"VERIFICATION_TEST","identity":"removal-assurance-state-verification","state":"ACTIVE","introduced_in":"1.0.0"}
+  ]
+}

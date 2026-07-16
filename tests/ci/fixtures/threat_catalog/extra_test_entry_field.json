@@ -1,0 +1,1 @@
+{"operation":"add","document":"registry","path":["tests",0,"unexpected"],"value":true,"expected":"fields must exactly match registry schema v1"}

@@ -1,0 +1,1 @@
+{"operation":"add","document":"catalog","path":["unexpected"],"value":true,"expected":"top-level fields must exactly match schema v1"}

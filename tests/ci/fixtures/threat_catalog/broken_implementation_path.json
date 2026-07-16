@@ -1,1 +1,1 @@
-{"operation":"set","document":"registry","path":["tests",1,"implementation"],"value":"tests/ci/not_present.py","expected":"broken implementation path"}
+{"operation":"set","document":"registry","path":["tests",1,"implementation","ref"],"value":"tests/ci/test_threat_catalog.py::test_not_present","expected":"invalid typed implementation"}

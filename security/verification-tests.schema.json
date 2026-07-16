@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mycogni.example/schemas/verification-tests-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_version", "tests"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "registry_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "purpose", "implementation", "status", "threats"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^VFY-[A-Z0-9]+-[0-9]{3}$"},
+          "purpose": {"type": "string", "minLength": 1, "maxLength": 160},
+          "implementation": {
+            "oneOf": [
+              {"type": "null"},
+              {"$ref": "#/$defs/evidence"}
+            ]
+          },
+          "status": {"enum": ["PLANNED", "IMPLEMENTED", "DEPRECATED"]},
+          "threats": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ref"],
+      "properties": {
+        "type": {"enum": ["PYTEST_NODE", "SOURCE_DOCUMENT"]},
+        "ref": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

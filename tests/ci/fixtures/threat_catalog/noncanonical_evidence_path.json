@@ -1,0 +1,1 @@
+{"operation":"set","document":"catalog","path":["threats",0,"evidence",0,"ref"],"value":"docs/../docs/05-security-privacy-threat-model.md","expected":"invalid typed evidence"}
