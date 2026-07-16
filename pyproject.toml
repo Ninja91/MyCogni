@@ -41,6 +41,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/mycogni"]
 
+[tool.uv.workspace]
+members = ["packages/*"]
+
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
