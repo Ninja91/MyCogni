@@ -24,6 +24,12 @@ def test_opaque_id_requires_canonical_uuid4() -> None:
         OpaqueId.parse(ID_TEXT.upper())
 
 
+@pytest.mark.parametrize("value", [ID_TEXT, 1, b"uuid", None])
+def test_opaque_id_rejects_non_uuid_runtime_values(value: object) -> None:
+    with pytest.raises(TypeError, match="opaque ID value must be a UUID"):
+        OpaqueId(cast(UUID, value))
+
+
 def test_sensitive_and_ciphertext_rendering_never_contains_payload() -> None:
     sensitive = Sensitive("synthetic-secret", category="email")
     assert "synthetic-secret" not in str(sensitive)
@@ -75,12 +81,75 @@ def test_safe_redaction_category_renders_as_one_fixed_line() -> None:
         setattr(sensitive, category_attribute, "email\nforged-log-line")
 
 
+@pytest.mark.parametrize("value", [bytearray(b"ciphertext"), "ciphertext", memoryview(b"x")])
+def test_ciphertext_payload_requires_exact_bytes(value: object) -> None:
+    with pytest.raises(TypeError, match="ciphertext payload must be bytes"):
+        Ciphertext(
+            payload=cast(bytes, value),
+            algorithm="aes-256-gcm",
+            key_id=OpaqueId(UUID(ID_TEXT)),
+            nonce=b"synthetic-nonce",
+            aad_version=1,
+        )
+
+
+@pytest.mark.parametrize("value", [bytearray(b"nonce"), "nonce", memoryview(b"x")])
+def test_ciphertext_nonce_requires_exact_bytes(value: object) -> None:
+    with pytest.raises(TypeError, match="ciphertext nonce must be bytes"):
+        Ciphertext(
+            payload=b"synthetic-ciphertext",
+            algorithm="aes-256-gcm",
+            key_id=OpaqueId(UUID(ID_TEXT)),
+            nonce=cast(bytes, value),
+            aad_version=1,
+        )
+
+
+@pytest.mark.parametrize("value", [UUID(ID_TEXT), ID_TEXT, 1, None])
+def test_ciphertext_key_id_requires_exact_opaque_id(value: object) -> None:
+    with pytest.raises(TypeError, match="ciphertext key_id must be an OpaqueId"):
+        Ciphertext(
+            payload=b"synthetic-ciphertext",
+            algorithm="aes-256-gcm",
+            key_id=cast(OpaqueId, value),
+            nonce=b"synthetic-nonce",
+            aad_version=1,
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.0, "1", None])
+def test_ciphertext_aad_version_requires_exact_int(value: object) -> None:
+    with pytest.raises(TypeError, match="ciphertext AAD version must be an integer"):
+        Ciphertext(
+            payload=b"synthetic-ciphertext",
+            algorithm="aes-256-gcm",
+            key_id=OpaqueId(UUID(ID_TEXT)),
+            nonce=b"synthetic-nonce",
+            aad_version=cast(int, value),
+        )
+
+
+def test_ciphertext_rejects_nonpositive_aad_version() -> None:
+    with pytest.raises(ValueError, match="ciphertext AAD version must be positive"):
+        Ciphertext(
+            payload=b"synthetic-ciphertext",
+            algorithm="aes-256-gcm",
+            key_id=OpaqueId(UUID(ID_TEXT)),
+            nonce=b"synthetic-nonce",
+            aad_version=0,
+        )
+
+
 def test_optimistic_version_is_nonnegative_and_monotonic() -> None:
     assert OptimisticVersion(0).next() == OptimisticVersion(1)
     with pytest.raises(ValueError):
         OptimisticVersion(-1)
-    with pytest.raises(ValueError):
-        OptimisticVersion(cast(int, True))
+
+
+@pytest.mark.parametrize("value", [True, 1.0, "1", None])
+def test_optimistic_version_requires_exact_int(value: object) -> None:
+    with pytest.raises(TypeError, match="optimistic version must be an integer"):
+        OptimisticVersion(cast(int, value))
 
 
 class _Clock:

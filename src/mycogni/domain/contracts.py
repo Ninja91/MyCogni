@@ -14,6 +14,8 @@ _SAFE_LABEL = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 def _validate_safe_label(value: str, field_name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{field_name} must be a string")
     if not _SAFE_LABEL.fullmatch(value):
         raise ValueError(f"{field_name} must be a 1-64 character lowercase ASCII slug")
 
@@ -25,6 +27,8 @@ class OpaqueId:
     value: UUID
 
     def __post_init__(self) -> None:
+        if type(self.value) is not UUID:
+            raise TypeError("opaque ID value must be a UUID")
         if (
             self.value.version != 4
             or self.value.variant != UUID("00000000-0000-4000-8000-000000000000").variant
@@ -110,11 +114,19 @@ class Ciphertext:
     aad_version: int
 
     def __post_init__(self) -> None:
+        if type(self.payload) is not bytes:
+            raise TypeError("ciphertext payload must be bytes")
         if not self.payload:
             raise ValueError("ciphertext payload must not be empty")
         _validate_safe_label(self.algorithm, "ciphertext algorithm")
+        if type(self.key_id) is not OpaqueId:
+            raise TypeError("ciphertext key_id must be an OpaqueId")
+        if type(self.nonce) is not bytes:
+            raise TypeError("ciphertext nonce must be bytes")
         if not self.nonce:
             raise ValueError("ciphertext nonce must not be empty")
+        if type(self.aad_version) is not int:
+            raise TypeError("ciphertext AAD version must be an integer")
         if self.aad_version < 1:
             raise ValueError("ciphertext AAD version must be positive")
 
@@ -136,7 +148,9 @@ class OptimisticVersion:
     value: int
 
     def __post_init__(self) -> None:
-        if isinstance(self.value, bool) or self.value < 0:
+        if type(self.value) is not int:
+            raise TypeError("optimistic version must be an integer")
+        if self.value < 0:
             raise ValueError("optimistic version must be a non-negative integer")
 
     def next(self) -> OptimisticVersion:
