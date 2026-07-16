@@ -2,7 +2,7 @@
 
 MyCogni is a planned local-first, open-source system for recurring U.S. personal-data removal with auditable evidence and minimum necessary disclosure. It is for technically comfortable people who would rather self-host than give another SaaS a complete identity dossier.
 
-> **Status — architecture only.** This repository does not yet contain a runnable remover, Docker image, or live broker connector. It must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
+> **Status — architecture and synthetic fixtures only.** This repository does not yet contain a runnable remover, accepted Docker image, or live broker connector. Its deterministic local simulator cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
 
 MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 
@@ -27,7 +27,7 @@ The project will not optimize headline broker counts, requests sent, GitHub star
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |
 | Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |
-| Runtime | architecture and acceptance criteria | signed amd64/arm64 OCI images | broader platform packaging |
+| Runtime | architecture, executable skeleton, and synthetic-only simulator | signed amd64/arm64 OCI images | broader platform packaging |
 | Discovery | synthetic registry example | small read-only exposure set with explainable matching | larger governed registry |
 | Removal | lifecycle and authorization design | guided flows plus 2–5 trusted automatic capabilities | broader/custom automation |
 | Evidence | normative semantics and diagrams | encrypted evidence, disclosure ledger, independent rechecks | additional attestation methods |

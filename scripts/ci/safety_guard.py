@@ -9,7 +9,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-RUNTIME_ROOTS = ("src/", "packages/", "tests/", "connectors/", "broker-registry/")
+RUNTIME_ROOTS = (
+    "src/",
+    "packages/",
+    "tests/",
+    "connectors/",
+    "broker-registry/",
+    "simulator/",
+)
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2"}
 SECRET_PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),

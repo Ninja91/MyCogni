@@ -30,7 +30,7 @@ check: verify-toolchain
 	uv lock --check
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) ruff format --check .
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) ruff check .
-	uv run --all-packages --frozen --python $(PYTHON_VERSION) mypy -p mycogni -p connector_protocol
+	uv run --all-packages --frozen --python $(PYTHON_VERSION) mypy -p mycogni -p connector_protocol -p simulator
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) lint-imports
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) pytest tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/safety_guard.py

@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary and selected machine-checked threat catalog. It does not yet contain a remover runtime, accepted Docker image, simulator or live connector.
+Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, and a deterministic synthetic-only simulator. It does not yet contain a remover runtime, accepted Docker image, network-deny proof or live connector.
 
 ## Status vocabulary
 
@@ -22,7 +22,7 @@ Documentation describing a future component is not implementation evidence for t
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001, DB-001, CT-001, TEL-001 and THREAT-CATALOG-001 independently accepted; frozen 55-package lock, four import contracts and 677 tests pass on Python 3.12.12 and 3.13.11 on 2026-07-15 | PF-002 needs real two-architecture build evidence; remaining M0 packages are open |
-| Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
+| Synthetic simulator/network-deny harness | `NOT_STARTED` | SIM-001 standalone simulator and mutation suite implemented; combined harness remains unstarted until an independently enforced NET-001 boundary exists | NET-001 network/DNS/protocol denial and independent review |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
@@ -43,7 +43,7 @@ Documentation describing a future component is not implementation evidence for t
 | Full traceability validator | GOV-001 | `NOT_STARTED` | — | consume accepted threat catalog without promoting planned controls |
 | SQLite and migration baseline | DB-001 | `COMPLETE` | `4b8e154`, `da7f406`; fail-closed physical-file/WAL/FULL/FK/timeout policy and Alembic round trips independently reproduced | locking/backup/filesystem qualification remain later packages |
 | Shared contracts | CT-001 | `COMPLETE` | `da973f1`, `cbdd9de`, `d788d49`; strict core primitives, versioned manifest/action/result schemas, schema snapshots and 484 focused adversarial tests; final independent review found zero P0/P1 | preserve connector-fact provenance at ingestion; add Pydantic min/latest compatibility CI before public SDK release |
-| Synthetic corpus and deterministic simulator | SIM-001 | `NOT_STARTED` | — | create reserved-domain fixtures |
+| Synthetic corpus and deterministic simulator | SIM-001 | `COMPLETE` | `simulator/`, `tests/simulator/`; canonical reserved-domain corpus/scenario goldens, typed clock/web/mail protocol and 40 focused tests | independently reproduce dual-Python gates; NET-001 remains separate |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
@@ -139,7 +139,7 @@ These do not block M0 foundation work, but they block their named milestones:
 Current next slice after the accepted toolchain, boundary, CI, database and shared-contract packages:
 
 1. restore a responsive Docker engine and capture successful PF-002 amd64/arm64 build and inspection logs;
-2. start TEL-001/THREAT-CATALOG-001/GOV-001 and the deterministic SIM-001 corpus;
-3. land NET-001 before any HTTP/browser/mail adapter can enter CI;
+2. complete GOV-001 and independently review the deterministic SIM-001 corpus/simulator;
+3. land NET-001 before any non-simulator HTTP/browser/mail adapter can enter CI;
 4. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence;
 5. add connector SDK minimum/latest Pydantic compatibility coverage before any public SDK release.

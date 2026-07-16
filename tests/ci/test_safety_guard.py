@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from scripts.ci.safety_guard import scan_paths
+from scripts.ci.safety_guard import RUNTIME_ROOTS, scan_paths
+
+
+def test_guard_treats_simulator_as_a_pii_scanned_runtime_surface() -> None:
+    assert "simulator/" in RUNTIME_ROOTS
 
 
 def test_guard_rejects_secret_canary(tmp_path: Path) -> None:
