@@ -1,0 +1,1 @@
+{"mutations":[{"operation":"set","path":["records",7,"threats"],"value":["THR-LOGS-001"]},{"operation":"set","path":["records",7,"verification_tests"],"value":["VFY-LOGS-001"]}],"expected":"planned verification cannot count as tested coverage"}

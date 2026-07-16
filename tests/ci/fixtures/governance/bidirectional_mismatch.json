@@ -1,0 +1,1 @@
+{"operation":"set","path":["records",7,"threats"],"value":[],"expected":"VFY/threat reference is not bidirectional"}

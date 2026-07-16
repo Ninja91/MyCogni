@@ -1,0 +1,1 @@
+{"operation":"set","path":["schema_version"],"value":2,"expected":"top-level shape/version is not exact v1"}

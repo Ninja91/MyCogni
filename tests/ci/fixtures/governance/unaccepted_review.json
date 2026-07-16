@@ -1,0 +1,1 @@
+{"operation":"set","path":["records",0,"review"],"value":"docs/v1/reviews/02-adversarial-review.md#review:CI-001","expected":"lacks a real ACCEPT review record"}

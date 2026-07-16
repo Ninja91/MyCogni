@@ -1,0 +1,15 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://mycogni.example/schemas/traceability-v1.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","manifest_version","records"],
+  "properties":{
+    "schema_version":{"const":1},
+    "manifest_version":{"type":"string","pattern":"^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "records":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","target","state","requirements","adrs","threats","verification_tests","evidence","review"],"properties":{
+      "id":{"type":"string","pattern":"^TRC-[A-Z0-9]+(?:-[A-Z0-9]+)*$"},"target":{"type":"string"},"state":{"enum":["CATALOGUED","IMPLEMENTED","INDEPENDENTLY_ACCEPTED","MILESTONE_VERIFIED"]},
+      "requirements":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"adrs":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"threats":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"verification_tests":{"type":"array","uniqueItems":true,"items":{"type":"string"}},
+      "evidence":{"type":"object","additionalProperties":false,"required":["type","ref"],"properties":{"type":{"const":"PYTEST_NODE"},"ref":{"type":"string"}}},"review":{"type":"string"}
+    }}}
+  }
+}
