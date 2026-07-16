@@ -1,8 +1,9 @@
 UV_VERSION := 0.9.26
 PYTHON_VERSION := 3.12.12
+PYTHON_COMPAT_VERSION := 3.13.11
 export UV_BUILD_CONSTRAINT := build-constraints.txt
 
-.PHONY: bootstrap check format lock lock-update test verify-toolchain
+.PHONY: bootstrap check check-python-313 format lock lock-update test verify-toolchain
 
 verify-toolchain:
 	@test "$$(uv --version | awk '{print $$2}')" = "$(UV_VERSION)" || { \
@@ -34,6 +35,14 @@ check: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) pytest tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/safety_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/claim_guard.py
+
+check-python-313: verify-toolchain
+	uv sync --all-groups --all-packages --frozen --python $(PYTHON_COMPAT_VERSION)
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) ruff check .
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) lint-imports
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) pytest tests packages/mycogni-connector-sdk/tests
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/safety_guard.py
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/claim_guard.py
 
 test: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) pytest tests packages/mycogni-connector-sdk/tests

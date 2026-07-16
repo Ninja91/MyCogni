@@ -50,7 +50,10 @@ def read_claims(text: str) -> dict[str, str]:
             "Release candidate",
             "Stable release",
         }:
-            claims[f"{section}/{name}"] = status
+            key = f"{section}/{name}"
+            if key in claims:
+                raise ValueError(f"duplicate guarded claim: {key}")
+            claims[key] = status
     return claims
 
 
@@ -71,7 +74,11 @@ def validate_claims(claims: dict[str, str], baseline: dict[str, str]) -> list[st
 
 
 def main() -> int:
-    claims = read_claims(MATRIX.read_text(encoding="utf-8"))
+    try:
+        claims = read_claims(MATRIX.read_text(encoding="utf-8"))
+    except ValueError as error:
+        print(error)
+        return 1
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
     errors = validate_claims(claims, baseline)
     if errors:

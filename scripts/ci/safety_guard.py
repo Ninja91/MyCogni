@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 RUNTIME_ROOTS = ("src/", "packages/", "tests/", "connectors/", "broker-registry/")
-SKIP_SUFFIXES = {".lock", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2"}
+SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2"}
 SECRET_PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
@@ -18,6 +18,18 @@ SECRET_PATTERNS = {
 }
 EMAIL_PATTERN = re.compile(r"(?<![\w.+-])([\w.+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w.-])")
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
+DIRECT_IDENTIFIER_PATTERNS = {
+    "labeled personal name": re.compile(
+        r"\b(?:full_name|legal_name|person_name)\s*=\s*['\"][A-Z][a-z]+(?: [A-Z][a-z]+)+['\"]"
+    ),
+    "US phone number": re.compile(
+        r"(?<!\d)(?:\+1[-. ]?)?\(?[2-9]\d{2}\)?[-. ]\d{3}[-. ]\d{4}(?!\d)"
+    ),
+    "US Social Security number": re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)"),
+    "street address": re.compile(
+        r"\b\d{1,6}\s+[A-Za-z0-9.' -]+\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b"
+    ),
+}
 RESERVED_SUFFIXES = (".test", ".example", ".invalid")
 RESERVED_HOSTS = {"example.com", "example.net", "example.org", "localhost", "127.0.0.1"}
 STATIC_METADATA_HOSTS = {"json-schema.org"}
@@ -59,6 +71,9 @@ def scan_paths(paths: Iterable[Path]) -> list[str]:
         for match in EMAIL_PATTERN.finditer(text):
             if not _is_reserved_host(match.group(2)):
                 errors.append(f"{relative}: non-reserved email domain {match.group(2)}")
+        for label, pattern in DIRECT_IDENTIFIER_PATTERNS.items():
+            if pattern.search(text):
+                errors.append(f"{relative}: literal {label}")
         for value in URL_PATTERN.findall(text):
             host = urlparse(value.rstrip(".,);]")).hostname
             if host and not (_is_reserved_host(host) or host in STATIC_METADATA_HOSTS):
@@ -71,7 +86,10 @@ def main() -> int:
     if errors:
         print("\n".join(errors))
         return 1
-    print("Safety guard passed: no high-confidence secret, PII, or live runtime endpoint.")
+    print(
+        "Safety guard passed: no high-confidence secret, direct-identifier literal, "
+        "or live runtime endpoint."
+    )
     return 0
 
 
