@@ -54,3 +54,11 @@ for the locked resolution remain in the context. A subsequent native
 socket and was terminated; it produced no image or runtime-smoke evidence.
 Therefore the status remains **IN PROGRESS**, and no architecture is claimed
 built by this recheck.
+
+After correcting the virtual-environment path so console-script shebangs are
+not relocated, the static validator and mutation suite passed. A new Buildx
+`--check` attempt again stalled while connecting to Docker Desktop's daemon
+socket and was terminated. The Dockerfile now makes the eventual build fail
+unless the generated Uvicorn and Alembic scripts name the final interpreter
+path and both scripts execute successfully, but that build/runtime evidence is
+still pending. No architecture is claimed built.

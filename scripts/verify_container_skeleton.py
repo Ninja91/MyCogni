@@ -117,8 +117,20 @@ def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
         and "uv sync --frozen --no-dev --no-editable --package mycogni" in item.value
         for item in instructions
     )
+    assert not any("/build/.venv" in item.value for item in instructions)
+    assert any(
+        item.name == "ENV" and "UV_PROJECT_ENVIRONMENT=/opt/mycogni/.venv" in item.value
+        for item in instructions
+    )
     assert any(
         item.name == "RUN" and "find_spec('connector_protocol') is None" in item.value
+        for item in instructions
+    )
+    assert any(
+        item.name == "RUN"
+        and "expected = '#!/opt/mycogni/.venv/bin/python'" in item.value
+        and "/opt/mycogni/.venv/bin/uvicorn --version" in item.value
+        and "/opt/mycogni/.venv/bin/alembic --version" in item.value
         for item in instructions
     )
 
@@ -134,12 +146,19 @@ def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
         and "install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni /tmp/mycogni" in item.value
         for item in runtime
     )
-    assert "--from=build /build/.venv /opt/mycogni/.venv" in copies
+    assert "--from=build /opt/mycogni/.venv /opt/mycogni/.venv" in copies
     assert not any("--chown" in value and "/opt/mycogni" in value for value in copies)
     assert any(
         item.name == "RUN"
         and "chown -R 0:0 /opt/mycogni" in item.value
         and "chmod -R a-w /opt/mycogni" in item.value
+        for item in runtime
+    )
+    assert any(
+        item.name == "CMD"
+        and "/opt/mycogni/.venv/bin/uvicorn --version" in item.value
+        and "/opt/mycogni/.venv/bin/alembic --version" in item.value
+        and "/opt/mycogni/.venv/bin/python -c" in item.value
         for item in runtime
     )
 

@@ -35,6 +35,16 @@ def test_commented_user_instruction_does_not_satisfy_policy() -> None:
         )
 
 
+def test_relocated_virtual_environment_is_rejected() -> None:
+    validator = _validator()
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "docker/Dockerfile").read_text(encoding="utf-8")
+    inventory = validator._load_inventory()
+
+    with pytest.raises(AssertionError):
+        validator.validate_dockerfile(text.replace("/opt/mycogni/.venv", "/build/.venv"), inventory)
+
+
 @pytest.mark.parametrize(
     ("removed_fragment", "replacement"),
     [

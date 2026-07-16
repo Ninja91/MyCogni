@@ -32,6 +32,11 @@ evidence), renders Compose's canonical JSON model without contacting a daemon,
 and verifies the deny-all build-context allowlist. The runtime installation
 under `/opt/mycogni` is root-owned and immutable; only `/var/lib/mycogni` and
 the dedicated `/tmp/mycogni` tmpfs are writable by UID/GID 65532.
+The virtual environment is created at its final absolute
+`/opt/mycogni/.venv` path in the build stage so generated console-script
+shebangs remain valid after the same path is copied into the runtime stage.
+Build and runtime smoke intent executes both `uvicorn --version` and
+`alembic --version`; an import-only check cannot hide a broken shebang.
 
 Build the two-platform OCI result with Buildx:
 
