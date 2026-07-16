@@ -37,3 +37,20 @@ The acceptance evidence still required is a successful two-platform build log,
 OCI index inspection showing linux/amd64 and linux/arm64, and a non-root,
 read-only, networkless smoke run for each runnable local architecture. This
 document must be updated or superseded when that evidence exists.
+
+## Hardening recheck
+
+After narrowing the build context to an explicit deny-all allowlist, this
+daemon-side validation completed successfully for `linux/amd64`:
+
+```console
+docker buildx build --check --platform linux/amd64 --file docker/Dockerfile .
+```
+
+The static validator and full repository suite also prove that the root project
+metadata, trusted-core source and connector-SDK workspace metadata/source needed
+for the locked resolution remain in the context. A subsequent native
+`linux/arm64 --load` build stalled while connecting to Docker Desktop's daemon
+socket and was terminated; it produced no image or runtime-smoke evidence.
+Therefore the status remains **IN PROGRESS**, and no architecture is claimed
+built by this recheck.

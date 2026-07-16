@@ -9,5 +9,5 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532
+      - /tmp/mycogni:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
     volumes: []

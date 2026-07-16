@@ -27,6 +27,12 @@ Static validation does not require a daemon:
 python3 scripts/verify_container_skeleton.py
 ```
 
+The validator parses executable Dockerfile instructions (comments are not
+evidence), renders Compose's canonical JSON model without contacting a daemon,
+and verifies the deny-all build-context allowlist. The runtime installation
+under `/opt/mycogni` is root-owned and immutable; only `/var/lib/mycogni` and
+the dedicated `/tmp/mycogni` tmpfs are writable by UID/GID 65532.
+
 Build the two-platform OCI result with Buildx:
 
 ```console

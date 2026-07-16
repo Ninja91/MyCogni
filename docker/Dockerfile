@@ -12,8 +12,8 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /build
 
-COPY pyproject.toml uv.lock build-constraints.txt README.md ./
-COPY packages ./packages
+COPY pyproject.toml uv.lock build-constraints.txt README.md LICENSE NOTICE ./
+COPY packages/mycogni-connector-sdk ./packages/mycogni-connector-sdk
 COPY src ./src
 
 RUN uv sync --frozen --no-dev --no-editable --package mycogni \
@@ -34,16 +34,19 @@ LABEL org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.title="MyCogni" \
       org.opencontainers.image.version="${VERSION}"
 
-ENV HOME=/tmp \
+ENV HOME=/tmp/mycogni \
     PATH=/opt/mycogni/.venv/bin:/usr/local/bin:/usr/bin:/bin \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TMPDIR=/tmp
+    TMPDIR=/tmp/mycogni
 
-RUN mkdir -p /opt/mycogni /var/lib/mycogni \
-    && chown 65532:65532 /opt/mycogni /var/lib/mycogni
+RUN install -d -o 0 -g 0 -m 0555 /opt/mycogni \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni /tmp/mycogni
 
-COPY --chown=65532:65532 --from=build /build/.venv /opt/mycogni/.venv
+COPY --from=build /build/.venv /opt/mycogni/.venv
+
+RUN chown -R 0:0 /opt/mycogni \
+    && chmod -R a-w /opt/mycogni
 
 WORKDIR /var/lib/mycogni
 USER 65532:65532
