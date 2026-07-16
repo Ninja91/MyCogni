@@ -14,17 +14,19 @@ Ports and connectors share versioned test suites. Connector fixtures represent s
 
 ### Integration tests
 
-- SQLite and PostgreSQL run the same repository and migration contract;
+- SQLite repository, migration, writer-serialization, WAL, dirty-shutdown and supported-filesystem contract;
 - queue crash/lease recovery and scheduler catch-up;
 - vault encryption, rotation, wrong-key, and cryptographic deletion;
 - random profile-key catalog, old-catalog backup restore after deletion, tombstone/expiry, interrupted rotation, nonce uniqueness, and associated-data substitution;
-- filesystem and S3-compatible evidence backends;
+- encrypted filesystem evidence backend;
 - SMTP/IMAP test server correlation;
 - connector artifact isolation and mandatory gateway policy;
 - API/CLI parity and authorization.
-- authenticated local bootstrap/session/step-up plus cloud passkey/OIDC contract;
-- dispatch journal/fencing/reconciliation across SQLite and PostgreSQL;
+- authenticated local bootstrap/session/step-up contract;
+- dispatch journal/fencing/reconciliation over SQLite plus the independent gateway begin/high-water record;
 - optional no-op intelligence and sanitized task/output contracts without a model dependency.
+
+Post-V1 cloud-small conformance separately tests PostgreSQL, S3-compatible evidence, passkey/OIDC and cross-backend journal semantics. Those tests do not gate local-lite stable V1.
 
 ### Synthetic end-to-end tests
 
@@ -105,13 +107,13 @@ No model runs in v1 CI. The port/null adapter and security invariants are tested
 
 ### Stable v1
 
-- cloud-small hardening and restore drills;
+- local-lite hardening and restore/reconciliation drills;
 - signed images/SBOM/provenance;
 - connector signing, expiry, and revocation;
 - independent verified-removal reporting;
 - documented legal review and jurisdiction support matrix;
 - accessibility audit and performance budgets met;
-- no unresolved critical/high vulnerability without expiring acceptance.
+- zero unresolved P0 findings and no unresolved P1/high vulnerability on an enabled capability or supported stable surface;
 - public support matrix and profile-specific conformance results match tested artifacts/configurations;
 - twelve-week beta reports precision, verified outcomes, disclosure cost, manual burden, recurrence, and unknown outcomes with denominators.
 

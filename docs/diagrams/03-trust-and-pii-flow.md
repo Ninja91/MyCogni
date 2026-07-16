@@ -64,7 +64,7 @@ flowchart LR
     action --> sandbox
     session --> sandbox
     sandbox -->|"all outbound bytes"| gate
-    gate -->|"validated exact disclosure"| endpoint
+    gate -->|"typed exact request, or browser-limited tunnel"| endpoint
     endpoint --> hostile
     hostile -->|"bounded response through gateway"| sandbox
     sandbox -->|"encrypted artifact + structured result"| evidence

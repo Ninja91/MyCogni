@@ -1,8 +1,8 @@
 # Execution plan
 
-The plan favors a proof-first vertical slice over broker breadth. Estimates assume one experienced full-time engineer. A part-time personal project should preserve sequence and gates, not calendar promises.
+The plan favors a proof-first vertical slice over broker breadth. The release-level summary below is subordinate to the issue-ready [stable V1 control pack](v1/README.md). Its planning envelope assumes three experienced lanes; the 300-plus ideal-day backlog implies roughly 75–90 weeks for one experienced full-time maintainer before external latency.
 
-## Release 0 — foundation and P0 closure (weeks 0–2)
+## Release 0 — foundation and P0 closure (weeks 0–4)
 
 Deliver:
 
@@ -14,7 +14,7 @@ Deliver:
 
 Exit: ADRs 0007–0011 accepted; no real PII/live traffic; reproducible environment; P0 test plans executable; public docs do not claim runtime availability.
 
-## Release 1 — preview alpha (weeks 3–6)
+## Release 1 — secure local kernel and preview alpha (weeks 4–14)
 
 Workstreams:
 
@@ -23,15 +23,15 @@ Workstreams:
 - authenticated local bootstrap, sessions, Host/Origin/CSRF controls, step-up skeleton, permissioned CLI channel;
 - broker registry provenance/expiry/maturity and generated support matrix;
 - event store/projections, durable jobs, scheduler catch-up, external checkpoint;
-- separate observe-only connector artifact and mandatory egress gateway;
+- separate observe-only artifact, exact scan authorization/disclosure, generic external-action journal and mandatory online egress gateway;
 - local-lite Docker packaging, read-only exposure preview, evidence viewer, backup dry-run;
 - shared resource-budget manager; no browser/model runtime needed for activation.
 
-Exit: synthetic and selected read-only workflows survive restart, explain candidates, store encrypted bounded evidence, pass malicious-connector/auth/key tests, and cannot reach submit.
+Exit: synthetic and selected read-only workflows survive restart, explain candidates, store encrypted bounded evidence, pass malicious-connector/auth/key tests, and cannot reach removal submit. Real scans are external disclosures and require their own consent, journal, pause epoch and gateway permit.
 
-Learning gate: 10–15-person preview pilot reaches 80% setup within 15 minutes, at least 95% user-confirmed auto-threshold precision, at least 70% useful exposure, and zero external sends. Otherwise improve matching/setup before breadth.
+Learning gate: the preregistered 10–15-person preview pilot measures setup, participant-confirmed precision and usefulness with denominators and zero removal submissions. It never authorizes automatic matching; each automatic capability needs a separate independently reviewed match/authority corpus.
 
-## Release 2 — guided beta (weeks 7–10)
+## Release 2 — guided beta (weeks 14–19)
 
 - sourced U.S. policy framework separating voluntary/state/agent/official paths;
 - actor/profile authority and setup-authorization records with epochs;
@@ -44,23 +44,24 @@ Learning gate: 10–15-person preview pilot reaches 80% setup within 15 minutes,
 
 Exit: complete requests/evidence are prepared without transmission; every field/destination/basis is visible; user can pause/export/delete/restore; AI absence changes nothing.
 
-Learning gate: nobody mistakes acknowledgement/assertion/one absence for verified removal; at least 80% identify next action unaided; all automatic-onboarding participants identify destination and disclosed categories.
+Learning gate: nobody mistakes acknowledgement/assertion/one absence for verified removal; at least 80% identify next action unaided; all automatic-onboarding participants identify destination/transport, exact current/historical values, message/attachments, purpose and changes since prior authorization.
 
-## Release 3 — controlled automatic submission (weeks 11–14)
+## Release 3 — controlled automatic submission (weeks 19–26)
 
 - immutable external intent, separate attempts, monotonic fences, full journal state machine;
-- final dispatch reauthorization and mandatory gateway enforcement;
+- installation dispatch epoch outside backups, online first-byte authorization and mandatory typed-transport gateway enforcement;
+- signed monotonic update/revocation metadata and runtime artifact/signature/provenance verification;
 - SMTP/browser transports through isolated artifacts, with unknown-outcome reconciliation;
 - browser dedicated user/sandbox, challenge stop, downloads/alternate protocols denied;
 - kill switches, registry expiry/rollback protection, artifact digest/SBOM/provenance;
-- select 2–5 high-impact connectors with clear voluntary/legal paths and controlled canaries;
-- independent review of key/auth/connector/gateway/journal/legal posture.
+- select 2–5 high-impact automatic capabilities with clear voluntary/legal paths and controlled canaries;
+- independent shared-boundary review plus capability-specific policy/legal and connector/security review before canaries.
 
-Exit: a current setup authorization can automatically transmit an exact plan through a trusted connector; stale fence/revocation/pause cannot emit a byte; every crash edge produces proven/unknown/pre-send semantics; no blind retry.
+Exit: a current dedicated per-capability automation authorization can transmit an exact plan through a trusted capability; general setup/preview grants cannot enable send; stale fence/revocation/pause cannot emit a byte; every crash edge produces proven/unknown/pre-send semantics; no blind retry.
 
 Governance gate: a second qualified reviewer approves each `trusted` live submit capability. One-maintainer experiments remain `submission-candidate` and outside stable claims.
 
-## Release 4 — local stable v1 (weeks 15–18)
+## Release 4 — local release candidate (weeks 26–32)
 
 - time/method-correlated verification, one-absence/inconclusive UX, resurfacing occurrences;
 - disclosure/effectiveness/burden measures with denominators;
@@ -70,11 +71,20 @@ Governance gate: a second qualified reviewer approves each `trusted` live submit
 - generated support and conformance matrices;
 - local install/uninstall/scheduler pause/offboarding documentation.
 
-Exit: stable v1 gates in testing pass for one U.S. adult, local-lite, and the deliberately small trusted connector set. No unresolved P0/P1 finding lacks a public expiring disposition.
+Exit: release-candidate gates pass for one U.S. adult, local-lite, and the deliberately small trusted capability set. Zero P0 findings and no P1 on an enabled capability remain. The release remains `v1.0.0-rc`, not stable.
 
-Learning gate: twelve-week beta reports day-30/day-90 scheduler retention, confirmed precision, 30/60/90-day verified outcomes by method, manual minutes, disclosure cost, resurfacing, connector quarantine, unknown outcomes, and restore/offboarding results. Initial hypotheses: under ten manual minutes per active month and at least 60% day-90 retention.
+Learning evidence continues accumulating; it cannot be compressed into this four-week hardening interval.
 
-## Release 5 — cloud-small conformance (weeks 19–24)
+## Release 5 — stable evidence hold (weeks 32–40 or later)
+
+- maintain separate preview, guided and automatic cohorts; the automatic cohort must run at least twelve weeks after the first eligible canary and reach a mature day-90 denominator;
+- report day-30/day-90 scheduler retention, confirmed precision, 30/60/90-day verified outcomes by method/age, manual minutes, disclosure cost, resurfacing, connector quarantine, unknown outcomes, restore and offboarding;
+- rerun current product-comprehension, security, policy, accessibility, OSS and release gates;
+- generate the final capability/support/claim matrix from current evidence.
+
+Exit: stable `v1.0.0` is signed only when every gate passes. Initial hypotheses are under ten manual minutes per active month and at least 60% day-90 retention; they are not marketing promises.
+
+## Release 6 — cloud-small conformance (post-v1)
 
 - PostgreSQL queue/journal and object-store backends;
 - role separation, scheduler leadership, TLS ingress, passkey/WebAuthn or OIDC reference profile;
@@ -85,7 +95,7 @@ Learning gate: twelve-week beta reports day-30/day-90 scheduler retention, confi
 
 Exit: one single-tenant cloud reference profile restores and upgrades safely, meets auth/sandbox/egress/journal requirements, and makes no parity or multi-tenancy claim.
 
-## Release 6 — optional assist and ecosystem experiments (post-v1)
+## Release 7 — optional assist and ecosystem experiments (post-v1)
 
 - instrument manual task reasons/minutes first;
 - shadow one sanitized reply-classification or explanation task;
@@ -107,7 +117,7 @@ Exit for any assist preview: at least 30% task-time reduction, no safety/semanti
 7. Test rotation, old-catalog restore, and profile deletion.
 8. Define domain events, keyed chain, and external checkpoint.
 9. Implement SQLite durable jobs/outbox/leases.
-10. Add PostgreSQL journal/queue contract early.
+10. Keep persistence ports cloud-aware without adding an unsupported PostgreSQL runtime.
 11. Implement scheduler bounded catch-up.
 12. Define immutable external intent, attempts, and fences.
 13. Build kill-at-every-journal-edge simulator tests.
@@ -133,7 +143,7 @@ Exit for any assist preview: at least 30% task-time reduction, no safety/semanti
 
 - Before preview alpha: confirm one-adult support and reference local host.
 - Before guided beta: choose qualified U.S. policy/legal review scope.
-- Before automation: select 2–5 connectors and second reviewers.
+- Before automation: select 2–5 candidate capabilities and independent reviewers.
 - Before stable v1: resolve working-name review and publish security/legal dispositions.
-- Before cloud-small: choose the reference cloud/VM, ingress identity, KMS, and evidence store.
+- Before cloud-small (post-v1): choose the reference cloud/VM, ingress identity, KMS, and evidence store.
 - Before optional assist: choose one measured task, tested hardware tier, and model/runtime license.

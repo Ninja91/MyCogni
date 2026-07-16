@@ -9,12 +9,12 @@ MyCogni must assemble a complete identity profile to remove data. A database or 
 
 ## Decision
 
-Keep data in user-controlled local or single-tenant infrastructure. Generate an independent random data-encryption key for each profile and wrap it with an installation/cloud key-encryption key held outside the data store. Derive purpose-specific keys only below the profile key. Field-encrypt PII and object-encrypt evidence, bind ciphertext to record context, redact diagnostics by construction, and support profile deletion by destroying the profile key subject to recoverable key-catalog backup expiry.
+Keep stable-V1 data in user-controlled local infrastructure. Generate an independent random data-encryption key for each profile and wrap it with an installation key-encryption key held outside the data store and managed archives. Derive purpose-specific keys only below the profile key. Field-encrypt PII and object-encrypt evidence, bind ciphertext to record context, redact diagnostics by construction, and support profile deletion by destroying the profile key subject to known managed wrapped-catalog archive horizons.
 
 ## Consequences
 
 - Operators must manage a separate recovery key and can permanently lose data.
-- The wrapped-key catalog is a separate recovery asset. Profile deletion is not complete while a retained catalog backup can recover the destroyed profile key.
+- The wrapped-key catalog is a separately classified recovery asset included in a consistent managed archive, while KEK/recovery material stays separate. Deletion reports name known managed catalog horizons and external-backup limits.
 - Equality searches require narrowly approved blind indexes.
 - Migrations, backups, exports, and support flows must operate on ciphertext safely.
 - Cloud-small remains single-tenant until an entirely new tenancy/privacy design is reviewed.

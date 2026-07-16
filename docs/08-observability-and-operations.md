@@ -88,11 +88,11 @@ Quarantine changed capabilities, preserve observe only if its contract passes, c
 
 ### Key loss
 
-Stop all actions. Restore the key from the separate operator backup. If unavailable, encrypted PII/evidence is unrecoverable by design. Do not reset the key and attempt to continue against old ciphertext.
+Stop all actions. Restore KEK/recovery material from the separate operator source; the wrapped catalog comes from the managed archive. If recovery material is unavailable, encrypted PII/evidence is unrecoverable by design. Do not reset the key and attempt to continue against old ciphertext.
 
 ### Database restore
 
-Restore into isolation, supply KEK and key catalog separately, run migrations in dry-run, verify event/evidence hashes against the last external checkpoint, rebuild projections, keep external actions disabled, mark intents after the trusted backup/journal boundary unknown, reconcile receipts/mail/portals, review active leases/cases, then step-up and explicitly resume.
+Restore into isolation, supply separate KEK/recovery material, load the archive's wrapped catalog, run migrations in dry-run, verify event/evidence integrity against the checkpoint statement, and rebuild projections. Before any connector/gateway starts, rotate the external installation dispatch epoch, invalidate all mailboxes/permits, keep actions disabled, mark every restored nonterminal external intent `reconciliation_required` regardless of creation time, reconcile gateway facts/receipts/mail/portals, review leases/cases, then step up and explicitly resume.
 
 ### Optional assist failure
 

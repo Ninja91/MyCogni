@@ -58,7 +58,7 @@
           <ul class="hero-facts" aria-label="Project scope">
             <li><strong>U.S.-only</strong><span>first jurisdiction</span></li>
             <li><strong>Local-first</strong><span>single-tenant custody</span></li>
-            <li><strong>2–5</strong><span>trusted v1 connectors</span></li>
+            <li><strong>2–5</strong><span>trusted automatic capabilities</span></li>
           </ul>
         </div>
 
@@ -145,7 +145,7 @@
             <div>
               <p class="panel-label" id="promise-label">LOCAL CUSTODY</p>
               <h3 id="promise-heading">Your identity profile is not another SaaS dossier.</h3>
-              <p id="promise-copy">Sensitive attributes stay encrypted on infrastructure the user controls. Each profile has an independently random wrapped key, making per-profile cryptographic deletion possible without keeping a reproducible master-derived key.</p>
+              <p id="promise-copy">Stored source attributes remain encrypted under infrastructure the user controls. Only exact values shown in an authorized plan may leave for a displayed destination; each profile uses an independently random wrapped key.</p>
               <ul id="promise-points">
                 <li>Encrypted state and evidence</li>
                 <li>External wrapping key</li>
@@ -235,7 +235,7 @@
           <div class="architecture-detail" aria-live="polite">
             <p class="panel-label" id="arch-label">AUTHENTICATED USER CONTROL</p>
             <h3 id="arch-heading">The user establishes intent and exceptions.</h3>
-            <p id="arch-copy">The CLI or local web interface authenticates the actor, records setup authorization, previews disclosures, and demands step-up authentication for dangerous changes.</p>
+            <p id="arch-copy">The CLI or local web interface authenticates the actor, records separate scan consent, previews exact disclosures, and requires a dedicated step-up per-capability ceremony before automation can leave global pause.</p>
             <div class="authority-grid">
               <div><span>CAN</span><p id="arch-can">Authorize bounded actions, pause, revoke, export, delete.</p></div>
               <div><span>CANNOT</span><p id="arch-cannot">Turn an ambiguous identity match into a safe automatic request.</p></div>
@@ -280,24 +280,25 @@
         <div class="section-heading split-heading">
           <div>
             <p class="eyebrow">Evidence-gated, not calendar-gated</p>
-            <h2 id="roadmap-title">A 24-week route<br>to a narrow local v1.</h2>
+            <h2 id="roadmap-title">A 40-week-plus route<br>to a narrow local v1.</h2>
           </div>
           <p>The week ranges show order and size. Passing safety, legal, usability, and evidence gates—not elapsed time—unlocks the next release.</p>
         </div>
 
         <div class="roadmap-track" role="tablist" aria-label="Roadmap phases">
-          <button type="button" role="tab" aria-selected="true" aria-controls="phase-panel" id="phase-foundation" data-phase="foundation"><span>00–02</span><strong>Foundation</strong></button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-preview" data-phase="preview" tabindex="-1"><span>03–06</span><strong>Preview alpha</strong></button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-guided" data-phase="guided" tabindex="-1"><span>07–10</span><strong>Guided beta</strong></button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-automation" data-phase="automation" tabindex="-1"><span>11–14</span><strong>Automation</strong></button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-v1" data-phase="v1" tabindex="-1"><span>15–18</span><strong>Local v1</strong></button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-cloud" data-phase="cloud" tabindex="-1"><span>19–24</span><strong>Cloud-small</strong></button>
+          <button type="button" role="tab" aria-selected="true" aria-controls="phase-panel" id="phase-foundation" data-phase="foundation"><span>00–04</span><strong>Foundation</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-kernel" data-phase="kernel" tabindex="-1"><span>04–09</span><strong>Kernel</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-preview" data-phase="preview" tabindex="-1"><span>09–14</span><strong>Preview</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-guided" data-phase="guided" tabindex="-1"><span>14–19</span><strong>Guided</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-automation" data-phase="automation" tabindex="-1"><span>19–26</span><strong>Automation</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-v1" data-phase="v1" tabindex="-1"><span>26–32</span><strong>RC</strong></button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-stable" data-phase="stable" tabindex="-1"><span>32–40+</span><strong>Stable gate</strong></button>
         </div>
         <div class="phase-panel" id="phase-panel" role="tabpanel" tabindex="0" aria-labelledby="phase-foundation">
-          <div><p class="panel-label" id="phase-label">WEEKS 0–2</p><h3 id="phase-heading">Build the foundation that can say “no.”</h3><p id="phase-copy">Land the P0 decisions in code contracts, stand up a synthetic broker simulator, and create an authenticated control-plane skeleton without real PII or traffic.</p></div>
+          <div><p class="panel-label" id="phase-label">WEEKS 0–4</p><h3 id="phase-heading">Build the foundation that can say “no.”</h3><p id="phase-copy">Land locked project boundaries, a deterministic simulator, hermetic network-deny CI, stable threat IDs, and executable security spikes.</p></div>
           <div class="phase-gates"><span>EXIT GATES</span><ul id="phase-gates"><li>P0 ADRs accepted</li><li>Synthetic-only test path</li><li>Threat-to-requirement traceability</li></ul></div>
         </div>
-        <p class="roadmap-note">Optional local-assist evaluation comes <strong>after v1</strong> and only ships if it reduces review time without changing safety outcomes or leaking PII.</p>
+        <p class="roadmap-note">Cloud-small, OpenClaw, and optional local-assist evaluation come <strong>after v1</strong>. The week ranges are a planning envelope, not a promise; the completion matrix and evidence gates are authoritative.</p>
       </section>
 
       <section class="chapter review-section" id="reviews" data-chapter="reviews" aria-labelledby="reviews-title">
@@ -325,20 +326,21 @@
           </details>
           <details>
             <summary><span>Product management</span><strong>Win on proof, not broker count.</strong><i aria-hidden="true">+</i></summary>
-            <div><p>The stable-v1 wedge is one consenting adult, a small public preview set, guided flows, and only 2–5 reviewed automatic connectors.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/04-product-management.md">Read review →</a></div>
+            <div><p>The stable-v1 wedge is one consenting adult, a small public preview set, guided flows, and only 2–5 reviewed automatic capabilities.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/04-product-management.md">Read review →</a></div>
           </details>
           <details>
             <summary><span>Open-source contributor</span><strong>Connector authority must be earned.</strong><i aria-hidden="true">+</i></summary>
             <div><p>Capability-specific maturity, expiry, provenance, synthetic tests, and a qualified second reviewer guard the path to trusted submission.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/reviews/05-open-source-contributor.md">Read review →</a></div>
           </details>
         </div>
+        <p class="roadmap-note">A second three-hat V1 review rejected the original week-24 plan and forced restore epochs, scan authorization, transport-specific enforcement, signed revocation, and a week-40-or-later stable gate. <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/reviews/02-adversarial-review.md">Read the disposition →</a></p>
       </section>
 
       <section class="chapter next-section" id="next" aria-labelledby="next-title">
         <p class="eyebrow">Choose your way in</p>
         <h2 id="next-title">The architecture is ready.<br>The implementation is next.</h2>
         <div class="path-grid">
-          <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/10-execution-plan.md"><span>BUILD</span><h3>Start with Phase 0</h3><p>Trace the first work packages, dependencies, acceptance criteria, and release gates.</p><i aria-hidden="true">→</i></a>
+          <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/README.md"><span>BUILD</span><h3>Start with M0</h3><p>Trace more than 100 work packages, dependencies, adversarial dispositions, acceptance evidence, and release gates.</p><i aria-hidden="true">→</i></a>
           <a href="https://github.com/Ninja91/MyCogni/blob/main/CONTRIBUTING.md"><span>CONTRIBUTE</span><h3>Take a synthetic task</h3><p>Improve tests, threat cases, accessibility, broker facts, or architecture without using real PII.</p><i aria-hidden="true">→</i></a>
           <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/15-product-market-fit.md"><span>RESEARCH</span><h3>Test the wedge</h3><p>Run exposure-preview, proof-comprehension, switching, and recurring-burden experiments.</p><i aria-hidden="true">→</i></a>
         </div>

@@ -66,21 +66,21 @@ The runner receives the one-time action key through a separate channel. Output i
   "result": "candidate_found",
   "reason_code": "name_address_match",
   "external_reference": "sealed-value",
-  "evidence": [{"kind": "sanitized_html", "path": "runner-local-object"}],
+  "evidence": [{"kind": "sanitized_html", "mailbox_object_id": "opaque-object", "ciphertext_digest": "sha256:...", "bytes": 4096}],
   "disclosures": [{"attribute_type": "name", "destination": "privacy.example.test"}],
   "next": {"kind": "user_review"}
 }
 ```
 
-Free-form external content is stored as untrusted evidence and never interpreted as instructions.
+Free-form external content is stored as untrusted evidence and never interpreted as instructions. A connector never returns a filesystem path. It encrypts bounded evidence with the one-time action key and uploads it through the authenticated result/mailbox channel; core validates size/digest/schema and re-encrypts accepted content under the profile evidence key.
 
 ## Runtime and egress contract
 
 Every action runs non-root/rootless with a read-only root filesystem, tmpfs work directory, dropped capabilities, `no-new-privileges`, syscall policy, PID/CPU/RAM/time limits, and no core image, database, vault, wrapped-key catalog, Docker socket, host network, other connector session, or reusable core credential.
 
-The artifact has no direct network path. Every outbound connection crosses the egress gateway, which validates the current fence, authorization epoch, pause state, connector digest/capability, method/protocol, manifest origin, resolved public IP, redirect, exact disclosure plan, and byte/time budget. It denies private/loopback/link-local/metadata ranges, DNS rebinding, WebSocket/QUIC/DoH, undeclared destinations, downloads, and over-budget responses.
+The artifact has no direct network path. Every outbound connection crosses a fail-closed transport gateway. For declarative HTTP and mail, the trusted gateway/mailer originates the exact typed request or message. For browser TLS, it validates the online action permit, fence/dispatch epoch, pause state, connector digest/capability, protocol, manifest origin, resolved public IP, new redirect connections, and byte/time budget; it cannot inspect the encrypted method, path, body, or response semantics. It denies private/loopback/link-local/metadata ranges, DNS rebinding, proxy bypass, WebSocket/QUIC/DoH, undeclared destinations, downloads, and over-budget responses.
 
-The gateway cannot prevent a legitimate allowed broker from misusing the fields it receives. The permanent disclosure ledger and observe-before-disclose policy remain required.
+The gateway cannot prevent a legitimate allowed broker from misusing the fields it receives, and browser flows retain allowed-origin exfiltration risk. The durable disclosure ledger and observe-before-disclose policy remain required until user deletion/retention policy removes them.
 
 ## Connector lifecycle
 
@@ -124,7 +124,7 @@ CI never contacts a real broker. Live canaries run manually in a separately auth
 
 - factual changes require a source and access date;
 - high-risk capability changes require two maintainers when available;
-- maintainers may emergency-disable a connector version through a signed revocation list that users can opt to fetch;
+- maintainers may emergency-disable a connector version through signed monotonic revocation metadata; unattended observation/submission refreshes it before catch-up and fails closed when stale/unavailable, while user-modified offline trust is visibly non-community-supported;
 - update metadata must be versioned, expiring, rollback/freeze-resistant, delegated per capability, and linked to artifact digest/SBOM/build provenance;
 - the application shows whether registry updates are local, community-signed, stale, or user-modified;
 - user modifications never silently inherit community trust.

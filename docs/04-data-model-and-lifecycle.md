@@ -43,34 +43,21 @@ No database row stores a readable name, address, email, phone, date of birth, or
 
 ## Status semantics
 
-`case.status` is a rebuildable projection. Events remain the source of truth.
+Events remain the source of truth. Status is stored/projected on separate axes per finding/occurrence and right; one flat `case.status` is prohibited because it would merge identity, request, evidence and blockage truth.
 
-- `candidate`: possible record, not confirmed as the user;
-- `confirmed_present`: user or high-confidence policy confirmed a match;
-- `planned`: exact disclosure and request rendered;
-- `awaiting_approval`: an exception external action is blocked on user review/consent;
-- `approved`: the immutable plan hash is covered by setup authorization or an explicit exception approval;
-- `submitted`: transport evidence confirms transmission, not receipt or compliance;
-- `acknowledged`: the broker or transport confirmed receipt;
-- `in_progress`: broker processing or legal window active;
-- `needs_user_action`: verification, CAPTCHA, MFA, ambiguity, document, or account step;
-- `broker_asserted_removed`: broker claims compliance without independent verification;
-- `observed_absent_once`: one post-request method did not find the record; insufficient by itself for a verified claim;
-- `verified_removed`: time- or method-separated post-request corroboration found the confirmed record absent under the versioned verification policy;
-- `inconclusive`: a block, challenge, ambiguity, access difference, or missing/contradictory evidence prevents an absence conclusion;
-- `partially_completed`: some matched records or rights remain;
-- `denied_or_exempt`: broker gave a reason requiring review/escalation;
-- `overdue`: expected response/action date passed;
-- `failed`: bounded attempts exhausted or connector invalid;
-- `resurfaced`: a later observation found a confirmed matching record again;
-- `closed_unverified`: user ended work without verification;
-- `revoked`: user revoked an unsent or revocable case.
+- `match_state`: `candidate | ambiguous | confirmed | rejected`;
+- `request_state`: `none | planned | authorized | submitted | acknowledged | processing | closed`;
+- `dispatch_state`: `none | ready | claimed | cancelled_before_send | failed_before_send | dispatch_started | transport_proven | outcome_unknown | send_proven | no_send_proven | abandoned`;
+- `assurance_state`: `none | asserted | observed_absent_once | corroborated | inconclusive | resurfaced`;
+- `work_state`: `active | paused | needs_user | overdue | failed | closed_unverified | revoked`.
+
+A case summary is a rebuildable user-facing projection over these axes and all current occurrences. `transport_proven` affects request evidence only; it is not acknowledgement or compliance. `verified_removed` is rendered only for an identified occurrence whose `assurance_state=corroborated` satisfies the versioned verification policy. One verified occurrence never upgrades the entire broker case or another unresolved occurrence.
 
 ## Evidence model
 
 Evidence has three layers:
 
-1. searchable metadata: type, creation time, connector/version, case ID, retention class, MIME type, size, content hash;
+1. searchable metadata: type, creation time, connector/version, case ID, retention class, MIME type, size, ciphertext/storage hash, and keyed plaintext MAC for semantic integrity; predictable plaintext PII is never exposed through an unkeyed hash;
 2. encrypted content: screenshot, HTML excerpt, email, receipt, or structured response;
 3. redacted derivative: safe preview/report representation generated locally, preferring structured field-category differences over retained screenshots.
 
@@ -83,7 +70,7 @@ Screenshots and hostile page bodies are optional, encrypted, bounded, and short-
 | Class | Default | Rationale |
 | --- | --- | --- |
 | Authorization | life of active authority + jurisdictional audit window | prove lawful scope |
-| Raw finding evidence | 90 days after verified removal | minimize exposed page content |
+| Raw finding evidence | 90 days after verified removal, with an absolute maximum configured in the retention ADR for never-verified/abandoned cases | minimize exposed page content without indefinite retention |
 | Redacted verification evidence | 24 months | detect and explain resurfacing |
 | Request/response bodies | 24 months or until profile deletion | disputes and deadlines |
 | Browser session state | shortest connector-valid period, max 30 days by default | high credential risk |
@@ -93,7 +80,7 @@ Screenshots and hostile page bodies are optional, encrypted, bounded, and short-
 | Model weights | explicit cache, not a user-data backup | reproducible artifact, separately licensed |
 | Wrapped-key catalog backup | operator policy with visible profile-deletion horizon | recovery versus deletion truth |
 
-Users may shorten retention unless it would make a pending request unauditable. Profile deletion destroys the live random profile DEK and dependent indexes/session keys first, cancels work, then queues physical cleanup. The report remains `deletion_pending_backup_expiry` while a recoverable key-catalog backup can restore that DEK and lists data/object/catalog expiry separately.
+Users may shorten retention unless it would make a pending request unauditable. Profile deletion first pauses the profile, invalidates permits, cancels pre-dispatch work and reconciles every started/unknown attempt. The user must step up and explicitly accept lost reconciliation before forced abandonment. Only then does finalization destroy the live random profile DEK and sweep dependent jobs, envelopes, indexes, evidence and session material. Reports cover cryptographic inaccessibility in the live installation and known managed backups, list horizons separately, and warn that external snapshots/operator copies are outside MyCogni's inventory.
 
 ## Migration rules
 

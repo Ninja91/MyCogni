@@ -7,7 +7,7 @@ Interview recorded: 2026-07-15.
 | Decision | Maintainer direction | Architectural interpretation |
 | --- | --- | --- |
 | Initial jurisdiction | United States only | v1 publishes no support claim for EU, UK, Canada, or other jurisdictions |
-| External action | Automatic | trusted, fresh connectors automatically submit plans covered by setup authorization |
+| External action | Automatic | globally paused until a separate step-up per-capability automation authorization; only fresh trusted capabilities may then act |
 | Browser automation | Comfortable with Playwright | use an isolated Playwright/Chromium runner; stop for CAPTCHA, MFA, ambiguity, or drift |
 | Interface | Any is acceptable | implement CLI first for velocity and a minimal local web UI in the same early milestone |
 | License | Apache-2.0 if possible | accepted; canonical license text and NOTICE are vendored in the repository |
@@ -15,7 +15,7 @@ Interview recorded: 2026-07-15.
 
 ## Automatic execution contract
 
-“Automatic” means the user grants a scoped setup authorization during onboarding. A submission proceeds without a per-request click only when all of these remain true:
+“Automatic” means external actions start globally paused. After onboarding, the user must complete a separate, non-preselected, step-up-authenticated ceremony for each capability. A submission proceeds without a per-request click only when all of these remain true:
 
 - the profile owns the request and has active authority;
 - the connector capability is trusted, fresh, and not quarantined;
@@ -29,9 +29,9 @@ Any failed condition produces a visible task. CAPTCHA and MFA are user-completed
 
 ## Decisions made by the architecture
 
-- Deployment remains single-tenant: local-lite first, cloud-small next.
+- Stable v1 is local-lite only; cloud-small is a separate post-v1 conformance milestone.
 - Stable v1 officially supports one consenting adult per installation; profile isolation remains in the domain for later household support.
-- SQLite is used for one-worker local-lite; PostgreSQL is used for cloud-small.
+- SQLite is used for one-worker local-lite. PostgreSQL is only a post-v1 cloud-small candidate and has no current support claim.
 - Connectors are separate digest-pinned artifacts and all egress crosses a fenced policy gateway.
 - External action uses immutable intents, separate attempts, and explicit unknown outcomes rather than exactly-once claims.
 - Optional AI is absent from v1; a future local adapter returns untrusted suggestions, receives no raw PII/tools/authority, and can never submit.
@@ -48,9 +48,11 @@ These do not block the initial architecture, but they should be answered before 
 4. Which notification channels matter beyond the local UI and a PII-free digest?
 5. Which qualified reviewers can cover cryptography, connector isolation, and U.S. legal posture before live beta?
 6. Is “MyCogni” the final public name? Its similarity to “Incogni” requires trademark/confusion review before stable launch.
-7. Which cloud/VM, ingress identity provider, KMS, and evidence store should be the cloud-small reference?
+7. After stable v1, which cloud/VM, ingress identity provider, KMS, and evidence store should be the cloud-small reference?
 8. After v1 metrics exist, is one local advisory reply-triage experiment worth its model/runtime/license/resource cost?
 
 ## Decision protocol
 
 Material answers become ADRs. A decision that changes disclosure, legal authority, live external actions, encryption, tenancy, or jurisdiction support requires threat-model and test-plan updates before implementation.
+
+The remaining questions are tracked against milestones and blockers in the [stable V1 completion matrix](v1/COMPLETION_MATRIX.md).

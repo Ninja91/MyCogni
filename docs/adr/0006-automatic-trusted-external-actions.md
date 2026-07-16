@@ -9,7 +9,7 @@ The maintainer selected automatic execution. Hands-off operation is central to t
 
 ## Decision
 
-During onboarding the user grants a setup authorization scoped to a profile, U.S. jurisdiction policy, rights, broker/connector capability classes, destinations, and maximum attribute categories. MyCogni automatically submits an immutable request plan when a fresh trusted connector and current policy prove that the plan fits that authorization.
+External actions default globally paused. Onboarding and preview grants cannot enable send. After an exact plan exists, the user may complete a dedicated, non-preselected, step-up ceremony scoped to one capability, destination class, exact-value disclosure ceiling, expiry, pause/challenge and unknown-outcome behavior. MyCogni may automatically submit only when a fresh trusted capability, current authority/policy/match and immutable request plan still fit that automation authorization.
 
 Automation stops and creates a review task for an ambiguous match, new or high-risk attribute, identity document, authorization change, destination/terms/workflow drift, CAPTCHA, MFA, unexpected account control, connector quarantine, policy uncertainty, or unknown prior submission outcome. There is no blanket “send my complete profile to every broker” mode.
 
