@@ -1,1 +1,0 @@
-{"operation":"set","path":["records",0,"state"],"value":"MILESTONE_VERIFIED","expected":"milestone verification lacks a VERIFIED matrix claim"}

@@ -1,27 +1,22 @@
 # Governance traceability coverage
 
-Generated deterministically from canonical requirements, work packages, ADRs, the selected threat catalog, the traceability manifest and the completion matrix.
+Deterministic machine-registry report. No Markdown statement promotes package status.
 
-| Canonical inventory | Count |
-| --- | ---: |
-| Requirements | 90 |
-| Work packages | 106 |
-| ADRs | 11 |
-| Selected threats | 8 |
-| Verification IDs | 8 |
-| Traceability records | 8 |
-| Requirements mapped by current records | 7 |
-| ADRs mapped by current records | 2 |
+## Actual package state
 
-| Evidence state | Records |
-| --- | ---: |
-| Catalogued only | 0 |
-| Implemented | 0 |
-| Independently accepted | 8 |
-| Milestone verified | 0 |
+- Structured accepted records: `CT-001`, `TEL-001`, `THREAT-CATALOG-001`
+- Canonical COMPLETE packages: None
+- Canonical VERIFIED packages: None
 
-## Coverage boundary
+## Canonical inventories
 
-The selected threat catalog still has 7 planned controls. They are catalogued risks, not tested coverage.
-A passing package test and ACCEPT review support only the named package. They do not verify a milestone, prove every requirement, or turn documentation into implementation.
-Unmapped canonical inventory remains visible in the counts above; this first manifest normalizes current COMPLETE package claims and is not 100% requirement coverage.
+- Requirements (90): `AI-01`, `AI-02`, `AI-03`, `AI-04`, `AI-05`, `AI-06`, `AI-07`, `AI-08`, `AU-01`, `AU-02`, `AU-03`, `AU-04`, `AU-05`, `AU-06`, `BR-01`, `BR-02`, `BR-03`, `BR-04`, `BR-05`, `EV-01`, `EV-02`, `EV-03`, `EV-04`, `EV-05`, `EV-06`, `EV-07`, `EV-08`, `GEO-01`, `GOV-01`, `GOV-02`, `GOV-03`, `ID-01`, `ID-02`, `ID-03`, `ID-04`, `ID-05`, `ID-06`, `ID-07`, `IN-01`, `IN-02`, `IN-03`, `IN-04`, `OPS-01`, `OPS-02`, `OPS-03`, `OPS-04`, `PERF-01`, `PERF-02`, `PERF-03`, `PERF-04`, `PORT-01`, `PORT-02`, `PRV-01`, `REL-01`, `REL-02`, `RQ-01`, `RQ-02`, `RQ-03`, `RQ-03A`, `RQ-04`, `RQ-05`, `RQ-06`, `RQ-07`, `RQ-08`, `RQ-09`, `RQ-10`, `RQ-11`, `RQ-12`, `RQ-13`, `SEC-01`, `SEC-02`, `SEC-03`, `SEC-04`, `SEC-05`, `SEC-06`, `TEST-01`, `TEST-02`, `TEST-03`, `TEST-04`, `TEST-05`, `UX-01`, `UX-02`, `UX-03`, `UX-04`, `UX-05`, `UX-06`, `UX-07`, `UX-08`, `UX-09`, `UX-10`
+- Work packages (106): `A11Y-001`, `ACTION-001`, `AI-001`, `ALPHA-001`, `ARTIFACT-VERIFY-001`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `AUTHORITY-001`, `AUTHZ-001`, `AUTO-CONSENT-001`, `AUTO-ELIGIBILITY-001`, `BAK-001`, `BAK-002`, `BAK-RESTORE-001`, `BETA-001`, `BROW-001`, `CANARY-001`, `CASE-001`, `CASE-RESP-001`, `CHECKPOINT-001`, `CI-001`, `CLAIM-001`, `CON-001`, `CONN-SEL`, `CONSENT-001`, `CRED-001`, `CT-001`, `CUSTOM-001`, `DATA-001`, `DB-001`, `DELETE-FINALIZE-001`, `DELETE-PREFLIGHT-001`, `DIG-001`, `DIGEST-001`, `EVD-001`, `EVT-001`, `EXT-001`, `EXT-PRE-AUTO`, `GATEWAY-BASE-001`, `GOV-001`, `GUIDE-001`, `GW-001`, `HUMAN-001`, `INTENT-001`, `JOB-STATE-001`, `KEY-001`, `KEY-002`, `MAIL-001`, `MATCH-001`, `MIG-001`, `NET-001`, `OBS-001`, `OBS-AUTH-001`, `OFF-002`, `OFF-PRE-001`, `OPS-001`, `OSS-001`, `OUTBOX-001`, `PAUSE-001`, `PERMIT-001`, `PF-001`, `PF-002`, `PF-BOUNDARY`, `PF-CORE`, `PILOT-AUTO`, `PILOT-GUIDED`, `PILOT-PREVIEW`, `PLAN-001`, `PLAN-002`, `PMF-001`, `POL-001`, `PROOF-001`, `RC-001`, `REC-BASE-001`, `REC-BROWSER-001`, `REC-MAIL-001`, `REG-001`, `REG-002`, `REL-001`, `RES-001`, `RESEARCH-001`, `RESTORE-INTENT-001`, `REVIEWER-RECRUIT-001`, `RUN-001`, `SCHED-001`, `SIM-001`, `SPIKE-AUTH`, `SPIKE-BACKUP`, `SPIKE-BROWSER`, `SPIKE-EGRESS`, `SPIKE-KEY`, `SPIKE-RUNNER`, `SQLITE-DUR-001`, `STABLE-001`, `TEL-001`, `THREAT-CATALOG-001`, `TRUST-001`, `UPDATE-001`, `UPG-001`, `UX-001`, `UX-002`, `UX-003`, `VER-001`, `VER-002`, `VER-SIM-001`
+- ADRs (11): `ADR-0001`, `ADR-0002`, `ADR-0003`, `ADR-0004`, `ADR-0005`, `ADR-0006`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `ADR-0010`, `ADR-0011`
+- Trace records (3): `TRC-CT-001`, `TRC-TEL-001`, `TRC-THREAT-CATALOG-001`
+
+## Claim boundary
+
+An ACCEPT attestation establishes only the named reviewed package evidence. Canonical package status remains IN_PROGRESS until dependency closure and status-promotion rules pass.
+No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.
+GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.

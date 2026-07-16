@@ -1,0 +1,9 @@
+{"schema_version":1,"registry_version":"1.0.0","criteria":[
+  {"id":"ACC-CT-001","package":"CT-001","description":"Canonical opaque identifiers reject non-UUID4 values.","evidence_id":"EVD-CT-001"},
+  {"id":"ACC-TEL-001","package":"TEL-001","description":"Diagnostic dependency closure contains no logging or exporter dependency.","evidence_id":"EVD-TEL-001"},
+  {"id":"ACC-THREAT-CATALOG-001","package":"THREAT-CATALOG-001","description":"Threat catalog, schemas, evidence identity and report are internally valid.","evidence_id":"EVD-THREAT-CATALOG-001"}
+],"evidence":[
+  {"id":"EVD-CT-001","package":"CT-001","type":"PYTEST_NODE","ref":"tests/domain/test_contracts.py::test_opaque_id_requires_canonical_uuid4","criteria_marker":"governance_acceptance","content_sha256":"942d572c8604ecf03f580ccbbff8a7262b266e2971b936fee6f625c9054d3397"},
+  {"id":"EVD-TEL-001","package":"TEL-001","type":"PYTEST_NODE","ref":"tests/architecture/test_diagnostics_boundaries.py::test_complete_diagnostic_dependency_closure_has_no_export_or_logging_dependency","criteria_marker":"governance_acceptance","content_sha256":"0dab1d971b2e8af342d5d4e8e94c49dd13614905941e978a5fbfcb1992df00b5"},
+  {"id":"EVD-THREAT-CATALOG-001","package":"THREAT-CATALOG-001","type":"PYTEST_NODE","ref":"tests/ci/test_threat_catalog.py::test_threat_catalog_integrity_evidence","criteria_marker":"governance_acceptance","content_sha256":"8c671de554188034877f1f6dd20b2d93f97a030f576ba66f57785130044f1f62"}
+]}

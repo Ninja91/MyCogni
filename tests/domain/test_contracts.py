@@ -14,6 +14,7 @@ from mycogni.domain import Ciphertext, OpaqueId, OptimisticVersion, Redacted, Se
 ID_TEXT = "2cb84782-ad9f-47ab-9fa1-7487ad1ff40c"
 
 
+@pytest.mark.governance_acceptance
 def test_opaque_id_requires_canonical_uuid4() -> None:
     identifier = OpaqueId.parse(ID_TEXT)
     assert str(identifier) == ID_TEXT

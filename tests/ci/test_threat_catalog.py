@@ -58,6 +58,7 @@ def test_repository_catalog_is_valid_and_report_is_current() -> None:
 
 
 @pytest.mark.threat_evidence
+@pytest.mark.governance_acceptance
 def test_threat_catalog_integrity_evidence() -> None:
     catalog, registry, history = _documents()
     assert (

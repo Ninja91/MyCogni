@@ -50,6 +50,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 xfail_strict = true
 markers = [
+  "governance_acceptance: exact package acceptance criterion evidence",
   "threat_evidence: exact assertion-bearing test permitted as executable threat evidence",
 ]
 

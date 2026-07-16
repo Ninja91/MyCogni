@@ -165,6 +165,7 @@ def _assert_closure_safe(closure: dict[str, Path]) -> None:
         assert not imported & FORBIDDEN_IMPORTS, f"{module}: {imported & FORBIDDEN_IMPORTS}"
 
 
+@pytest.mark.governance_acceptance
 def test_complete_diagnostic_dependency_closure_has_no_export_or_logging_dependency() -> None:
     closure = _diagnostic_dependency_closure()
     assert {

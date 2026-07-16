@@ -1,1 +1,0 @@
-{"operation":"set","path":["records",0,"evidence"],"value":{"type":"SOURCE_DOCUMENT","ref":"docs/02-requirements.md"},"expected":"exact assertion-bearing pytest node"}

@@ -1,0 +1,12 @@
+{"schema_version":1,"registry_version":"1.0.0","milestone_attestations":[],"packages":[
+  {"id":"CI-001","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"CT-001","status":"IN_PROGRESS","evidence_ids":["EVD-CT-001"]},
+  {"id":"DB-001","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"GOV-001","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"PF-001","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"PF-002","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"PF-BOUNDARY","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"PF-CORE","status":"IN_PROGRESS","evidence_ids":[]},
+  {"id":"TEL-001","status":"IN_PROGRESS","evidence_ids":["EVD-TEL-001"]},
+  {"id":"THREAT-CATALOG-001","status":"IN_PROGRESS","evidence_ids":["EVD-THREAT-CATALOG-001"]}
+]}
