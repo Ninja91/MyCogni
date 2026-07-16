@@ -1,0 +1,2 @@
+# PEP 517 build isolation constraint used through UV_BUILD_CONSTRAINT.
+hatchling==1.27.0

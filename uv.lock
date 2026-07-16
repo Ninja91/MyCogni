@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12, <3.14"
 
+[manifest]
+members = [
+    "mycogni",
+    "mycogni-connector-sdk",
+]
+
 [[package]]
 name = "alembic"
 version = "1.18.5"
@@ -563,6 +569,11 @@ dev = [
     { name = "pytest-cov", specifier = ">=6,<8" },
     { name = "ruff", specifier = ">=0.9,<1" },
 ]
+
+[[package]]
+name = "mycogni-connector-sdk"
+version = "0.0.0"
+source = { editable = "packages/mycogni-connector-sdk" }
 
 [[package]]
 name = "mypy"

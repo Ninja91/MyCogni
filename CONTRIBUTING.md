@@ -6,14 +6,14 @@ The repository is an architecture/specification pack entering M0 implementation.
 
 ## Local development
 
-Install `uv`, then use the committed environment exactly:
+Install exact `uv 0.9.26`, then use the committed environment exactly:
 
 ```bash
 make bootstrap
 make check
 ```
 
-`make bootstrap` is frozen to `uv.lock`; dependency changes require an intentional `uv lock` update and review. Python 3.12 is the deployment baseline and Python 3.13 is the compatibility target. Do not use real PII or contact a real broker while developing or testing.
+`make bootstrap` is frozen to `uv.lock`, the reference interpreter is pinned to CPython 3.12.12, and isolated builds are constrained by `build-constraints.txt`. Dependency changes require the explicit `make lock-update` target and review. Python 3.13 remains a separately tested compatibility target; it is not the reference lock-update environment. Do not use real PII or contact a real broker while developing or testing.
 
 ## Ground rules
 

@@ -20,8 +20,8 @@ Documentation describing a future component is not implementation evidence for t
 | --- | --- | --- | --- |
 | Product/research architecture | `VERIFIED` | `README.md`, `docs/00`–`16`, source-graded research, requirements and threat model | keep synchronized with implementation findings |
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
-| Detailed V1 delivery plan | `VERIFIED` | 106-package acyclic DAG; three independent re-reviews report zero P0/P1 blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | integrate commit, then begin M0 without changing runtime status |
-| Runtime/project skeleton | `NOT_STARTED` | none | PF-001/PF-002/CI-001 |
+| Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
+| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY integrated; frozen 55-package lock, four import contracts and 15 tests pass on 2026-07-15 | independent recheck, PF-002 and CI-001 |
 | Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
@@ -33,7 +33,10 @@ Documentation describing a future component is not implementation evidence for t
 
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
-| Locked project and package boundaries | PF-001, PF-CORE, PF-BOUNDARY, PF-002 | `NOT_STARTED` | — | integration owns root lockfile; implement first vertical skeleton |
+| Root locked toolchain | PF-001 | `IN_PROGRESS` | `7602e59`; exact-toolchain/build-constraint corrections in current integration diff | independent recheck before `COMPLETE` |
+| Trusted-core boundaries | PF-CORE | `IN_PROGRESS` | `8980735`; four import contracts plus prohibited-edge fixtures | independent recheck before `COMPLETE` |
+| Connector protocol boundary | PF-BOUNDARY | `IN_PROGRESS` | `5c51d23`; isolated typed package and boundary tests | independent recheck before `COMPLETE` |
+| Multi-architecture build skeleton | PF-002 | `NOT_STARTED` | — | boundary package must be accepted first |
 | CI, safe diagnostics and traceability guards | CI-001, TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | depends on project skeleton |
 | SQLite/migration and shared contracts | DB-001, CT-001 | `NOT_STARTED` | — | freeze before parallel adapters |
 | Synthetic corpus and deterministic simulator | SIM-001 | `NOT_STARTED` | — | create reserved-domain fixtures |
@@ -41,7 +44,7 @@ Documentation describing a future component is not implementation evidence for t
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
 | Synthetic-only authenticated shell | UX-001 | `NOT_STARTED` | — | depends on auth/contracts |
-| M0 milestone | all M0 | `NOT_STARTED` | — | plan/re-review must land, then start PF-001/PF-CORE/PF-BOUNDARY |
+| M0 milestone | all M0 | `IN_PROGRESS` | plan and first three foundation packages integrated | complete remaining M0 packages and independently reproduce evidence |
 
 ## M1 — secure local kernel
 
@@ -129,10 +132,10 @@ These do not block M0 foundation work, but they block their named milestones:
 
 ## Next executable slice
 
-After the plan and adversarial disposition merge:
+Current next slice after the integrated foundation scaffolds:
 
-1. create the core and boundary worktrees, retaining this checkout as integration;
-2. start PF-001 in integration, PF-CORE/DB-001 in core, and PF-BOUNDARY/PF-002 in boundary;
+1. independently recheck PF-001/PF-CORE/PF-BOUNDARY and promote only packages whose acceptance evidence passes;
+2. start DB-001 in core and PF-002/CI-001 in the boundary/integration lanes;
 3. freeze CT-001 before adapters diverge;
 4. land NET-001 before any HTTP/browser/mail adapter can enter CI;
 5. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence.

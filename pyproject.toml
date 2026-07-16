@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -94,3 +94,15 @@ name = "Application does not import concrete adapters"
 type = "forbidden"
 source_modules = ["mycogni.application"]
 forbidden_modules = ["mycogni.adapters", "mycogni.bootstrap", "mycogni.entrypoints"]
+
+[[tool.importlinter.contracts]]
+name = "Adapters do not depend on delivery or composition"
+type = "forbidden"
+source_modules = ["mycogni.adapters"]
+forbidden_modules = ["mycogni.bootstrap", "mycogni.entrypoints"]
+
+[[tool.importlinter.contracts]]
+name = "Entrypoints do not access concrete adapters"
+type = "forbidden"
+source_modules = ["mycogni.entrypoints"]
+forbidden_modules = ["mycogni.adapters", "mycogni.bootstrap"]
