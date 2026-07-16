@@ -21,7 +21,7 @@ Documentation describing a future component is not implementation evidence for t
 | Product/research architecture | `VERIFIED` | `README.md`, `docs/00`–`16`, source-graded research, requirements and threat model | keep synchronized with implementation findings |
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
-| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY independently accepted; frozen 55-package lock, four import contracts and 17 tests pass on 2026-07-15 | PF-002 and CI-001 |
+| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY/CI-001 and DB-001 independently accepted; frozen 55-package lock, four import contracts and 56 tests pass on Python 3.12.12 on 2026-07-15 | PF-002 needs real two-architecture build evidence |
 | Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
@@ -36,9 +36,11 @@ Documentation describing a future component is not implementation evidence for t
 | Root locked toolchain | PF-001 | `COMPLETE` | `7602e59`, `50c57b9`; exact uv/Python/build constraints and clean-clone frozen bootstrap/check independently reproduced | await milestone-level verification with the rest of M0 |
 | Trusted-core boundaries | PF-CORE | `COMPLETE` | `8980735`, `50c57b9`; four import contracts, absolute/relative prohibited-edge fixtures and separate core wheel independently reproduced | preserve graph as real imports arrive |
 | Connector protocol boundary | PF-BOUNDARY | `COMPLETE` | `5c51d23`, `cef7b0b`; isolated typed package plus independently reproduced legal/package artifact inspection | validation and enforcement remain CT-001/RUN-001 work |
-| Multi-architecture build skeleton | PF-002 | `NOT_STARTED` | — | boundary package must be accepted first |
-| CI, safe diagnostics and traceability guards | CI-001, TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | depends on project skeleton |
-| SQLite/migration and shared contracts | DB-001, CT-001 | `NOT_STARTED` | — | freeze before parallel adapters |
+| Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`; pinned indexes, semantic hardening/shebang checks and build-attempt record | Docker engine must produce successful amd64/arm64 build and runtime-inspection logs before `COMPLETE` |
+| PR CI, frozen inputs and safety/claim guards | CI-001 | `COMPLETE` | `73c097a`, `56f40e6`; Python 3.12.12/3.13.11, immutable Actions and 12 negative CI fixtures independently reproduced | retain full-SHA Actions and update claim baseline explicitly |
+| Safe diagnostics and traceability catalog | TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | CI foundation is accepted |
+| SQLite and migration baseline | DB-001 | `COMPLETE` | `4b8e154`, `da7f406`; fail-closed physical-file/WAL/FULL/FK/timeout policy and Alembic round trips independently reproduced | locking/backup/filesystem qualification remain later packages |
+| Shared contracts | CT-001 | `NOT_STARTED` | — | freeze before parallel adapters |
 | Synthetic corpus and deterministic simulator | SIM-001 | `NOT_STARTED` | — | create reserved-domain fixtures |
 | Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
@@ -132,10 +134,10 @@ These do not block M0 foundation work, but they block their named milestones:
 
 ## Next executable slice
 
-Current next slice after the integrated foundation scaffolds:
+Current next slice after the accepted toolchain, boundary, CI and database packages:
 
-1. independently recheck PF-001/PF-CORE/PF-BOUNDARY and promote only packages whose acceptance evidence passes;
-2. start DB-001 in core and PF-002/CI-001 in the boundary/integration lanes;
-3. freeze CT-001 before adapters diverge;
+1. restore a responsive Docker engine and capture successful PF-002 amd64/arm64 build and inspection logs;
+2. freeze CT-001 before adapters diverge;
+3. start TEL-001/THREAT-CATALOG-001/GOV-001 and the deterministic SIM-001 corpus;
 4. land NET-001 before any HTTP/browser/mail adapter can enter CI;
 5. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence.
