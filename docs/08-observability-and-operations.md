@@ -4,7 +4,9 @@
 
 Operators need to know whether privacy work is progressing without turning diagnostics into a shadow identity database. Telemetry uses opaque per-installation IDs, broker IDs where safe, connector versions, state/reason codes, durations, and counts. It excludes profile identifiers that correlate across exports, identity values, URLs containing search terms, page titles, message bodies, selectors containing PII, screenshots, and authorization text.
 
-No remote telemetry is enabled by default.
+No remote telemetry is enabled by default. TEL-001 implements the initial typed, local-only
+contract described in [the V1 diagnostics specification](v1/TEL-001-DIAGNOSTICS.md); it does not
+yet compose a production server, browser, proxy, mailer, retention system, or support bundle.
 
 Generic HTTP auto-instrumentation is disabled unless an allowlist processor proves that query strings, headers, peer IPs, exception text, URLs, page titles, and request/response bodies are removed before any exporter or local store. Prefer hand-authored safe spans at domain boundaries.
 
@@ -17,7 +19,13 @@ time, level, component, action, result_code, connector_id,
 connector_version, duration_ms, retry_number, job_id, trace_id
 ```
 
-The log API does not accept arbitrary domain objects. Sensitive values implement a type that renders as `[REDACTED:<category>]`. CI seeds canary names/emails/phones and fails if they appear in logs, traces, metrics, error pages, or diagnostic bundles.
+The log API does not accept arbitrary domain objects. Its action/result values and exception
+categories are finite, event fields are catalog-bound, and correlations require opaque UUIDv4
+IDs. Sensitive values implement a type that renders as `[REDACTED:<category>]`, but even redacted
+domain values are not accepted as diagnostic fields. CI seeds synthetic canary names, emails,
+phones, URLs, headers, HTML, mail, proxy/browser content, and secrets and fails if they appear in
+the local JSON sink. Uvicorn access/default logs and future proxy/browser/mail automatic logs are
+deny-by-default; a later composition package must prove it applies those settings.
 
 ## Metrics
 
