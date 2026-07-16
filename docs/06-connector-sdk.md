@@ -63,7 +63,7 @@ The runner receives the one-time action key through a separate channel. Output i
 
 ```json
 {
-  "result": "candidate_found",
+  "result": "candidate_observed",
   "reason_code": "name_address_match",
   "external_reference": "sealed-value",
   "evidence": [{"kind": "sanitized_html", "mailbox_object_id": "opaque-object", "ciphertext_digest": "sha256:...", "bytes": 4096}],
@@ -73,6 +73,8 @@ The runner receives the one-time action key through a separate channel. Output i
 ```
 
 Free-form external content is stored as untrusted evidence and never interpreted as instructions. A connector never returns a filesystem path. It encrypts bounded evidence with the one-time action key and uploads it through the authenticated result/mailbox channel; core validates size/digest/schema and re-encrypts accepted content under the profile evidence key.
+
+Protocol-v1 results are finite attempt facts rather than capability outcomes. They distinguish no candidate, candidate observed, ambiguous candidates, payload prepared, transport receipt, broker acknowledgement, broker processing, broker-asserted completion, partial response, broker denial, challenge, inconclusive, and failed. Each fact accepts only its enumerated reason codes. In particular, `broker_asserted_complete` preserves attribution to the broker and cannot set the core's independently evaluated verification state. The aggregate evidence size is capped across all items. `external_reference`, when present, is a small base64url-safe opaque token; free-form external content belongs only in bounded encrypted evidence.
 
 ## Runtime and egress contract
 

@@ -23,12 +23,19 @@ to later work packages. This package performs none of those operations.
   a work-package/ADR reference; updating a snapshot alone is not acceptance.
 - Timestamps are aware UTC instants. IDs are opaque RFC 4122 UUIDv4 values. Origins are exact
   canonical HTTPS origins and never contain userinfo, paths, queries, fragments, IP literals, or
-  wildcards.
+  wildcards. A trailing slash is not canonical. Disclosure destinations are canonical hostnames
+  only and must equal the hostname of an allowed origin; the origin's optional non-default port is
+  enforced by the origin allowlist and is deliberately not duplicated in disclosure summaries.
 - Evidence crosses this schema only as a bounded mailbox object UUID, SHA-256 ciphertext digest,
-  and byte count. No version-1 model exposes a filesystem-path field.
+  and byte count. The aggregate evidence byte count is capped, not merely each item. Optional
+  external references are small base64url-safe opaque tokens, never free-form broker content. No
+  version-1 model exposes a filesystem-path field.
 
-The typed result and reason vocabularies describe one connector attempt only. In particular,
-`candidate_found`, `not_found`, or a broker assertion must never be rendered as verified removal.
+The typed result and reason vocabularies describe facts about one connector attempt across
+observe, prepare, submit, poll, and verify capabilities. Preparation, transport receipt, broker
+acknowledgement, processing, partial response, denial, and a broker assertion remain distinct.
+`broker_asserted_complete` records only an external assertion. It never permits a connector to
+claim MyCogni's independently evaluated removal-verification state.
 
 After an intentional reviewed schema change, regenerate the human-readable snapshots with
 `python scripts/generate_schema_snapshots.py` from this package directory. Tests fail on any

@@ -6,8 +6,16 @@ perform cryptography, or decide whether an external action may run.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from uuid import UUID, uuid4
+
+_SAFE_LABEL = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+def _validate_safe_label(value: str, field_name: str) -> None:
+    if not _SAFE_LABEL.fullmatch(value):
+        raise ValueError(f"{field_name} must be a 1-64 character lowercase ASCII slug")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,13 +55,17 @@ class Sensitive[T]:
     an ergonomics guard, not an access-control or encryption primitive.
     """
 
-    __slots__ = ("__value", "category")
+    __slots__ = ("__category", "__value")
 
     def __init__(self, value: T, *, category: str) -> None:
-        if not category or not category.isascii():
-            raise ValueError("sensitive category must be a non-empty ASCII label")
+        _validate_safe_label(category, "sensitive category")
         self.__value = value
-        self.category = category
+        self.__category = category
+
+    @property
+    def category(self) -> str:
+        """Return the validated, immutable redaction category."""
+        return self.__category
 
     def reveal(self) -> T:
         """Return the wrapped value for an explicitly reviewed boundary."""
@@ -77,8 +89,7 @@ class Redacted[T]:
     category: str
 
     def __post_init__(self) -> None:
-        if not self.category or not self.category.isascii():
-            raise ValueError("redacted category must be a non-empty ASCII label")
+        _validate_safe_label(self.category, "redacted category")
 
     def __str__(self) -> str:
         return f"[REDACTED:{self.category}]"
@@ -101,8 +112,7 @@ class Ciphertext:
     def __post_init__(self) -> None:
         if not self.payload:
             raise ValueError("ciphertext payload must not be empty")
-        if not self.algorithm or not self.algorithm.isascii():
-            raise ValueError("ciphertext algorithm must be a non-empty ASCII label")
+        _validate_safe_label(self.algorithm, "ciphertext algorithm")
         if not self.nonce:
             raise ValueError("ciphertext nonce must not be empty")
         if self.aad_version < 1:
@@ -111,7 +121,7 @@ class Ciphertext:
     def __repr__(self) -> str:
         return (
             "Ciphertext(payload=[REDACTED], "
-            f"algorithm={self.algorithm!r}, key_id={self.key_id!s}, "
+            f"algorithm={self.algorithm!r}, key_id=[REDACTED], "
             f"nonce_bytes={len(self.nonce)}, aad_version={self.aad_version})"
         )
 

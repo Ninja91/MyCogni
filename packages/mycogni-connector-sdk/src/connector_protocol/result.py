@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import UUID4, Field, field_validator, model_validator
 
@@ -12,6 +12,7 @@ from connector_protocol.manifest import (
     Digest,
     FrozenWireModel,
     require_unique,
+    validate_canonical_uuid_input,
     validate_hostname,
 )
 
@@ -21,11 +22,18 @@ MAX_DISCLOSURE_RECORDS = 64
 
 
 class ResultCode(StrEnum):
-    """Finite action result vocabulary; never a removal-verification claim."""
+    """Finite attempt facts; none is a core removal-verification claim."""
 
-    NOT_FOUND = "not_found"
-    CANDIDATE_FOUND = "candidate_found"
-    AMBIGUOUS = "ambiguous"
+    NO_CANDIDATE = "no_candidate"
+    CANDIDATE_OBSERVED = "candidate_observed"
+    AMBIGUOUS_CANDIDATES = "ambiguous_candidates"
+    PAYLOAD_PREPARED = "payload_prepared"
+    TRANSPORT_RECEIPT = "transport_receipt"
+    BROKER_ACKNOWLEDGED = "broker_acknowledged"
+    BROKER_PROCESSING = "broker_processing"
+    BROKER_ASSERTED_COMPLETE = "broker_asserted_complete"
+    PARTIAL_RESPONSE = "partial_response"
+    BROKER_DENIED = "broker_denied"
     CHALLENGE = "challenge"
     INCONCLUSIVE = "inconclusive"
     FAILED = "failed"
@@ -40,6 +48,15 @@ class ReasonCode(StrEnum):
     PARTIAL_MATCH = "partial_match"
     MULTIPLE_CANDIDATES = "multiple_candidates"
     INSUFFICIENT_MATCH = "insufficient_match"
+    PREPARATION_COMPLETE = "preparation_complete"
+    TRANSPORT_ACCEPTED = "transport_accepted"
+    BROKER_ACCEPTED = "broker_accepted"
+    BROKER_PENDING = "broker_pending"
+    BROKER_ASSERTION = "broker_assertion"
+    PARTIAL_COMPLETION = "partial_completion"
+    REQUEST_DENIED = "request_denied"
+    IDENTITY_NOT_ACCEPTED = "identity_not_accepted"
+    EXEMPTION_ASSERTED = "exemption_asserted"
     CAPTCHA_REQUIRED = "captcha_required"
     MFA_REQUIRED = "mfa_required"
     LOGIN_REQUIRED = "login_required"
@@ -57,12 +74,25 @@ class ReasonCode(StrEnum):
 
 
 _REASONS_BY_RESULT: dict[ResultCode, frozenset[ReasonCode]] = {
-    ResultCode.NOT_FOUND: frozenset({ReasonCode.NO_CANDIDATE}),
-    ResultCode.CANDIDATE_FOUND: frozenset(
+    ResultCode.NO_CANDIDATE: frozenset({ReasonCode.NO_CANDIDATE}),
+    ResultCode.CANDIDATE_OBSERVED: frozenset(
         {ReasonCode.NAME_ADDRESS_MATCH, ReasonCode.EXACT_MATCH, ReasonCode.PARTIAL_MATCH}
     ),
-    ResultCode.AMBIGUOUS: frozenset(
+    ResultCode.AMBIGUOUS_CANDIDATES: frozenset(
         {ReasonCode.MULTIPLE_CANDIDATES, ReasonCode.INSUFFICIENT_MATCH}
+    ),
+    ResultCode.PAYLOAD_PREPARED: frozenset({ReasonCode.PREPARATION_COMPLETE}),
+    ResultCode.TRANSPORT_RECEIPT: frozenset({ReasonCode.TRANSPORT_ACCEPTED}),
+    ResultCode.BROKER_ACKNOWLEDGED: frozenset({ReasonCode.BROKER_ACCEPTED}),
+    ResultCode.BROKER_PROCESSING: frozenset({ReasonCode.BROKER_PENDING}),
+    ResultCode.BROKER_ASSERTED_COMPLETE: frozenset({ReasonCode.BROKER_ASSERTION}),
+    ResultCode.PARTIAL_RESPONSE: frozenset({ReasonCode.PARTIAL_COMPLETION}),
+    ResultCode.BROKER_DENIED: frozenset(
+        {
+            ReasonCode.REQUEST_DENIED,
+            ReasonCode.IDENTITY_NOT_ACCEPTED,
+            ReasonCode.EXEMPTION_ASSERTED,
+        }
     ),
     ResultCode.CHALLENGE: frozenset(
         {
@@ -101,6 +131,11 @@ class EvidenceReference(FrozenWireModel):
     ciphertext_digest: Digest
     byte_count: Annotated[int, Field(gt=0, le=MAX_EVIDENCE_BYTES)]
 
+    @field_validator("mailbox_object_id", mode="before")
+    @classmethod
+    def mailbox_id_uses_canonical_text(cls, value: Any, info: Any) -> Any:
+        return validate_canonical_uuid_input(value, info.field_name)
+
 
 class DisclosureRecord(FrozenWireModel):
     """Typed summary of an attribute category disclosed by this action."""
@@ -130,19 +165,30 @@ class NextStep(FrozenWireModel):
 
 
 class ResultEnvelope(FrozenWireModel):
-    """Structured attempt result without outcome or verification inference."""
+    """Structured attempt fact without core outcome or verification inference."""
 
     protocol_version: Literal[1]
     action_id: UUID4
     attempt_id: UUID4
     result: ResultCode
     reason_code: ReasonCode
-    external_reference: Annotated[str, Field(min_length=1, max_length=1_048_576)] | None = None
+    external_reference: (
+        Annotated[
+            str,
+            Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+        ]
+        | None
+    ) = None
     evidence: Annotated[tuple[EvidenceReference, ...], Field(max_length=MAX_EVIDENCE_ITEMS)] = ()
     disclosures: Annotated[
         tuple[DisclosureRecord, ...], Field(max_length=MAX_DISCLOSURE_RECORDS)
     ] = ()
     next: NextStep = NextStep(kind=NextStepKind.NONE)
+
+    @field_validator("action_id", "attempt_id", mode="before")
+    @classmethod
+    def ids_use_canonical_text(cls, value: Any, info: Any) -> Any:
+        return validate_canonical_uuid_input(value, info.field_name)
 
     @field_validator("evidence")
     @classmethod
@@ -159,7 +205,9 @@ class ResultEnvelope(FrozenWireModel):
         return require_unique(value, "disclosures")
 
     @model_validator(mode="after")
-    def reason_matches_result(self) -> Self:
+    def result_constraints_hold(self) -> Self:
         if self.reason_code not in _REASONS_BY_RESULT[self.result]:
             raise ValueError(f"reason_code {self.reason_code} is invalid for result {self.result}")
+        if sum(item.byte_count for item in self.evidence) > MAX_EVIDENCE_BYTES:
+            raise ValueError(f"aggregate evidence byte_count must not exceed {MAX_EVIDENCE_BYTES}")
         return self

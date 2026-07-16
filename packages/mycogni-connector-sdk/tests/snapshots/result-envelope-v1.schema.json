@@ -96,6 +96,15 @@
         "partial_match",
         "multiple_candidates",
         "insufficient_match",
+        "preparation_complete",
+        "transport_accepted",
+        "broker_accepted",
+        "broker_pending",
+        "broker_assertion",
+        "partial_completion",
+        "request_denied",
+        "identity_not_accepted",
+        "exemption_asserted",
         "captcha_required",
         "mfa_required",
         "login_required",
@@ -115,11 +124,18 @@
       "type": "string"
     },
     "ResultCode": {
-      "description": "Finite action result vocabulary; never a removal-verification claim.",
+      "description": "Finite attempt facts; none is a core removal-verification claim.",
       "enum": [
-        "not_found",
-        "candidate_found",
-        "ambiguous",
+        "no_candidate",
+        "candidate_observed",
+        "ambiguous_candidates",
+        "payload_prepared",
+        "transport_receipt",
+        "broker_acknowledged",
+        "broker_processing",
+        "broker_asserted_complete",
+        "partial_response",
+        "broker_denied",
         "challenge",
         "inconclusive",
         "failed"
@@ -129,7 +145,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Structured attempt result without outcome or verification inference.",
+  "description": "Structured attempt fact without core outcome or verification inference.",
   "properties": {
     "action_id": {
       "format": "uuid4",
@@ -162,8 +178,9 @@
     "external_reference": {
       "anyOf": [
         {
-          "maxLength": 1048576,
+          "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
           "type": "string"
         },
         {

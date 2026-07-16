@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -77,6 +78,18 @@ def validate_hostname(value: str, field_name: str) -> str:
     return value
 
 
+def validate_canonical_uuid_input(value: Any, field_name: str) -> Any:
+    """Reject noncanonical textual UUID spellings before Pydantic UUID parsing."""
+    if isinstance(value, str):
+        try:
+            parsed = UUID(value)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a canonical UUID") from exc
+        if str(parsed) != value:
+            raise ValueError(f"{field_name} must use canonical lowercase UUID syntax")
+    return value
+
+
 def validate_https_origin(value: str) -> str:
     """Validate an exact HTTPS origin without credentials, path, query, or wildcard."""
     if value != value.lower() or "*" in value or not value.isascii():
@@ -86,7 +99,7 @@ def validate_https_origin(value: str) -> str:
         raise ValueError("origin must use https and include a hostname")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("origin must not contain userinfo")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+    if parsed.path or parsed.query or parsed.fragment:
         raise ValueError("origin must not contain a path, query, or fragment")
     validate_hostname(parsed.hostname, "origin hostname")
     try:
@@ -99,7 +112,7 @@ def validate_https_origin(value: str) -> str:
     if port is not None and port != 443:
         canonical_netloc = f"{canonical_netloc}:{port}"
     canonical = urlunsplit(("https", canonical_netloc, "", "", ""))
-    if value.rstrip("/") != canonical:
+    if value != canonical:
         raise ValueError("origin must use canonical syntax")
     return canonical
 
@@ -193,4 +206,19 @@ class ConnectorManifest(FrozenWireModel):
     def expiry_follows_review(self) -> Self:
         if self.expires_at_utc <= self.reviewed_at_utc:
             raise ValueError("expires_at_utc must be later than reviewed_at_utc")
+        allowed_hosts = {
+            hostname
+            for origin in self.allowed_origins
+            if (hostname := urlsplit(origin).hostname) is not None
+        }
+        undeclared = {
+            disclosure.destination
+            for disclosure in self.disclosures
+            if disclosure.destination not in allowed_hosts
+        }
+        if undeclared:
+            raise ValueError(
+                "disclosure destinations must equal an allowed-origin hostname: "
+                f"{sorted(undeclared)}"
+            )
         return self

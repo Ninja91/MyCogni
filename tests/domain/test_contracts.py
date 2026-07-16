@@ -41,7 +41,38 @@ def test_sensitive_and_ciphertext_rendering_never_contains_payload() -> None:
     )
     assert "synthetic-ciphertext" not in repr(ciphertext)
     assert "synthetic-nonce" not in repr(ciphertext)
+    assert ID_TEXT not in repr(ciphertext)
     assert str(ciphertext) == "[REDACTED:ciphertext]"
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "",
+        "Email",
+        "email address",
+        "email:spoof",
+        "email\nforged-log-line",
+        "email\rforged-log-line",
+        "email\x1b[31m",
+        "a" * 65,
+    ],
+)
+def test_redaction_category_rejects_log_injection(category: str) -> None:
+    with pytest.raises(ValueError, match="lowercase ASCII slug"):
+        Sensitive("synthetic-secret", category=category)
+    with pytest.raises(ValueError, match="lowercase ASCII slug"):
+        Redacted[object](category=category)
+
+
+def test_safe_redaction_category_renders_as_one_fixed_line() -> None:
+    sensitive = Sensitive("synthetic-secret", category="identity_email")
+    assert str(sensitive) == "[REDACTED:identity_email]"
+    assert "\n" not in str(sensitive)
+    assert "\x1b" not in repr(sensitive)
+    category_attribute = "category"
+    with pytest.raises(AttributeError):
+        setattr(sensitive, category_attribute, "email\nforged-log-line")
 
 
 def test_optimistic_version_is_nonnegative_and_monotonic() -> None:

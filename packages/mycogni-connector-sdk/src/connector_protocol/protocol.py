@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
-from uuid import UUID
 
 from pydantic import UUID4, AwareDatetime, Field, field_validator
 
@@ -15,6 +14,7 @@ from connector_protocol.manifest import (
     Capability,
     FrozenWireModel,
     require_unique,
+    validate_canonical_uuid_input,
     validate_https_origin,
     validate_utc,
 )
@@ -64,12 +64,10 @@ class ActionEnvelope(FrozenWireModel):
     attempt: Annotated[int, Field(ge=0)]
     budget: ActionBudget
 
-    @field_validator("action_id", "intent_id", "attempt_id", "profile_ref")
+    @field_validator("action_id", "intent_id", "attempt_id", "profile_ref", mode="before")
     @classmethod
-    def ids_are_rfc4122(cls, value: UUID) -> UUID:
-        if value.variant != UUID("00000000-0000-4000-8000-000000000000").variant:
-            raise ValueError("opaque IDs must use the RFC 4122 UUID variant")
-        return value
+    def ids_use_canonical_text(cls, value: Any, info: Any) -> Any:
+        return validate_canonical_uuid_input(value, info.field_name)
 
     @field_validator("connector_release")
     @classmethod

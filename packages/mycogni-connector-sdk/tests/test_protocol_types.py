@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from connector_protocol import ActionEnvelope, ConnectorManifest, ResultEnvelope
+from connector_protocol import (
+    ActionEnvelope,
+    ConnectorManifest,
+    ReasonCode,
+    ResultCode,
+    ResultEnvelope,
+)
 
 UUIDS = {
     "action": "2cb84782-ad9f-47ab-9fa1-7487ad1ff40c",
@@ -17,6 +23,7 @@ UUIDS = {
     "attempt": "26fc0371-5b37-4452-8569-95564cc83edb",
     "profile": "93cb45b8-843f-4af1-8642-d70903d0919f",
     "mailbox": "470c0e4b-ce29-4eb5-8a1f-dd672e342fac",
+    "mailbox_2": "8a6c587d-0738-46b0-8e6f-badd554329d9",
 }
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
@@ -72,7 +79,7 @@ def result_payload() -> dict[str, Any]:
         "protocol_version": 1,
         "action_id": UUIDS["action"],
         "attempt_id": UUIDS["attempt"],
-        "result": "candidate_found",
+        "result": "candidate_observed",
         "reason_code": "name_address_match",
         "external_reference": "sealed-external-reference",
         "evidence": [
@@ -155,6 +162,7 @@ def test_unknown_protocol_versions_fail(
         "http://broker.example.test",
         "https://user@broker.example.test",
         "https://broker.example.test/privacy",
+        "https://broker.example.test/",
         "https://*.example.test",
         "https://127.0.0.1",
         "https://broker.example.test:0",
@@ -218,6 +226,23 @@ def test_disclosure_identity_cannot_be_redeclared_with_a_new_purpose(
         ConnectorManifest.model_validate_json(json.dumps(manifest_payload))
 
 
+def test_disclosure_destination_must_be_an_allowed_origin_hostname(
+    manifest_payload: dict[str, Any],
+) -> None:
+    manifest_payload["disclosures"][0]["destination"] = "evil.example.test"
+    with pytest.raises(ValidationError, match="allowed-origin hostname"):
+        ConnectorManifest.model_validate_json(json.dumps(manifest_payload))
+
+
+def test_disclosure_hostname_maps_to_origin_with_nondefault_port(
+    manifest_payload: dict[str, Any],
+) -> None:
+    manifest_payload["allowed_origins"] = ["https://broker.example.test:8443"]
+    manifest = ConnectorManifest.model_validate_json(json.dumps(manifest_payload))
+    assert manifest.disclosures[0].destination == "broker.example.test"
+    assert manifest.allowed_origins == ("https://broker.example.test:8443",)
+
+
 def test_non_utc_or_reversed_manifest_expiry_fails(manifest_payload: dict[str, Any]) -> None:
     manifest_payload["expires_at_utc"] = "2029-12-31T16:00:00-08:00"
     with pytest.raises(ValidationError, match="UTC"):
@@ -236,6 +261,32 @@ def test_non_uuid4_identifiers_fail(action_payload: dict[str, Any]) -> None:
         ActionEnvelope.model_validate_json(json.dumps(action_payload))
 
 
+@pytest.mark.parametrize("field", ["action_id", "intent_id", "attempt_id", "profile_ref"])
+@pytest.mark.parametrize("spelling", ["uppercase", "braced"])
+def test_action_ids_reject_noncanonical_uuid_text(
+    field: str,
+    spelling: str,
+    action_payload: dict[str, Any],
+) -> None:
+    value = action_payload[field]
+    action_payload[field] = value.upper() if spelling == "uppercase" else "{" + value + "}"
+    with pytest.raises(ValidationError, match="canonical lowercase UUID syntax"):
+        ActionEnvelope.model_validate_json(json.dumps(action_payload))
+
+
+@pytest.mark.parametrize("target", ["action_id", "attempt_id", "mailbox_object_id"])
+def test_result_ids_reject_noncanonical_uuid_text(
+    target: str,
+    result_payload: dict[str, Any],
+) -> None:
+    if target == "mailbox_object_id":
+        result_payload["evidence"][0][target] = result_payload["evidence"][0][target].upper()
+    else:
+        result_payload[target] = result_payload[target].upper()
+    with pytest.raises(ValidationError, match="canonical lowercase UUID syntax"):
+        ResultEnvelope.model_validate_json(json.dumps(result_payload))
+
+
 def test_bad_digest_and_zero_evidence_size_fail(result_payload: dict[str, Any]) -> None:
     result_payload["evidence"][0]["ciphertext_digest"] = "sha256:not-a-digest"
     result_payload["evidence"][0]["byte_count"] = 0
@@ -247,6 +298,123 @@ def test_reason_must_match_result(result_payload: dict[str, Any]) -> None:
     result_payload["reason_code"] = "captcha_required"
     with pytest.raises(ValidationError, match="invalid for result"):
         ResultEnvelope.model_validate_json(json.dumps(result_payload))
+
+
+def test_aggregate_evidence_size_is_bounded(result_payload: dict[str, Any]) -> None:
+    first = result_payload["evidence"][0]
+    first["byte_count"] = 40_000_000
+    second = deepcopy(first)
+    second["mailbox_object_id"] = UUIDS["mailbox_2"]
+    second["ciphertext_digest"] = DIGEST_B
+    second["byte_count"] = 30_000_000
+    result_payload["evidence"].append(second)
+    with pytest.raises(ValidationError, match="aggregate evidence"):
+        ResultEnvelope.model_validate_json(json.dumps(result_payload))
+
+
+def test_aggregate_evidence_size_accepts_exact_limit(result_payload: dict[str, Any]) -> None:
+    first = result_payload["evidence"][0]
+    first["byte_count"] = 40_000_000
+    second = deepcopy(first)
+    second["mailbox_object_id"] = UUIDS["mailbox_2"]
+    second["ciphertext_digest"] = DIGEST_B
+    second["byte_count"] = 27_108_864
+    result_payload["evidence"].append(second)
+    parsed = ResultEnvelope.model_validate_json(json.dumps(result_payload))
+    assert sum(item.byte_count for item in parsed.evidence) == 67_108_864
+
+
+@pytest.mark.parametrize(
+    "external_reference",
+    [
+        "broker content with spaces",
+        "<html>untrusted content</html>",
+        "opaque\nforged-log-line",
+        "a" * 129,
+    ],
+)
+def test_external_reference_cannot_smuggle_free_form_content(
+    external_reference: str,
+    result_payload: dict[str, Any],
+) -> None:
+    result_payload["external_reference"] = external_reference
+    with pytest.raises(ValidationError):
+        ResultEnvelope.model_validate_json(json.dumps(result_payload))
+
+
+RESULT_REASON_MATRIX: dict[ResultCode, frozenset[ReasonCode]] = {
+    ResultCode.NO_CANDIDATE: frozenset({ReasonCode.NO_CANDIDATE}),
+    ResultCode.CANDIDATE_OBSERVED: frozenset(
+        {ReasonCode.NAME_ADDRESS_MATCH, ReasonCode.EXACT_MATCH, ReasonCode.PARTIAL_MATCH}
+    ),
+    ResultCode.AMBIGUOUS_CANDIDATES: frozenset(
+        {ReasonCode.MULTIPLE_CANDIDATES, ReasonCode.INSUFFICIENT_MATCH}
+    ),
+    ResultCode.PAYLOAD_PREPARED: frozenset({ReasonCode.PREPARATION_COMPLETE}),
+    ResultCode.TRANSPORT_RECEIPT: frozenset({ReasonCode.TRANSPORT_ACCEPTED}),
+    ResultCode.BROKER_ACKNOWLEDGED: frozenset({ReasonCode.BROKER_ACCEPTED}),
+    ResultCode.BROKER_PROCESSING: frozenset({ReasonCode.BROKER_PENDING}),
+    ResultCode.BROKER_ASSERTED_COMPLETE: frozenset({ReasonCode.BROKER_ASSERTION}),
+    ResultCode.PARTIAL_RESPONSE: frozenset({ReasonCode.PARTIAL_COMPLETION}),
+    ResultCode.BROKER_DENIED: frozenset(
+        {
+            ReasonCode.REQUEST_DENIED,
+            ReasonCode.IDENTITY_NOT_ACCEPTED,
+            ReasonCode.EXEMPTION_ASSERTED,
+        }
+    ),
+    ResultCode.CHALLENGE: frozenset(
+        {
+            ReasonCode.CAPTCHA_REQUIRED,
+            ReasonCode.MFA_REQUIRED,
+            ReasonCode.LOGIN_REQUIRED,
+            ReasonCode.MANUAL_REVIEW_REQUIRED,
+        }
+    ),
+    ResultCode.INCONCLUSIVE: frozenset(
+        {
+            ReasonCode.TIMEOUT,
+            ReasonCode.RATE_LIMITED,
+            ReasonCode.SCHEMA_DRIFT,
+            ReasonCode.EVIDENCE_UNAVAILABLE,
+            ReasonCode.UNEXPECTED_RESPONSE,
+        }
+    ),
+    ResultCode.FAILED: frozenset(
+        {
+            ReasonCode.INVALID_ACTION,
+            ReasonCode.REVOKED_AUTHORITY,
+            ReasonCode.STALE_FENCE,
+            ReasonCode.BUDGET_EXCEEDED,
+            ReasonCode.CONNECTOR_ERROR,
+        }
+    ),
+}
+
+
+def test_result_reason_matrix_is_total() -> None:
+    assert set(RESULT_REASON_MATRIX) == set(ResultCode)
+    assert set().union(*RESULT_REASON_MATRIX.values()) == set(ReasonCode)
+
+
+@pytest.mark.parametrize(
+    ("result", "reason"),
+    [(result, reason) for result in ResultCode for reason in ReasonCode],
+)
+def test_every_result_reason_pair_is_accepted_or_rejected_by_the_frozen_matrix(
+    result: ResultCode,
+    reason: ReasonCode,
+    result_payload: dict[str, Any],
+) -> None:
+    result_payload["result"] = result.value
+    result_payload["reason_code"] = reason.value
+    if reason in RESULT_REASON_MATRIX[result]:
+        parsed = ResultEnvelope.model_validate_json(json.dumps(result_payload))
+        assert parsed.result is result
+        assert parsed.reason_code is reason
+    else:
+        with pytest.raises(ValidationError, match="invalid for result"):
+            ResultEnvelope.model_validate_json(json.dumps(result_payload))
 
 
 def test_models_are_frozen(action_payload: dict[str, Any]) -> None:
