@@ -1,0 +1,1 @@
+{"operation":"set","document":"registry","path":["tests",1,"implementation"],"value":"tests/ci/not_present.py","expected":"broken implementation path"}

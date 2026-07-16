@@ -1,0 +1,1 @@
+{"operation":"swap","document":"catalog","path":["threats",0,"requirements"],"indices":[0,1],"expected":"requirements must be sorted with no duplicates"}

@@ -1,0 +1,1 @@
+{"operation":"append_copy","document":"registry","path":["tests"],"source":["tests",0],"expected":"duplicate verification test ID"}

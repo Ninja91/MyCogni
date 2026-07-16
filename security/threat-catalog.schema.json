@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mycogni.example/schemas/threat-catalog-v1.json",
+  "title": "MyCogni threat catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_version", "threats"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "catalog_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "threats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "title", "severity", "assets", "boundary", "failure_story",
+          "mitigations", "requirements", "work_packages", "verification_tests",
+          "evidence", "sources", "owner", "milestone", "status"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^THR-[A-Z0-9]+-[0-9]{3}$"},
+          "title": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+          "assets": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "boundary": {"enum": ["CONTROL_PLANE", "TRUSTED_CORE", "VAULT", "CONNECTOR_RUNTIME", "EGRESS_GATEWAY", "EXTERNAL_CONTENT", "LOCAL_INTELLIGENCE", "INTEGRATIONS_DIAGNOSTICS"]},
+          "failure_story": {"type": "string", "minLength": 1},
+          "mitigations": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "requirements": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "work_packages": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "verification_tests": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "sources": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "owner": {"enum": ["CORE", "BOUNDARY", "INTERFACE", "CROSS_CUTTING"]},
+          "milestone": {"enum": ["M0", "M1", "M2", "M3", "M4", "M5", "M6"]},
+          "status": {"enum": ["CATALOGED", "CONTROL_PLANNED", "CONTROL_TESTED", "DEPRECATED"]}
+        }
+      }
+    }
+  }
+}

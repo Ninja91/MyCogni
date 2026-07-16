@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "registry_version": "1.0.0",
+  "tests": [
+    {
+      "id": "VFY-AUTH-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-AUTH-001"]
+    },
+    {
+      "id": "VFY-CATALOG-001",
+      "implementation": "tests/ci/test_threat_catalog.py",
+      "status": "IMPLEMENTED",
+      "threats": ["THR-GOV-001"]
+    },
+    {
+      "id": "VFY-DISPATCH-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-DISPATCH-001"]
+    },
+    {
+      "id": "VFY-EGRESS-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-EGRESS-001"]
+    },
+    {
+      "id": "VFY-KEYS-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-KEYS-001"]
+    },
+    {
+      "id": "VFY-LOGS-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-LOGS-001"]
+    },
+    {
+      "id": "VFY-RUNNER-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-RUNNER-001"]
+    },
+    {
+      "id": "VFY-VERIFY-001",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-VERIFY-001"]
+    }
+  ]
+}

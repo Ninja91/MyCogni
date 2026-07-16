@@ -1,0 +1,1 @@
+{"operation":"swap","document":"catalog","path":["threats"],"indices":[0,1],"expected":"threats must be sorted by canonical ID"}

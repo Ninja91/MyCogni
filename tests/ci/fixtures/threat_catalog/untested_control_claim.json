@@ -1,0 +1,1 @@
+{"operation":"set","document":"registry","path":["tests",1,"status"],"value":"PLANNED","expected":"CONTROL_TESTED requires an IMPLEMENTED test"}
