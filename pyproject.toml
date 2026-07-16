@@ -46,6 +46,7 @@ members = ["packages/*"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
+pythonpath = ["."]
 testpaths = ["tests"]
 xfail_strict = true
 

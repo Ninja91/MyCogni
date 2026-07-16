@@ -1,0 +1,19 @@
+{
+  "Program summary/Auth/key/data/durable kernel": "NOT_STARTED",
+  "Program summary/Automatic connectors/egress": "NOT_STARTED",
+  "Program summary/Detailed V1 delivery plan": "VERIFIED",
+  "Program summary/Interactive architecture walkthrough": "VERIFIED",
+  "Program summary/Preview/guided product": "NOT_STARTED",
+  "Program summary/Product/research architecture": "VERIFIED",
+  "Program summary/Recurring evidence/stable claim": "NOT_STARTED",
+  "Program summary/Release artifacts/operations": "NOT_STARTED",
+  "Program summary/Runtime/project skeleton": "IN_PROGRESS",
+  "Program summary/Synthetic simulator/network-deny harness": "NOT_STARTED",
+  "M0 — executable foundation/M0 milestone": "IN_PROGRESS",
+  "M1 — secure local kernel/M1 milestone": "NOT_STARTED",
+  "M2 — zero-removal-request preview alpha/M2 milestone": "NOT_STARTED",
+  "M3 — guided request beta/M3 milestone": "NOT_STARTED",
+  "M4 — controlled automation beta/M4 milestone": "NOT_STARTED",
+  "M5 — local release candidate/Release candidate": "NOT_STARTED",
+  "M6 — stable evidence hold/Stable release": "NOT_STARTED"
+}
