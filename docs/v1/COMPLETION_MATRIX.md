@@ -21,7 +21,7 @@ Documentation describing a future component is not implementation evidence for t
 | Product/research architecture | `VERIFIED` | `README.md`, `docs/00`–`16`, source-graded research, requirements and threat model | keep synchronized with implementation findings |
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
-| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY integrated; frozen 55-package lock, four import contracts and 15 tests pass on 2026-07-15 | independent recheck, PF-002 and CI-001 |
+| Runtime/project skeleton | `IN_PROGRESS` | PF-001/PF-CORE/PF-BOUNDARY independently accepted; frozen 55-package lock, four import contracts and 17 tests pass on 2026-07-15 | PF-002 and CI-001 |
 | Synthetic simulator/network-deny harness | `NOT_STARTED` | architecture fixtures only | SIM-001/NET-001 |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
@@ -33,9 +33,9 @@ Documentation describing a future component is not implementation evidence for t
 
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
-| Root locked toolchain | PF-001 | `IN_PROGRESS` | `7602e59`; exact-toolchain/build-constraint corrections in current integration diff | independent recheck before `COMPLETE` |
-| Trusted-core boundaries | PF-CORE | `IN_PROGRESS` | `8980735`; four import contracts plus prohibited-edge fixtures | independent recheck before `COMPLETE` |
-| Connector protocol boundary | PF-BOUNDARY | `IN_PROGRESS` | `5c51d23`; isolated typed package and boundary tests | independent recheck before `COMPLETE` |
+| Root locked toolchain | PF-001 | `COMPLETE` | `7602e59`, `50c57b9`; exact uv/Python/build constraints and clean-clone frozen bootstrap/check independently reproduced | await milestone-level verification with the rest of M0 |
+| Trusted-core boundaries | PF-CORE | `COMPLETE` | `8980735`, `50c57b9`; four import contracts, absolute/relative prohibited-edge fixtures and separate core wheel independently reproduced | preserve graph as real imports arrive |
+| Connector protocol boundary | PF-BOUNDARY | `COMPLETE` | `5c51d23`, `cef7b0b`; isolated typed package plus independently reproduced legal/package artifact inspection | validation and enforcement remain CT-001/RUN-001 work |
 | Multi-architecture build skeleton | PF-002 | `NOT_STARTED` | — | boundary package must be accepted first |
 | CI, safe diagnostics and traceability guards | CI-001, TEL-001, THREAT-CATALOG-001, GOV-001 | `NOT_STARTED` | — | depends on project skeleton |
 | SQLite/migration and shared contracts | DB-001, CT-001 | `NOT_STARTED` | — | freeze before parallel adapters |
