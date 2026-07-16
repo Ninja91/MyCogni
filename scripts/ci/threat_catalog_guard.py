@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -73,6 +75,11 @@ THREAT_KEYS = {
 TEST_KEYS = {"id", "purpose", "implementation", "status", "threats"}
 ALLOCATION_KEYS = {"id", "kind", "identity", "state", "introduced_in"}
 EVIDENCE_KEYS = {"type", "ref"}
+SCHEMA_HASHES = {
+    "threat-catalog.schema.json": "7290e715730f1750a85fdc68f0ca15aa4b819e5c2c467b475651ac22d182471c",
+    "verification-tests.schema.json": "48ba84af58b20bd3a4fc5d9de8e7fd4594fedaee24728386f4d41723a164059e",
+    "id-history.schema.json": "102a864b58a6e3feae92b8fa0f193cf9449737bc07ea2ff7786ef0449c6010cd",
+}
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -89,6 +96,125 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"JSON document must be an object: {path.name}")
     return loaded
+
+
+def _load_json_text(text: str, label: str) -> dict[str, Any]:
+    loaded = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"JSON document must be an object: {label}")
+    return loaded
+
+
+def _canonical_json_hash(document: Mapping[str, Any]) -> str:
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _json_type_matches(instance: Any, expected: str) -> bool:
+    return {
+        "object": isinstance(instance, dict),
+        "array": isinstance(instance, list),
+        "string": isinstance(instance, str),
+        "integer": isinstance(instance, int) and not isinstance(instance, bool),
+        "null": instance is None,
+    }.get(expected, False)
+
+
+def _resolve_local_ref(root_schema: Mapping[str, Any], reference: str) -> Mapping[str, Any] | None:
+    if not reference.startswith("#/"):
+        return None
+    current: Any = root_schema
+    for token in reference[2:].split("/"):
+        if not isinstance(current, dict) or token not in current:
+            return None
+        current = current[token]
+    return current if isinstance(current, dict) else None
+
+
+def _schema_errors(
+    instance: Any,
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    path: str = "$",
+) -> list[str]:
+    """Evaluate the reviewed offline JSON-Schema keyword subset used by v1 schemas."""
+    if "$ref" in schema:
+        resolved = _resolve_local_ref(root_schema, str(schema["$ref"]))
+        if resolved is None:
+            return [f"{path}: unresolved schema reference {schema['$ref']}"]
+        return _schema_errors(instance, resolved, root_schema, path)
+    if "oneOf" in schema:
+        variants = schema["oneOf"]
+        if not isinstance(variants, list):
+            return [f"{path}: malformed oneOf schema"]
+        matches = sum(not _schema_errors(instance, item, root_schema, path) for item in variants)
+        return (
+            [] if matches == 1 else [f"{path}: expected exactly one schema variant, got {matches}"]
+        )
+    errors: list[str] = []
+    if "const" in schema and instance != schema["const"]:
+        errors.append(f"{path}: value does not match schema const")
+    if "enum" in schema and instance not in schema["enum"]:
+        errors.append(f"{path}: value is not in schema enum")
+    expected_type = schema.get("type")
+    if isinstance(expected_type, str) and not _json_type_matches(instance, expected_type):
+        return [*errors, f"{path}: expected schema type {expected_type}"]
+    if isinstance(instance, dict):
+        required = schema.get("required", [])
+        if isinstance(required, list):
+            for key in required:
+                if key not in instance:
+                    errors.append(f"{path}: missing schema-required key {key}")
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False and isinstance(properties, dict):
+            for key in sorted(set(instance) - set(properties)):
+                errors.append(f"{path}: schema rejects additional key {key}")
+        if isinstance(properties, dict):
+            for key, value in instance.items():
+                child_schema = properties.get(key)
+                if isinstance(child_schema, dict):
+                    errors.extend(_schema_errors(value, child_schema, root_schema, f"{path}.{key}"))
+    if isinstance(instance, list):
+        minimum = schema.get("minItems")
+        if isinstance(minimum, int) and len(instance) < minimum:
+            errors.append(f"{path}: fewer than schema minItems")
+        if schema.get("uniqueItems") is True:
+            serialized = [
+                json.dumps(value, sort_keys=True, separators=(",", ":")) for value in instance
+            ]
+            if len(serialized) != len(set(serialized)):
+                errors.append(f"{path}: schema uniqueItems violated")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, value in enumerate(instance):
+                errors.extend(_schema_errors(value, item_schema, root_schema, f"{path}[{index}]"))
+    if isinstance(instance, str):
+        minimum = schema.get("minLength")
+        maximum = schema.get("maxLength")
+        if isinstance(minimum, int) and len(instance) < minimum:
+            errors.append(f"{path}: shorter than schema minLength")
+        if isinstance(maximum, int) and len(instance) > maximum:
+            errors.append(f"{path}: longer than schema maxLength")
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and re.fullmatch(pattern, instance) is None:
+            errors.append(f"{path}: does not match schema pattern")
+    return errors
+
+
+def validate_published_schema(
+    document: Mapping[str, Any], schema: Mapping[str, Any], schema_name: str
+) -> list[str]:
+    errors: list[str] = []
+    expected_hash = SCHEMA_HASHES.get(schema_name)
+    actual_hash = _canonical_json_hash(schema)
+    if expected_hash != actual_hash:
+        errors.append(f"{schema_name}: published schema hash mismatch")
+    if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+        errors.append(f"{schema_name}: unsupported or missing meta-schema declaration")
+    if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+        errors.append(f"{schema_name}: root must be an exact object schema")
+    errors.extend(f"{schema_name} {error}" for error in _schema_errors(document, schema, schema))
+    return errors
 
 
 def _duplicates(values: Sequence[str]) -> list[str]:
@@ -152,10 +278,32 @@ def _pytest_node_exists(root: Path, reference: str) -> bool:
         module = ast.parse(path.read_text(encoding="utf-8"), filename=path_text)
     except (OSError, SyntaxError, UnicodeError):
         return False
-    return any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name
-        for node in module.body
+    function = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function_name
+        ),
+        None,
     )
+    if function is None:
+        return False
+    marker_names = {
+        ast.unparse(decorator)
+        for decorator in function.decorator_list
+        if isinstance(decorator, (ast.Attribute, ast.Call))
+    }
+    if "pytest.mark.threat_evidence" not in marker_names:
+        return False
+    if any(marker.startswith(("pytest.mark.skip", "pytest.mark.xfail")) for marker in marker_names):
+        return False
+    disallowed_calls = {
+        ast.unparse(node.func) for node in ast.walk(function) if isinstance(node, ast.Call)
+    }
+    if disallowed_calls & {"pytest.skip", "pytest.xfail"}:
+        return False
+    return any(isinstance(node, ast.Assert) for node in ast.walk(function))
 
 
 def _evidence_valid(root: Path, evidence: Any) -> bool:
@@ -287,6 +435,70 @@ def _validate_history(
         if allocation.get("state") == "ACTIVE" and row.get("status") == "DEPRECATED":
             errors.append(f"{allocated_id}: DEPRECATED row must be RETIRED in history")
     return errors
+
+
+def validate_history_against_baseline(
+    current: Mapping[str, Any], baseline: Mapping[str, Any]
+) -> list[str]:
+    """Enforce monotonic allocation history across a trusted Git revision."""
+    errors: list[str] = []
+    if set(baseline) != HISTORY_KEYS or baseline.get("schema_version") != 1:
+        return ["baseline: trusted ledger does not have the exact v1 document shape"]
+    baseline_allocations = baseline.get("allocations")
+    if not isinstance(baseline_allocations, list) or any(
+        not isinstance(item, dict) or set(item) != ALLOCATION_KEYS for item in baseline_allocations
+    ):
+        return ["baseline: trusted ledger does not have exact v1 allocation rows"]
+    current_rows = {
+        item.get("id"): item
+        for item in current.get("allocations", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    baseline_rows = {
+        item.get("id"): item
+        for item in baseline_allocations
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    for allocation_id in sorted(set(baseline_rows) - set(current_rows)):
+        errors.append(f"baseline: allocated ID disappeared across revisions: {allocation_id}")
+    immutable_fields = ("kind", "identity", "introduced_in")
+    for allocation_id in sorted(set(baseline_rows) & set(current_rows)):
+        before = baseline_rows[allocation_id]
+        after = current_rows[allocation_id]
+        for field in immutable_fields:
+            if before.get(field) != after.get(field):
+                errors.append(
+                    f"baseline: {allocation_id} immutable {field} changed across revisions"
+                )
+        if before.get("state") == "RETIRED" and after.get("state") != "RETIRED":
+            errors.append(f"baseline: retired ID reactivated across revisions: {allocation_id}")
+    return errors
+
+
+def load_history_from_git_base(root: Path, revision: str) -> dict[str, Any] | None:
+    if re.fullmatch(r"[0-9a-fA-F]{40,64}", revision) is None:
+        raise ValueError("baseline Git revision must be a full hexadecimal object ID")
+    commit_check = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if commit_check.returncode != 0:
+        raise ValueError(f"trusted baseline Git revision is unavailable: {revision}")
+    result = subprocess.run(
+        ["git", "show", f"{revision}:security/id-history.v1.json"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    return _load_json_text(result.stdout, f"Git baseline {revision}")
 
 
 def validate_catalog(
@@ -488,7 +700,7 @@ def validate_catalog(
     return sorted(set(errors))
 
 
-def _collect_pytest_nodes(registry: Mapping[str, Any], root: Path) -> list[str]:
+def _execute_pytest_nodes(registry: Mapping[str, Any], root: Path) -> list[str]:
     nodes = sorted(
         {
             test["implementation"]["ref"]
@@ -501,16 +713,20 @@ def _collect_pytest_nodes(registry: Mapping[str, Any], root: Path) -> list[str]:
     )
     failures: list[str] = []
     for node in nodes:
+        environment = os.environ.copy()
+        environment["MYCOGNI_THREAT_EVIDENCE_SUBPROCESS"] = "1"
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "--collect-only", "-q", node],
+            [sys.executable, "-m", "pytest", "--runxfail", "-rA", "-q", node],
             cwd=root,
             check=False,
             capture_output=True,
             text=True,
             timeout=30,
+            env=environment,
         )
-        if result.returncode != 0 or node not in result.stdout:
-            failures.append(f"uncollectable pytest evidence: {node}")
+        passed_line = re.compile(rf"^PASSED {re.escape(node)}$", re.MULTILINE)
+        if result.returncode != 0 or passed_line.search(result.stdout) is None:
+            failures.append(f"pytest evidence did not produce an exact PASSED outcome: {node}")
     return failures
 
 
@@ -544,7 +760,8 @@ def render_report(catalog: Mapping[str, Any], registry: Mapping[str, Any]) -> st
             "",
             f"This catalog contains {len(catalog['threats'])} selected high-risk threat groups, "
             f"{implemented} implemented catalog test mapping, and {planned} planned product test mappings.",
-            "Implemented mappings name an exact collected test; they do not prove a product control beyond that test's scope.",
+            "Implemented mappings name an exact assertion-bearing test that produced PASSED under `--runxfail`; "
+            "they do not prove a product control beyond that test's scope.",
             "It is not a claim that all threats, requirements, controls, or release gates are covered. "
             "`CONTROL_PLANNED` and `PLANNED` are explicitly not implementation evidence.",
             "Full requirement/work-package/ADR coverage remains the scope of `GOV-001`.",
@@ -562,14 +779,37 @@ def main() -> int:
         catalog = _load_json(CATALOG_PATH)
         registry = _load_json(REGISTRY_PATH)
         history = _load_json(HISTORY_PATH)
-        for schema_path in (SCHEMA_PATH, REGISTRY_SCHEMA_PATH, HISTORY_SCHEMA_PATH):
-            _load_json(schema_path)
+        schemas = {
+            SCHEMA_PATH.name: _load_json(SCHEMA_PATH),
+            REGISTRY_SCHEMA_PATH.name: _load_json(REGISTRY_SCHEMA_PATH),
+            HISTORY_SCHEMA_PATH.name: _load_json(HISTORY_SCHEMA_PATH),
+        }
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Threat catalog guard could not load inputs: {error}")
         return 1
     errors = validate_catalog(catalog, registry, history, REPOSITORY_ROOT)
+    for document, schema_name in (
+        (catalog, SCHEMA_PATH.name),
+        (registry, REGISTRY_SCHEMA_PATH.name),
+        (history, HISTORY_SCHEMA_PATH.name),
+    ):
+        errors.extend(validate_published_schema(document, schemas[schema_name], schema_name))
+    baseline_revision = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
+    baseline_checked = False
+    baseline_bootstrap = False
+    if baseline_revision:
+        try:
+            baseline = load_history_from_git_base(REPOSITORY_ROOT, baseline_revision)
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            if baseline is None:
+                baseline_bootstrap = True
+            else:
+                errors.extend(validate_history_against_baseline(history, baseline))
+                baseline_checked = True
     if not errors:
-        errors.extend(_collect_pytest_nodes(registry, REPOSITORY_ROOT))
+        errors.extend(_execute_pytest_nodes(registry, REPOSITORY_ROOT))
     if errors:
         print("\n".join(errors))
         return 1
@@ -582,6 +822,12 @@ def main() -> int:
     print(
         f"Threat catalog guard passed ({len(catalog['threats'])} threats, {len(registry['tests'])} verification IDs)."
     )
+    if baseline_checked:
+        print("Cross-revision ID baseline: VERIFIED.")
+    elif baseline_bootstrap:
+        print("Cross-revision ID baseline: BOOTSTRAP NOT VERIFIED (base has no ledger).")
+    else:
+        print("Cross-revision ID baseline: NOT CHECKED (no trusted base revision supplied).")
     return 0
 
 

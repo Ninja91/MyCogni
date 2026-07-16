@@ -14,7 +14,7 @@
       "purpose": "threat catalog integrity verification",
       "implementation": {
         "type": "PYTEST_NODE",
-        "ref": "tests/ci/test_threat_catalog.py::test_repository_catalog_is_valid_and_report_is_current"
+        "ref": "tests/ci/test_threat_catalog.py::test_threat_catalog_integrity_evidence"
       },
       "status": "IMPLEMENTED",
       "threats": ["THR-GOV-001"]

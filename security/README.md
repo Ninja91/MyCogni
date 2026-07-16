@@ -39,6 +39,26 @@ Prose that does not change identity may be clarified without a new ID, but the t
 is immutable. A material failure-story or verification-purpose change receives a new ID and deprecates the
 old row; it is never disguised as an edit.
 
+## Cross-revision trust boundary
+
+Local runs validate the current ledger but print `NOT CHECKED` for cross-revision immutability. The first PR
+that introduces the ledger prints `BOOTSTRAP NOT VERIFIED`; reviewers must treat the full allocation list as
+a new security baseline. Later pull-request CI checks out full Git history and supplies only the immutable
+`github.event.pull_request.base.sha`. The guard reads the baseline ledger directly from that Git object and
+rejects removed IDs, changed kind/identity/introduction bindings, and retired-ID reactivation—even when the
+catalog, verification registry, and current ledger were edited together.
+
+This guarantee depends on GitHub branch protection: required CI must run from the reviewed workflow, the
+base branch must reject force-pushes, and changes to the workflow, guard, schemas, or ID ledger require code-
+owner review. A maintainer who can rewrite the protected base or bypass required checks remains outside the
+claim. Push CI and local runs without a trusted base SHA intentionally do not report cross-revision
+verification.
+
+Published schemas are not decorative. Their canonical hashes are pinned in the guard, their exact-object
+shape is meta-checked, and an offline validator evaluates every keyword used by these v1 schemas against the
+three real documents. Schema changes therefore require an explicit schema, guard hash, fixtures, and review
+change together.
+
 Run `python scripts/ci/threat_catalog_guard.py --write-report` only after reviewing the source catalogs.
 Normal CI runs without the flag and rejects report drift.
 

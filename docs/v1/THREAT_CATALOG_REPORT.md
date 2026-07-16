@@ -18,6 +18,6 @@ Catalog version: `1.1.0`. Schema version: `1`.
 ## Coverage boundary
 
 This catalog contains 8 selected high-risk threat groups, 1 implemented catalog test mapping, and 7 planned product test mappings.
-Implemented mappings name an exact collected test; they do not prove a product control beyond that test's scope.
+Implemented mappings name an exact assertion-bearing test that produced PASSED under `--runxfail`; they do not prove a product control beyond that test's scope.
 It is not a claim that all threats, requirements, controls, or release gates are covered. `CONTROL_PLANNED` and `PLANNED` are explicitly not implementation evidence.
 Full requirement/work-package/ADR coverage remains the scope of `GOV-001`.

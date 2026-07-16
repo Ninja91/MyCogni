@@ -49,6 +49,9 @@ addopts = ["--strict-config", "--strict-markers", "-ra"]
 pythonpath = ["."]
 testpaths = ["tests"]
 xfail_strict = true
+markers = [
+  "threat_evidence: exact assertion-bearing test permitted as executable threat evidence",
+]
 
 [tool.coverage.run]
 branch = true

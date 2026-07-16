@@ -64,7 +64,7 @@
       "requirements": ["GOV-03", "TEST-02"],
       "work_packages": ["GOV-001", "THREAT-CATALOG-001"],
       "verification_tests": ["VFY-CATALOG-001"],
-      "evidence": [{"type":"PYTEST_NODE","ref":"tests/ci/test_threat_catalog.py::test_repository_catalog_is_valid_and_report_is_current"}],
+      "evidence": [{"type":"PYTEST_NODE","ref":"tests/ci/test_threat_catalog.py::test_threat_catalog_integrity_evidence"}],
       "sources": ["docs/v1/WORK_PACKAGES.md#work-package:THREAT-CATALOG-001"],
       "owner": "CROSS_CUTTING",
       "milestone": "M0",
