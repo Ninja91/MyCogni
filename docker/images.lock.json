@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "retrieved_at": "2026-07-15",
+  "images": [
+    {
+      "name": "python-runtime-and-build",
+      "registry": "docker.io",
+      "repository": "library/python",
+      "version_tag_observed": "3.12.12-slim-bookworm",
+      "index_digest": "sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "platforms": {
+        "linux/amd64": "sha256:2986c55feb36e6cae00fa1fefb454283e4b33f35e75ff8bdd123b134130be301",
+        "linux/arm64": "sha256:228390eced221ad2986a3dd77e10b1accca6ba8ceb36f1572de1b346a337cc1a"
+      },
+      "upstream_revision": "90e9ca41dc404ee7d22c09b894823e8925227c17",
+      "official_sources": [
+        "https://hub.docker.com/_/python",
+        "https://github.com/docker-library/python/tree/90e9ca41dc404ee7d22c09b894823e8925227c17/3.12/slim-bookworm"
+      ],
+      "retrieval_command": "docker buildx imagetools inspect python:3.12.12-slim-bookworm"
+    },
+    {
+      "name": "uv-build-tool",
+      "registry": "ghcr.io",
+      "repository": "astral-sh/uv",
+      "version_tag_observed": "0.9.26",
+      "index_digest": "sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b",
+      "platforms": {
+        "linux/amd64": "sha256:08a7428e3daeb4ff634fe06d3d9aec278579e88f770b5d141e5a408cb998f40a",
+        "linux/arm64": "sha256:38c3fa4690843b611c40ee67ba2227531589418f897fca18ae96c7b66cfb2526"
+      },
+      "official_sources": [
+        "https://github.com/astral-sh/uv/pkgs/container/uv",
+        "https://docs.astral.sh/uv/guides/integration/docker/"
+      ],
+      "retrieval_command": "docker buildx imagetools inspect ghcr.io/astral-sh/uv:0.9.26"
+    }
+  ]
+}
