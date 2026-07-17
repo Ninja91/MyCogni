@@ -260,6 +260,20 @@ def _launcher_errors() -> list[str]:
         "scripts/ci/guarded_pytest.py" not in line for line in pytest_commands
     ):
         errors.append("Makefile contains an unsupported pytest invocation")
+    launcher = (ROOT / "scripts" / "ci" / "guarded_pytest.py").read_text(encoding="utf-8")
+    required_launcher_controls = {
+        '"--disable-plugin-autoload"',
+        '"PYTEST_PLUGINS"',
+        '"--config-file"',
+        '"--inifile"',
+        '"--override-ini"',
+        '"--plugins"',
+        '"_hypothesis_pytestplugin"',
+        '"anyio.pytest_plugin"',
+        '"pytest_cov.plugin"',
+    }
+    if any(control not in launcher for control in required_launcher_controls):
+        errors.append("guarded launcher plugin/configuration controls are incomplete")
     for relative in (
         "scripts/ci/governance_guard.py",
         "scripts/ci/threat_catalog_guard.py",

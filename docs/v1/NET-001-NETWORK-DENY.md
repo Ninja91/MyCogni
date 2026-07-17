@@ -7,13 +7,25 @@ Status: implementation complete; independent adversarial acceptance pending.
 `scripts/ci/guarded_pytest.py` is the only supported repository or package-suite
 pytest launcher. Make, CI, governance evidence and threat evidence all use it.
 Root and connector-package conftests are sentinels: direct pytest fails instead
-of silently running without the plugin. The launcher rejects plugin-autoload
-disablement, guard-off environment state, `-p no:...`, `--noconftest` and
-`--confcutdir`. `PYTEST_ADDOPTS` is parsed with POSIX shell quoting before the
-environment options and command-line options are evaluated together. Malformed
-quoting and split, combined, equals, quoted, or environment-plus-command-line
-exclusion forms fail closed before pytest starts. Removing the
-launcher/plugin/sentinel wiring fails the static CI guard.
+of silently running without the plugin. The supported configuration is the
+checked-in root or connector-package `pyproject.toml` plus checked-in conftest
+plugins. Pinned pytest's early-load inputs are `-p` and `PYTEST_PLUGINS`; the
+launcher rejects every form of both, as well as reserved `--plugins` forms for
+forward fail-closed behavior. It also rejects every alternate config selector
+(`-c`, `--config-file`, and reserved `--inifile` forms), every
+`-o`/`--override-ini`, plugin-autoload environment control, guard-off state,
+`--noconftest` and `--confcutdir` before pytest starts. `PYTEST_ADDOPTS` is
+parsed with POSIX shell quoting before its tokens and command-line tokens are
+evaluated together. Malformed quoting and split, combined, equals, quoted, or
+environment-plus-command-line forms fail closed.
+
+Setuptools pytest-plugin autoload is unconditionally disabled by the launcher.
+After input validation it explicitly imports the three locked development
+plugins required by the repository (`_hypothesis_pytestplugin`,
+`anyio.pytest_plugin`, and `pytest_cov.plugin`) and registers them alongside the
+in-process network guard. Thus an installed but unreviewed `pytest11` entry
+point is not an implicit code-execution surface. Removing the
+launcher/plugin/configuration/sentinel wiring fails the static CI guard.
 
 Every test receives an input-free opaque test ID. The default capability denies
 DNS and address-bearing socket operations. Only an exact, argument-free

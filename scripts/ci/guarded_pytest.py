@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import shlex
 import sys
@@ -16,10 +17,36 @@ import pytest  # noqa: E402
 
 from scripts.ci import network_guard_plugin  # noqa: E402
 
-FORBIDDEN_OPTIONS = {
-    "--noconftest",
-    "--disable-network-guard",
+REQUIRED_PLUGIN_MODULES = (
+    "_hypothesis_pytestplugin",
+    "anyio.pytest_plugin",
+    "pytest_cov.plugin",
+)
+FORBIDDEN_ENVIRONMENT = {
+    "MYCOGNI_DISABLE_NETWORK_GUARD",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+    "PYTEST_PLUGINS",
 }
+FORBIDDEN_EXACT_OPTIONS = {
+    "--config-file",
+    "--confcutdir",
+    "--disable-network-guard",
+    "--inifile",
+    "--noconftest",
+    "--override-ini",
+    "--plugins",
+    "-c",
+    "-o",
+    "-p",
+}
+FORBIDDEN_LONG_PREFIXES = (
+    "--config-file=",
+    "--confcutdir=",
+    "--inifile=",
+    "--noconftest=",
+    "--override-ini=",
+    "--plugins=",
+)
 
 
 def _parsed_addopts(environment: dict[str, str]) -> list[str] | None:
@@ -30,36 +57,30 @@ def _parsed_addopts(environment: dict[str, str]) -> list[str] | None:
 
 
 def _is_exclusion(tokens: Sequence[str]) -> bool:
-    for index, argument in enumerate(tokens):
+    for argument in tokens:
         lowered = argument.casefold()
-        if lowered == "--noconftest" or lowered.startswith("--noconftest="):
+        if lowered in FORBIDDEN_EXACT_OPTIONS or lowered.startswith(FORBIDDEN_LONG_PREFIXES):
             return True
-        if lowered == "--confcutdir" or lowered.startswith("--confcutdir="):
-            return True
-        if lowered.startswith("-pno:") or lowered.startswith("-p=no:"):
-            return True
-        if (
-            lowered == "-p"
-            and index + 1 < len(tokens)
-            and tokens[index + 1].casefold().startswith("no:")
-        ):
+        if lowered.startswith(("-c", "-o", "-p")) and not lowered.startswith("--"):
             return True
     return False
 
 
 def _disabled(arguments: Sequence[str], environment: dict[str, str]) -> bool:
-    if (
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD" in environment
-        or "MYCOGNI_DISABLE_NETWORK_GUARD" in environment
-    ):
+    if FORBIDDEN_ENVIRONMENT & environment.keys():
         return True
     addopts = _parsed_addopts(environment)
     if addopts is None:
         return True
     all_arguments = [*addopts, *arguments]
-    return any(argument in FORBIDDEN_OPTIONS for argument in all_arguments) or _is_exclusion(
-        all_arguments
-    )
+    return _is_exclusion(all_arguments)
+
+
+def _required_plugins() -> list[object]:
+    return [
+        network_guard_plugin,
+        *(importlib.import_module(name) for name in REQUIRED_PLUGIN_MODULES),
+    ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -67,7 +88,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if _disabled(arguments, dict(os.environ)):
         print("guarded_pytest=denied")
         return 4
-    return pytest.main(arguments, plugins=[network_guard_plugin])
+    return pytest.main(
+        [*arguments, "--disable-plugin-autoload"],
+        plugins=_required_plugins(),
+    )
 
 
 if __name__ == "__main__":

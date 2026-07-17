@@ -20,6 +20,7 @@ import httpx
 import pytest
 
 from scripts.ci import (
+    guarded_pytest,
     network_guard,
     network_guard_plugin,
     network_namespace,
@@ -398,6 +399,204 @@ def test_exact_quoted_addopts_exclusion_denies_root_and_package_before_pytest() 
         assert completed.stderr == ""
 
 
+@pytest.mark.parametrize(
+    ("arguments", "addopts", "plugin_environment"),
+    [
+        (("-p", "pre_snapshot_forge"), None, None),
+        (("-ppre_snapshot_forge",), None, None),
+        (("-p=pre_snapshot_forge",), None, None),
+        (("--plugins", "pre_snapshot_forge"), None, None),
+        (("--plugins=pre_snapshot_forge",), None, None),
+        ((), "'-p' 'pre_snapshot_forge'", None),
+        ((), "'-ppre_snapshot_forge'", None),
+        (("pre_snapshot_forge",), "'-p'", None),
+        ((), None, "pre_snapshot_forge"),
+    ],
+    ids=[
+        "short-split",
+        "short-combined",
+        "short-equals",
+        "long-split-future-surface",
+        "long-equals-future-surface",
+        "addopts-split",
+        "addopts-combined",
+        "addopts-argv-composed",
+        "pytest-plugins-environment",
+    ],
+)
+def test_positive_plugin_injection_is_denied_before_plugin_import(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    addopts: str | None,
+    plugin_environment: str | None,
+) -> None:
+    sentinel = tmp_path / "plugin-imported"
+    plugin = tmp_path / "pre_snapshot_forge.py"
+    plugin.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('imported', encoding='utf-8')\n\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    for item in items:\n"
+        "        replacement = lambda: None\n"
+        "        replacement.__name__ = getattr(item, 'originalname', item.name)\n"
+        "        replacement.__qualname__ = replacement.__name__\n"
+        "        item._obj = replacement\n"
+        "        item._nodeid = item.nodeid\n"
+        "        setattr(item.module, replacement.__name__, replacement)\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
+    if addopts is not None:
+        environment["PYTEST_ADDOPTS"] = addopts
+    if plugin_environment is not None:
+        environment["PYTEST_PLUGINS"] = plugin_environment
+    completed = _run_pytest(
+        *arguments,
+        "--collect-only",
+        "-q",
+        "tests/domain/test_contracts.py",
+        environment=environment,
+    )
+    assert completed.returncode == 4
+    assert completed.stdout.strip() == "guarded_pytest=denied"
+    assert completed.stderr == ""
+    assert not sentinel.exists()
+
+
+def test_addopts_override_denies_root_and_package_before_pytest() -> None:
+    override = "addopts=--noconftest -p no:scripts.ci.network_guard_plugin"
+    package = ROOT / "packages" / "mycogni-connector-sdk"
+    for cwd, target in (
+        (ROOT, "tests/domain/test_contracts.py"),
+        (package, "tests/test_boundaries.py"),
+    ):
+        completed = _run_pytest(
+            "-o",
+            override,
+            "--collect-only",
+            "-q",
+            target,
+            cwd=cwd,
+        )
+        assert completed.returncode == 4
+        assert completed.stdout.strip() == "guarded_pytest=denied"
+        assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("arguments", "addopts"),
+    [
+        (("--override-ini", "addopts=--noconftest"), None),
+        (("--override-ini=addopts=--noconftest",), None),
+        (("-oaddopts=--noconftest",), None),
+        (("-o=addopts=--noconftest",), None),
+        (("-c", "{config}"), None),
+        (("-c={config}",), None),
+        (("-c{config}",), None),
+        (("--config-file", "{config}"), None),
+        (("--config-file={config}",), None),
+        (("--inifile", "{config}"), None),
+        (("--inifile={config}",), None),
+        ((), "'-o' 'addopts=--noconftest'"),
+        (("addopts=--noconftest",), "'-o'"),
+        ((), "'-c' '{config}'"),
+        (("-o",), None),
+        (("--override-ini",), None),
+        (("-c",), None),
+        (("--config-file",), None),
+        (("--inifile",), None),
+        (("-p",), None),
+        (("--plugins",), None),
+    ],
+    ids=[
+        "override-long-split",
+        "override-long-equals",
+        "override-short-combined",
+        "override-short-equals",
+        "config-short-split",
+        "config-short-equals",
+        "config-short-combined",
+        "config-long-split",
+        "config-long-equals",
+        "legacy-inifile-split",
+        "legacy-inifile-equals",
+        "addopts-override",
+        "addopts-argv-override",
+        "addopts-config",
+        "missing-short-override-value",
+        "missing-long-override-value",
+        "missing-short-config-value",
+        "missing-long-config-value",
+        "missing-inifile-value",
+        "missing-short-plugin-value",
+        "missing-long-plugin-value",
+    ],
+)
+def test_config_and_addopts_override_surfaces_are_denied_before_pytest(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    addopts: str | None,
+) -> None:
+    config = tmp_path / "pytest.ini"
+    config.write_text(
+        "[pytest]\naddopts = --noconftest -p no:scripts.ci.network_guard_plugin\n",
+        encoding="utf-8",
+    )
+    rendered_arguments = tuple(value.format(config=config) for value in arguments)
+    environment = dict(os.environ)
+    if addopts is not None:
+        environment["PYTEST_ADDOPTS"] = addopts.format(config=config)
+    completed = _run_pytest(
+        *rendered_arguments,
+        "--collect-only",
+        "-q",
+        "tests/domain/test_contracts.py",
+        environment=environment,
+    )
+    assert completed.returncode == 4
+    assert completed.stdout.strip() == "guarded_pytest=denied"
+    assert completed.stderr == ""
+
+
+def test_launcher_has_exact_explicit_required_plugin_allowlist() -> None:
+    assert guarded_pytest.REQUIRED_PLUGIN_MODULES == (
+        "_hypothesis_pytestplugin",
+        "anyio.pytest_plugin",
+        "pytest_cov.plugin",
+    )
+
+
+def test_unreviewed_installed_pytest_entrypoint_is_not_autoloaded(tmp_path: Path) -> None:
+    sentinel = tmp_path / "autoload-imported"
+    plugin = tmp_path / "synthetic_autoload_plugin.py"
+    plugin.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('imported', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    distribution = tmp_path / "synthetic_autoload-1.0.dist-info"
+    distribution.mkdir()
+    (distribution / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: synthetic-autoload\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (distribution / "entry_points.txt").write_text(
+        "[pytest11]\nsynthetic_autoload = synthetic_autoload_plugin\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
+    completed = _run_pytest(
+        "--collect-only",
+        "-q",
+        "tests/domain/test_contracts.py",
+        environment=environment,
+    )
+    assert completed.returncode == 0
+    assert not sentinel.exists()
+
+
 def test_safely_quoted_addopts_remains_supported_for_root_and_package() -> None:
     environment = dict(os.environ)
     environment["PYTEST_ADDOPTS"] = "'-q'"
@@ -450,31 +649,29 @@ def test_direct_root_and_package_pytest_fail_but_guarded_package_suite_collects(
     assert "3 tests collected" in guarded_package.stdout
 
 
-def test_dynamic_marker_and_generated_node_lack_reviewed_provenance(tmp_path: Path) -> None:
+def test_dynamic_marker_and_generated_node_lack_reviewed_provenance() -> None:
     probe = ROOT / "tests" / "simulator" / "test_dynamic_marker_probe.py"
-    plugin = tmp_path / "dynamic_marker_plugin.py"
+    conftest = ROOT / "tests" / "simulator" / "conftest.py"
     probe.write_text(
         "import pytest\n\n"
         + "@pytest.mark.parametrize('case', [1, 2])\ndef test_dynamic(case):\n    pass\n",
         encoding="utf-8",
     )
-    plugin.write_text(
-        "import pytest\n\ndef pytest_collection_modifyitems(items):\n"
+    conftest.write_text(
+        "import pytest\n\n"
+        "@pytest.hookimpl(tryfirst=True)\n"
+        "def pytest_collection_modifyitems(items):\n"
         "    for item in items:\n        item.add_marker(pytest.mark.simulator_loopback)\n",
         encoding="utf-8",
     )
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
     try:
         completed = _run_pytest(
             "-q",
-            "-p",
-            "dynamic_marker_plugin",
             str(probe),
-            environment=environment,
         )
     finally:
         probe.unlink(missing_ok=True)
+        conftest.unlink(missing_ok=True)
     assert completed.returncode != 0
     assert "provenance" in (completed.stdout + completed.stderr)
 
@@ -552,9 +749,9 @@ def test_custom_generated_item_cannot_spoof_authorized_top_level_node() -> None:
     assert network_guard_plugin._reviewed_item(fake) is None  # type: ignore[arg-type]
 
 
-def test_post_collection_node_and_callable_mutation_revokes_authority(tmp_path: Path) -> None:
-    plugin = tmp_path / "post_collection_mutator.py"
-    plugin.write_text(
+def test_post_collection_node_and_callable_mutation_revokes_authority() -> None:
+    conftest = ROOT / "tests" / "simulator" / "conftest.py"
+    conftest.write_text(
         "import pytest\n\n"
         "@pytest.hookimpl(trylast=True)\n"
         "def pytest_collection_modifyitems(items):\n"
@@ -563,16 +760,14 @@ def test_post_collection_node_and_callable_mutation_revokes_authority(tmp_path: 
         "        item._obj = lambda: None\n",
         encoding="utf-8",
     )
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
-    completed = _run_pytest(
-        "-q",
-        "-p",
-        "post_collection_mutator",
-        "tests/simulator/test_web_mail_safety.py::"
-        "test_raw_http_success_has_deterministic_headers_without_date",
-        environment=environment,
-    )
+    try:
+        completed = _run_pytest(
+            "-q",
+            "tests/simulator/test_web_mail_safety.py::"
+            "test_raw_http_success_has_deterministic_headers_without_date",
+        )
+    finally:
+        conftest.unlink(missing_ok=True)
     assert completed.returncode != 0
     assert "provenance" in (completed.stdout + completed.stderr)
 
