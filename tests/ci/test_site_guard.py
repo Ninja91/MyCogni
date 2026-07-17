@@ -95,3 +95,52 @@ def test_placeholder_no_script_bodies_fail_closed(tmp_path: Path) -> None:
     )
 
     assert any("substantive concept" in error for error in validate_repository(root))
+
+
+def test_synthetic_badge_and_atomic_regions_fail_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8")
+        .replace("ILLUSTRATIVE SYNTHETIC DEMO", "")
+        .replace(
+            'id="architecture-detail" aria-live="polite" aria-atomic="true"',
+            'id="architecture-detail" aria-live="polite" aria-atomic="false"',
+        )
+        .replace(
+            'id="scenario-answer" aria-live="polite" aria-atomic="true"',
+            'id="scenario-answer" aria-live="polite" aria-atomic="false"',
+        ),
+        encoding="utf-8",
+    )
+
+    errors = validate_repository(root)
+    assert any("illustrative badge" in error for error in errors)
+    assert any("architecture-detail" in error and "atomic" in error for error in errors)
+    assert any("scenario-answer" in error and "atomic" in error for error in errors)
+
+
+def test_mobile_navigation_removal_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    styles = root / "site/styles.css"
+    styles.write_text(
+        styles.read_text(encoding="utf-8")
+        + "\n@media (max-width: 1000px) { .chapter-nav { display: none; } }\n",
+        encoding="utf-8",
+    )
+
+    assert any("removes chapter navigation" in error for error in validate_repository(root))
+
+
+def test_contradictory_csp_claim_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    readme = root / "site/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "It is not a `frame-ancestors` or clickjacking control",
+            "It is a `frame-ancestors` and clickjacking control",
+        ),
+        encoding="utf-8",
+    )
+
+    assert any("framing nonclaim" in error for error in validate_repository(root))

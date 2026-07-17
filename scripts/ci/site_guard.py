@@ -194,7 +194,16 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         if concept not in no_script:
             errors.append(f"no-script overview is missing substantive concept: {concept}")
 
-    for identifier in ("promise-panel", "case-panel", "phase-panel"):
+    if "ILLUSTRATIVE SYNTHETIC DEMO" not in html:
+        errors.append("synthetic console is missing its prominent illustrative badge")
+
+    for identifier in (
+        "promise-panel",
+        "case-panel",
+        "architecture-detail",
+        "scenario-answer",
+        "phase-panel",
+    ):
         attributes = _element_by_id(document, identifier)
         if (
             not attributes
@@ -225,7 +234,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         or "outline-color: var(--lime)" not in css
     ):
         errors.append("dark surfaces do not provide the high-contrast focus treatment")
-    if "frame-ancestors" not in site_readme or "clickjacking" not in site_readme:
+    if "It is not a `frame-ancestors` or clickjacking control" not in site_readme:
         errors.append("site README does not disclose the meta-CSP framing nonclaim")
 
     expected_hash_match = re.search(r"SHA-256:\*\* `([0-9a-f]{64})`", provenance)
