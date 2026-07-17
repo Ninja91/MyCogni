@@ -1,12 +1,13 @@
 # Interactive walkthrough adversarial review
 
 Final source target: integration commit `c7f6bde`.
+Browser-verification target: integration commit `86c7f17`.
 
 Verdict: **ACCEPT at source/offline level** — zero open P0, P1 or P2 findings.
 
-This review does not claim browser-backed responsive, keyboard, screen-reader or
-visual WCAG verification, remote-link availability, GitHub Pages publication, or
-model identity. Those remain separate acceptance evidence.
+This review does not claim screen-reader or complete manual/automated WCAG
+verification, remote-link availability, GitHub Pages publication, or model identity.
+Those remain separate acceptance evidence.
 
 ## Rejected first revision
 
@@ -45,5 +46,21 @@ suite also covered less than the guard claimed.
   fallback content, synthetic-badge removal, atomic-region weakening, mobile-nav
   removal and CSP overclaim.
 
-Final reproduced evidence: site guard passed, eight mutation tests passed,
+Final source evidence: site guard passed, eight mutation tests passed,
 `node --check site/app.js` passed and the worktree was clean.
+
+## Browser-backed follow-up
+
+A local HTTP reproduction subsequently exercised the rendered walkthrough in the
+in-app browser. Product-principle tabs, architecture controls and failure scenarios
+updated their selected/pressed states and live panel content. `ArrowRight`, `Home`
+and `End` keyboard navigation moved selection across the product, case and roadmap
+tablists. At a 390 by 844 viewport, document width remained exactly 390 pixels and
+the complete chapter navigation remained available in its intentional horizontal
+scroll region. The browser reported no warning or error console entries.
+
+That reproduction exposed a stale sentence saying NET-001 remained in remediation.
+Commit `86c7f17` corrected the rendered status, added a fail-closed regression and
+reproduced nine site-guard tests on Python 3.12 and 3.13. This closes the previously
+open browser-backed keyboard/responsive inspection item, but not screen-reader,
+complete WCAG, remote-link or published-Pages evidence.
