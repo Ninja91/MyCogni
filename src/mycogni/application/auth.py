@@ -16,12 +16,14 @@ from mycogni.domain.auth import (
     AuthPolicy,
     AuthPurpose,
     AuthScope,
+    BootstrapDecision,
     BootstrapExchange,
     BootstrapRecord,
     OpaqueCredential,
     RecoveryIssue,
     RecoveryRecord,
     RootCapability,
+    RootCapabilityIssue,
     SecretDigest,
     SessionIssue,
     SessionRecord,
@@ -71,7 +73,8 @@ class AuthDecisionStore(Protocol):
         now: datetime,
         session: SessionRecord,
         recovery: RecoveryRecord,
-    ) -> AuthOutcome[SessionRecord]: ...
+        replacement_reprovision: RootCapabilityIssue,
+    ) -> AuthOutcome[BootstrapDecision]: ...
 
     def authenticate_session(
         self, credential: OpaqueCredential, presented_digest: SecretDigest, now: datetime
@@ -245,6 +248,7 @@ class AuthService:
         now = self._now()
         session, session_digest = self._credential()
         recovery, recovery_digest = self._credential()
+        replacement_root, replacement_root_digest = self._credential()
         session_not_before, session_expires = self._window(now, self._policy.session_ttl_seconds)
         recovery_not_before, recovery_expires = self._window(now, self._policy.recovery_ttl_seconds)
         placeholder = OpaqueId.new()
@@ -271,11 +275,25 @@ class AuthService:
                 expires_at_utc=recovery_expires,
                 attempts_remaining=self._policy.max_attempts,
             ),
+            RootCapabilityIssue(
+                handle=replacement_root.handle,
+                digest=replacement_root_digest,
+            ),
         )
         if result.denial is not None:
             return AuthOutcome.denied(result.denial)
         assert result.value is not None
         record = result.value
+        replacement_reprovision = None
+        if record.replacement_reprovision is not None:
+            binding = record.replacement_reprovision
+            replacement_reprovision = RootCapability(
+                credential=replacement_root,
+                installation_id=binding.installation_id,
+                actor_id=binding.actor_id,
+                represented_profile_id=binding.represented_profile_id,
+                purpose=binding.purpose,
+            )
         return AuthOutcome.allowed(
             BootstrapExchange(
                 session=session,
@@ -283,6 +301,7 @@ class AuthService:
                 actor_id=record.actor_id,
                 represented_profile_id=record.represented_profile_id,
                 epoch=record.epoch,
+                replacement_reprovision=replacement_reprovision,
             )
         )
 

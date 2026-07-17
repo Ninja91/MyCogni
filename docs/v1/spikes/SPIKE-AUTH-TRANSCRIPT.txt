@@ -2,6 +2,11 @@ WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback s
 secret-display-confirmation: accepted
 bootstrap-code (one-use, short-lived): [REDACTED:auth_secret]
 bootstrap-guidance: expires in 300 seconds; burns after 5 failed proofs
+WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback saving, copy synchronization and session logging before continuing.
+secret-display-confirmation: accepted
+new-session-code: [REDACTED:auth_secret]
+new-recovery-code: [REDACTED:auth_secret]
+bootstrap-exchange-succeeded: session and recovery handed off; save offline authority now
 step-up-wrong-purpose: wrong_purpose
 step-up-correct: profile_deletion
 step-up-replay: replayed

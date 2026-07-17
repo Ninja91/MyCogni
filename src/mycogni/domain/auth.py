@@ -227,6 +227,7 @@ class BootstrapExchange:
     actor_id: OpaqueId
     represented_profile_id: OpaqueId
     epoch: int
+    replacement_reprovision: RootCapability | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -238,6 +239,17 @@ class BootstrapExchange:
             raise TypeError("bootstrap exchange requires opaque actor and profile IDs")
         if type(self.epoch) is not int or self.epoch < 1:
             raise ValueError("bootstrap exchange epoch must be positive")
+        if self.replacement_reprovision is not None:
+            if type(self.replacement_reprovision) is not RootCapability:
+                raise TypeError("replacement reprovision must be a root capability")
+            if self.replacement_reprovision.purpose is not RootPurpose.REPROVISION:
+                raise ValueError("replacement reprovision capability has the wrong purpose")
+            if (
+                self.replacement_reprovision.actor_id != self.actor_id
+                or self.replacement_reprovision.represented_profile_id
+                != self.represented_profile_id
+            ):
+                raise ValueError("replacement reprovision capability has the wrong binding")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -293,6 +305,8 @@ class RootAuthorityBundle:
         }
         if len(bindings) != 1:
             raise ValueError("root authority bundle capabilities must share exact bindings")
+        if len({capability.credential.handle for capability in capabilities}) != 3:
+            raise ValueError("root authority bundle requires three unique handles")
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +346,80 @@ class AuthorityGrant:
             raise ValueError("grant scope must exactly match its purpose")
         if type(self.epoch) is not int or self.epoch < 1:
             raise ValueError("grant epoch must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class GrantProvenanceRecord:
+    """Immutable proof that one exact grant came from successful step-up consumption."""
+
+    grant: AuthorityGrant
+    used_at_utc: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.grant) is not AuthorityGrant:
+            raise TypeError("grant provenance requires an AuthorityGrant")
+        if self.used_at_utc is not None:
+            require_utc(self.used_at_utc, "grant provenance used_at_utc")
+            if self.used_at_utc < self.grant.not_before_utc:
+                raise ValueError("grant use cannot precede its not-before instant")
+
+
+@dataclass(frozen=True, slots=True)
+class RootCapabilityIssue:
+    """Unbound replacement root material; the store supplies canonical bindings."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+
+    def __post_init__(self) -> None:
+        if type(self.handle) is not OpaqueId or type(self.digest) is not SecretDigest:
+            raise TypeError("root capability issue requires an opaque handle and digest")
+
+
+@dataclass(frozen=True, slots=True)
+class RootCapabilityBinding:
+    """Non-secret canonical binding returned after replacement root registration."""
+
+    handle: OpaqueId
+    installation_id: OpaqueId
+    actor_id: OpaqueId
+    represented_profile_id: OpaqueId
+    purpose: RootPurpose
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not OpaqueId
+            for value in (
+                self.handle,
+                self.installation_id,
+                self.actor_id,
+                self.represented_profile_id,
+            )
+        ):
+            raise TypeError("root capability binding requires opaque IDs")
+        if self.purpose is not RootPurpose.REPROVISION:
+            raise ValueError("replacement root binding must be for reprovision")
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapDecision:
+    """Non-secret result of an atomic bootstrap consume/issue decision."""
+
+    actor_id: OpaqueId
+    represented_profile_id: OpaqueId
+    epoch: int
+    replacement_reprovision: RootCapabilityBinding | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.actor_id) is not OpaqueId or type(self.represented_profile_id) is not OpaqueId:
+            raise TypeError("bootstrap decision requires opaque actor and profile IDs")
+        if type(self.epoch) is not int or self.epoch < 1:
+            raise ValueError("bootstrap decision epoch must be positive")
+        if self.replacement_reprovision is not None and (
+            self.replacement_reprovision.actor_id != self.actor_id
+            or self.replacement_reprovision.represented_profile_id != self.represented_profile_id
+        ):
+            raise ValueError("replacement root decision binding is inconsistent")
 
 
 @dataclass(slots=True)

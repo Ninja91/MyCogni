@@ -17,11 +17,15 @@ from mycogni.domain.auth import (
     AuthOutcome,
     AuthPurpose,
     AuthScope,
+    BootstrapDecision,
     BootstrapRecord,
+    GrantProvenanceRecord,
     OpaqueCredential,
     RecoveryIssue,
     RecoveryRecord,
     RootCapability,
+    RootCapabilityBinding,
+    RootCapabilityIssue,
     RootCapabilityRecord,
     RootPurpose,
     SecretDigest,
@@ -70,7 +74,7 @@ class VolatileAuthDecisionStore:
         self._sessions: dict[OpaqueId, SessionRecord] = {}
         self._recoveries: dict[OpaqueId, RecoveryRecord] = {}
         self._step_ups: dict[OpaqueId, StepUpRecord] = {}
-        self._used_grants: set[OpaqueId] = set()
+        self._grant_provenance: dict[OpaqueId, GrantProvenanceRecord] = {}
         self._crash_once: CrashPoint | None = None
 
     def arm_crash_once(self, point: CrashPoint) -> None:
@@ -132,7 +136,17 @@ class VolatileAuthDecisionStore:
             require_utc(now, "trusted installation setup time")
             if installation_id in self._installation_actors or actor_id in self._actors:
                 raise ValueError("installation or actor is already initialized")
-            if {record.purpose for record in records} != set(RootPurpose):
+            if type(records) is not tuple or len(records) != 3:
+                raise ValueError("trusted setup requires exactly three root records")
+            if any(type(record) is not RootCapabilityRecord for record in records):
+                raise TypeError("trusted setup records must be root capability records")
+            if len({id(record) for record in records}) != 3:
+                raise ValueError("trusted setup requires three unique root records")
+            if len({record.handle for record in records}) != 3:
+                raise ValueError("trusted setup requires three unique root handles")
+            if tuple(sorted(record.purpose.value for record in records)) != tuple(
+                sorted(purpose.value for purpose in RootPurpose)
+            ):
                 raise ValueError("trusted setup requires exactly one root capability per purpose")
             if any(
                 record.installation_id != installation_id
@@ -280,7 +294,8 @@ class VolatileAuthDecisionStore:
         now: datetime,
         session: SessionRecord,
         recovery: RecoveryRecord,
-    ) -> AuthOutcome[SessionRecord]:
+        replacement_reprovision: RootCapabilityIssue,
+    ) -> AuthOutcome[BootstrapDecision]:
         with self._lock:
             record = self._bootstraps.get(handle)
             if record is None:
@@ -304,6 +319,7 @@ class VolatileAuthDecisionStore:
             if not self._matches(record.digest, presented_digest):
                 return AuthOutcome.denied(self._wrong_proof(record, now))
             actor = self._actors[record.actor_id]
+            replacement_root_record: RootCapabilityRecord | None = None
             if record.root_capability_id is not None:
                 root = self._roots.get(record.root_capability_id)
                 if root is None or root.consumed or root.purpose is not record.root_purpose:
@@ -312,10 +328,23 @@ class VolatileAuthDecisionStore:
                     return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
                 if root.purpose is RootPurpose.REPROVISION and not actor.initialized:
                     return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+                if (
+                    root.purpose is RootPurpose.REPROVISION
+                    and replacement_reprovision.handle in self._roots
+                ):
+                    return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
                 self._consume_root(root, now)
                 if root.purpose is RootPurpose.REPROVISION:
                     actor.epoch += 1
                     self._retire_actor_authority(actor.actor_id, now)
+                    replacement_root_record = RootCapabilityRecord(
+                        handle=replacement_reprovision.handle,
+                        installation_id=root.installation_id,
+                        actor_id=root.actor_id,
+                        represented_profile_id=root.represented_profile_id,
+                        purpose=RootPurpose.REPROVISION,
+                        digest=replacement_reprovision.digest,
+                    )
                 actor.initialized = True
             record.consumed = True
             record.retired_at_utc = now
@@ -334,7 +363,24 @@ class VolatileAuthDecisionStore:
             )
             self._sessions[issued_session.handle] = issued_session
             self._recoveries[issued_recovery.handle] = issued_recovery
-            return AuthOutcome.allowed(replace(issued_session))
+            replacement_binding = None
+            if replacement_root_record is not None:
+                self._roots[replacement_root_record.handle] = replacement_root_record
+                replacement_binding = RootCapabilityBinding(
+                    handle=replacement_root_record.handle,
+                    installation_id=replacement_root_record.installation_id,
+                    actor_id=replacement_root_record.actor_id,
+                    represented_profile_id=replacement_root_record.represented_profile_id,
+                    purpose=replacement_root_record.purpose,
+                )
+            return AuthOutcome.allowed(
+                BootstrapDecision(
+                    actor_id=issued_session.actor_id,
+                    represented_profile_id=issued_session.represented_profile_id,
+                    epoch=issued_session.epoch,
+                    replacement_reprovision=replacement_binding,
+                )
+            )
 
     def _authenticate_session_locked(
         self, credential: OpaqueCredential, digest: SecretDigest, now: datetime
@@ -439,6 +485,18 @@ class VolatileAuthDecisionStore:
             record.consumed = True
             record.retired_at_utc = now
             self._crash_if_armed(CrashPoint.STEP_UP)
+            grant = AuthorityGrant(
+                actor_id=record.actor_id,
+                represented_profile_id=record.represented_profile_id,
+                session_id=record.session_id,
+                authority_evidence_id=record.handle,
+                purpose=record.purpose,
+                scopes=record.scopes,
+                not_before_utc=record.not_before_utc,
+                expires_at_utc=record.expires_at_utc,
+                epoch=record.epoch,
+            )
+            self._grant_provenance[record.handle] = GrantProvenanceRecord(grant=grant)
             return AuthOutcome.allowed(replace(record))
 
     def rotate_session(
@@ -495,6 +553,11 @@ class VolatileAuthDecisionStore:
         *,
         consume: bool,
     ) -> AuthOutcome[AuthorityGrant]:
+        if type(grant) is not AuthorityGrant:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        provenance = self._grant_provenance.get(grant.authority_evidence_id)
+        if provenance is None or provenance.grant != grant:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
         authenticated = self._authenticate_session_locked(session, session_digest, now)
         if authenticated.denial is not None:
             return AuthOutcome.denied(authenticated.denial)
@@ -514,10 +577,12 @@ class VolatileAuthDecisionStore:
         time_denial = self._time_denial(now, grant.not_before_utc, grant.expires_at_utc)
         if time_denial is not None:
             return AuthOutcome.denied(time_denial)
-        if grant.authority_evidence_id in self._used_grants:
+        if provenance.used_at_utc is not None:
             return AuthOutcome.denied(AuthDenial.REPLAYED)
         if consume:
-            self._used_grants.add(grant.authority_evidence_id)
+            self._grant_provenance[grant.authority_evidence_id] = replace(
+                provenance, used_at_utc=now
+            )
         return AuthOutcome.allowed(grant)
 
     def renew_recovery(
@@ -680,7 +745,7 @@ class VolatileAuthDecisionStore:
                 grant,
                 grant.purpose,
                 now,
-                consume=False,
+                consume=True,
             )
 
     def garbage_collect(self, now: datetime, retention_seconds: int) -> int:
@@ -711,6 +776,14 @@ class VolatileAuthDecisionStore:
                 for handle in doomed:
                     del collection[handle]
                 removed += len(doomed)
+            expired_grants = [
+                evidence_id
+                for evidence_id, provenance in self._grant_provenance.items()
+                if provenance.grant.expires_at_utc.timestamp() <= cutoff
+            ]
+            for evidence_id in expired_grants:
+                del self._grant_provenance[evidence_id]
+            removed += len(expired_grants)
             return removed
 
     def record_counts(self) -> dict[str, int]:
@@ -722,4 +795,5 @@ class VolatileAuthDecisionStore:
                 "sessions": len(self._sessions),
                 "recoveries": len(self._recoveries),
                 "step_ups": len(self._step_ups),
+                "grant_provenance": len(self._grant_provenance),
             }

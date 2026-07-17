@@ -44,15 +44,17 @@ from mycogni.domain.auth import (
     OpaqueCredential,
     RecoveryIssue,
     RootAuthorityBundle,
+    RootCapabilityRecord,
     RootPurpose,
     SecretDigest,
     SessionIssue,
 )
 from mycogni.entrypoints.auth_spike import (
     begin_bootstrap_on_tty,
-    exchange_bootstrap_code,
+    exchange_bootstrap_on_tty,
     recover_headless_on_tty,
     redact_operator_transcript,
+    redisplay_interrupted_bootstrap,
     redisplay_interrupted_recovery,
 )
 
@@ -217,6 +219,14 @@ def _grant(
     )
 
 
+def _secret_code(tty: PseudoTty, label: str) -> str:
+    matches = [
+        value for block in tty.secret_values for item_label, value in block if item_label == label
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_root_bootstrap_is_bound_one_use_and_unauthenticated_rebootstrap_is_forbidden() -> None:
     service, _clock, source, _store, setup = _service()
     actor, profile, roots = _provision(setup)
@@ -239,6 +249,51 @@ def test_root_bootstrap_is_bound_one_use_and_unauthenticated_rebootstrap_is_forb
     exchange = _allowed(service.exchange_bootstrap(bootstrap))
     assert (exchange.actor_id, exchange.represented_profile_id) == (actor, profile)
     assert service.begin_bootstrap(root).denial is AuthDenial.STALE_EPOCH
+
+
+def test_installation_requires_exactly_three_unique_roots_before_any_store_mutation() -> None:
+    installation = OpaqueId.new()
+    actor = OpaqueId.new()
+    profile = OpaqueId.new()
+
+    def record(purpose: RootPurpose, *, handle: OpaqueId | None = None) -> RootCapabilityRecord:
+        return RootCapabilityRecord(
+            handle=handle or OpaqueId.new(),
+            installation_id=installation,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=purpose,
+            digest=SecretDigest(hashlib.sha256(purpose.value.encode()).digest()),
+        )
+
+    valid = tuple(record(purpose) for purpose in RootPurpose)
+    duplicate_handle = replace(valid[1], handle=valid[0].handle)
+    duplicate_purpose = replace(valid[1], purpose=RootPurpose.INITIAL_BOOTSTRAP)
+    invalid_sets = (
+        valid[:2],
+        (valid[0], valid[0], valid[2]),
+        (valid[0], duplicate_handle, valid[2]),
+        (valid[0], duplicate_purpose, valid[2]),
+    )
+    for invalid in invalid_sets:
+        store = VolatileAuthDecisionStore()
+        with pytest.raises(ValueError):
+            store.initialize_installation(
+                installation_id=installation,
+                actor_id=actor,
+                represented_profile_id=profile,
+                records=invalid,
+                now=NOW,
+            )
+        assert store.record_counts()["roots"] == 0
+        store.initialize_installation(
+            installation_id=installation,
+            actor_id=actor,
+            represented_profile_id=profile,
+            records=valid,
+            now=NOW,
+        )
+        assert store.record_counts()["roots"] == 3
 
 
 def test_bootstrap_is_short_lived_attempt_bounded_and_concurrently_one_use() -> None:
@@ -361,6 +416,7 @@ def test_step_up_exact_binding_typed_denials_replay_and_rotation() -> None:
         )
     )
     assert service.validate_grant(grant, exchange.session).value == grant
+    assert service.validate_grant(grant, exchange.session).denial is AuthDenial.REPLAYED
     assert (
         service.consume_step_up(
             challenge=challenge,
@@ -375,6 +431,199 @@ def test_step_up_exact_binding_typed_denials_replay_and_rotation() -> None:
     rotated = _allowed(service.rotate_session(exchange.session))
     assert service.authenticate_session(exchange.session).denial is AuthDenial.REVOKED
     assert service.validate_grant(grant, rotated).denial is AuthDenial.WRONG_SESSION
+
+
+def test_privileged_grants_require_exact_store_provenance_and_are_concurrently_one_use() -> None:
+    service, _clock, _source, _store, setup = _service()
+    actor, profile, _roots, exchange = _exchange(service, setup)
+    purpose = AuthPurpose.KEY_RECOVERY_CHANGE
+    scopes = frozenset({PURPOSE_SCOPE[purpose]})
+    challenge = _allowed(
+        service.issue_step_up(
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=purpose,
+            scopes=scopes,
+        )
+    )
+    fabricated = AuthorityGrant(
+        actor_id=actor,
+        represented_profile_id=profile,
+        session_id=exchange.session.handle,
+        authority_evidence_id=challenge.handle,
+        purpose=purpose,
+        scopes=scopes,
+        not_before_utc=NOW,
+        expires_at_utc=NOW + timedelta(seconds=service.policy.step_up_ttl_seconds),
+        epoch=exchange.epoch,
+    )
+    assert (
+        service.renew_recovery(session=exchange.session, grant=fabricated).denial
+        is AuthDenial.INVALID_PROOF
+    )
+    grant = _allowed(
+        service.consume_step_up(
+            challenge=challenge,
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=purpose,
+            scopes=scopes,
+        )
+    )
+    for altered in (
+        replace(grant, actor_id=OpaqueId.new()),
+        replace(grant, authority_evidence_id=OpaqueId.new()),
+        replace(grant, session_id=OpaqueId.new()),
+        replace(grant, expires_at_utc=grant.expires_at_utc + timedelta(seconds=1)),
+        replace(grant, not_before_utc=grant.not_before_utc + timedelta(seconds=1)),
+        replace(grant, represented_profile_id=OpaqueId.new()),
+        replace(
+            grant,
+            purpose=AuthPurpose.DESTRUCTIVE_RESTORE,
+            scopes=frozenset({AuthScope.RESTORE_DESTRUCTIVELY}),
+        ),
+        replace(grant, epoch=grant.epoch + 1),
+    ):
+        assert (
+            service.renew_recovery(session=exchange.session, grant=altered).denial
+            is AuthDenial.INVALID_PROOF
+        )
+
+    barrier = threading.Barrier(3)
+    outcomes: list[AuthOutcome[OpaqueCredential]] = []
+
+    def use_grant() -> None:
+        barrier.wait()
+        outcomes.append(service.renew_recovery(session=exchange.session, grant=grant))
+
+    threads = [threading.Thread(target=use_grant) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+    assert sum(outcome.value is not None for outcome in outcomes) == 1
+    assert [outcome.denial for outcome in outcomes if outcome.denial] == [AuthDenial.REPLAYED]
+
+
+def test_unconsumed_expired_exhausted_revoked_and_crash_consumed_steps_never_authorize() -> None:
+    def synthetic_grant(
+        actor: OpaqueId,
+        profile: OpaqueId,
+        session: OpaqueCredential,
+        challenge: OpaqueCredential,
+        expires_at: datetime,
+    ) -> AuthorityGrant:
+        return AuthorityGrant(
+            actor_id=actor,
+            represented_profile_id=profile,
+            session_id=session.handle,
+            authority_evidence_id=challenge.handle,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+            not_before_utc=NOW,
+            expires_at_utc=expires_at,
+            epoch=1,
+        )
+
+    service, _clock, source, store, setup = _service(policy=AuthPolicy(max_attempts=1))
+    actor, profile, _roots, exchange = _exchange(service, setup)
+    challenge = _allowed(
+        service.issue_step_up(
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        )
+    )
+    candidate = synthetic_grant(
+        actor, profile, exchange.session, challenge, NOW + timedelta(seconds=120)
+    )
+    wrong_challenge = _wrong(challenge, source)
+    assert (
+        service.consume_step_up(
+            challenge=wrong_challenge,
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        ).denial
+        is AuthDenial.ATTEMPTS_EXHAUSTED
+    )
+    assert (
+        service.renew_recovery(session=exchange.session, grant=candidate).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    crash_challenge = _allowed(
+        service.issue_step_up(
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        )
+    )
+    crash_candidate = synthetic_grant(
+        actor, profile, exchange.session, crash_challenge, NOW + timedelta(seconds=120)
+    )
+    store.arm_crash_once(CrashPoint.STEP_UP)
+    with pytest.raises(SyntheticCrash):
+        service.consume_step_up(
+            challenge=crash_challenge,
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        )
+    assert (
+        service.renew_recovery(session=exchange.session, grant=crash_candidate).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    valid = _grant(service, actor, profile, exchange.session, AuthPurpose.KEY_RECOVERY_CHANGE)
+    _allowed(service.revoke_session(exchange.session))
+    assert (
+        service.renew_recovery(session=exchange.session, grant=valid).denial is AuthDenial.REVOKED
+    )
+
+    expiring, clock, _source, _store, expiring_setup = _service(
+        policy=AuthPolicy(session_ttl_seconds=20, step_up_ttl_seconds=1)
+    )
+    actor, profile, _roots, exchange = _exchange(expiring, expiring_setup)
+    challenge = _allowed(
+        expiring.issue_step_up(
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        )
+    )
+    clock.advance(1)
+    assert (
+        expiring.consume_step_up(
+            challenge=challenge,
+            session=exchange.session,
+            actor_id=actor,
+            represented_profile_id=profile,
+            purpose=AuthPurpose.KEY_RECOVERY_CHANGE,
+            scopes=frozenset({AuthScope.CHANGE_KEY_RECOVERY}),
+        ).denial
+        is AuthDenial.EXPIRED
+    )
+    expired_candidate = synthetic_grant(
+        actor, profile, exchange.session, challenge, NOW + timedelta(seconds=1)
+    )
+    assert (
+        expiring.renew_recovery(session=exchange.session, grant=expired_candidate).denial
+        is AuthDenial.INVALID_PROOF
+    )
 
 
 def test_exact_two_bootstrap_sibling_recovery_is_atomically_revoked() -> None:
@@ -408,10 +657,66 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
     clock.advance(service.policy.recovery_ttl_seconds)
     assert service.recover(recovery=renewed).denial is AuthDenial.EXPIRED
 
-    reprovision = _allowed(service.begin_bootstrap(roots.reprovision))
-    replacement = _allowed(service.exchange_bootstrap(reprovision))
-    assert replacement.epoch == 3
-    assert replacement.actor_id == actor
+    reprovision_tty = PseudoTty()
+    _allowed(begin_bootstrap_on_tty(service, root=roots.reprovision, operator_tty=reprovision_tty))
+    reprovision_code = _secret_code(reprovision_tty, "bootstrap-code (one-use, short-lived)")
+    declined = PseudoTty(confirmed=False)
+    assert (
+        exchange_bootstrap_on_tty(
+            service, submitted_code=reprovision_code, operator_tty=declined
+        ).denial
+        is AuthDenial.OPERATOR_DECLINED
+    )
+    interrupted_handoff = PseudoTty(fail_secret_once=True)
+    first_reprovision = _allowed(
+        exchange_bootstrap_on_tty(
+            service,
+            submitted_code=reprovision_code,
+            operator_tty=interrupted_handoff,
+        )
+    )
+    assert first_reprovision.displayed is False
+    handoff = PseudoTty()
+    first_reprovision = redisplay_interrupted_bootstrap(first_reprovision, handoff)
+    assert first_reprovision.displayed is True
+    replacement = first_reprovision.exchange
+    assert replacement.epoch == 3 and replacement.actor_id == actor
+    assert replacement.replacement_reprovision is not None
+    replacement_root_code = _secret_code(handoff, "replacement-reprovision-code")
+    assert replacement_root_code == replacement.replacement_reprovision.credential.operator_code()
+    handed_off_reprovision = replace(
+        replacement.replacement_reprovision,
+        credential=OpaqueCredential.parse_operator_code(replacement_root_code),
+    )
+    assert service.begin_bootstrap(roots.reprovision).denial is AuthDenial.STALE_EPOCH
+
+    clock.advance(service.policy.recovery_ttl_seconds)
+    assert service.recover(recovery=replacement.recovery).denial is AuthDenial.EXPIRED
+    next_tty = PseudoTty()
+    _allowed(
+        begin_bootstrap_on_tty(
+            service,
+            root=handed_off_reprovision,
+            operator_tty=next_tty,
+        )
+    )
+    next_handoff = PseudoTty()
+    second_reprovision = _allowed(
+        exchange_bootstrap_on_tty(
+            service,
+            submitted_code=_secret_code(next_tty, "bootstrap-code (one-use, short-lived)"),
+            operator_tty=next_handoff,
+        )
+    ).exchange
+    assert second_reprovision.epoch == 4
+    assert second_reprovision.replacement_reprovision is not None
+    assert _secret_code(next_handoff, "replacement-reprovision-code") == (
+        second_reprovision.replacement_reprovision.credential.operator_code()
+    )
+    assert (
+        second_reprovision.replacement_reprovision.credential.handle
+        != replacement.replacement_reprovision.credential.handle
+    )
 
 
 def test_authenticated_and_emergency_revoke_have_exact_separate_authority() -> None:
@@ -488,10 +793,14 @@ def test_store_copies_mutable_records_and_retains_only_structural_digests() -> N
     assert stored.denial is None
     proposed.consumed = True
     exchange = _allowed(service.exchange_bootstrap(bootstrap))
-    digest = SecretDigest(hashlib.sha256(exchange.session.secret.reveal()).digest())
-    returned = _allowed(store.authenticate_session(exchange.session, digest, clock.now()))
+    _grant(service, actor, profile, exchange.session, AuthPurpose.PROFILE_DELETION)
+    reprovision = _allowed(service.begin_bootstrap(roots.reprovision))
+    reprovisioned = _allowed(service.exchange_bootstrap(reprovision))
+    assert reprovisioned.replacement_reprovision is not None
+    digest = SecretDigest(hashlib.sha256(reprovisioned.session.secret.reveal()).digest())
+    returned = _allowed(store.authenticate_session(reprovisioned.session, digest, clock.now()))
     returned.revoked = True
-    assert service.authenticate_session(exchange.session).value == exchange.session.handle
+    assert service.authenticate_session(reprovisioned.session).value == reprovisioned.session.handle
 
     forbidden: list[object] = []
     bytes_found: list[bytes] = []
@@ -519,7 +828,16 @@ def test_store_copies_mutable_records_and_retains_only_structural_digests() -> N
             walk(value)
     assert forbidden == []
     assert bytes_found and all(len(value) == 32 for value in bytes_found)
-    for credential in (bootstrap, exchange.session, exchange.recovery):
+    credentials = (
+        bootstrap,
+        exchange.session,
+        exchange.recovery,
+        reprovision,
+        reprovisioned.session,
+        reprovisioned.recovery,
+        reprovisioned.replacement_reprovision.credential,
+    )
+    for credential in credentials:
         assert credential.secret.reveal() not in bytes_found
 
 
@@ -565,6 +883,55 @@ def test_bounded_gc_removes_expired_and_burned_records() -> None:
     assert after["roots"] == 3
 
 
+def test_grant_provenance_and_replay_survive_until_the_live_replay_horizon() -> None:
+    service, clock, _source, store, setup = _service(
+        policy=AuthPolicy(session_ttl_seconds=20, step_up_ttl_seconds=5)
+    )
+    actor, profile, _roots, exchange = _exchange(service, setup)
+    grant = _grant(service, actor, profile, exchange.session, AuthPurpose.KEY_RECOVERY_CHANGE)
+    _allowed(service.renew_recovery(session=exchange.session, grant=grant))
+    assert store.record_counts()["grant_provenance"] == 1
+    service.garbage_collect(0)
+    assert store.record_counts()["grant_provenance"] == 1
+    assert (
+        service.renew_recovery(session=exchange.session, grant=grant).denial is AuthDenial.REPLAYED
+    )
+    clock.advance(5)
+    service.garbage_collect(0)
+    assert store.record_counts()["grant_provenance"] == 0
+    assert (
+        service.renew_recovery(session=exchange.session, grant=grant).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+
+def test_unknown_and_gc_retired_codes_share_safe_attempt_agnostic_guidance() -> None:
+    service, clock, source, _store, setup = _service()
+    _actor, _profile, _roots, exchange = _exchange(service, setup)
+    unknown = OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32))
+    unknown_tty = PseudoTty(unknown.operator_code())
+    assert (
+        recover_headless_on_tty(service, operator_tty=unknown_tty).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    clock.advance(service.policy.recovery_ttl_seconds)
+    expired_tty = PseudoTty(exchange.recovery.operator_code())
+    assert recover_headless_on_tty(service, operator_tty=expired_tty).denial is AuthDenial.EXPIRED
+    service.garbage_collect(0)
+    retired_tty = PseudoTty(exchange.recovery.operator_code())
+    assert (
+        recover_headless_on_tty(service, operator_tty=retired_tty).denial
+        is AuthDenial.INVALID_PROOF
+    )
+    assert unknown_tty.getvalue() == retired_tty.getvalue()
+    assert "code is unknown or retired" in retired_tty.getvalue()
+    assert "remaining attempts are unavailable" in retired_tty.getvalue()
+    assert "retry only while attempts remain" not in (
+        unknown_tty.getvalue() + expired_tty.getvalue() + retired_tty.getvalue()
+    )
+
+
 def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     service, _clock, _source, _store, setup = _service()
     _actor, _profile, roots = _provision(setup)
@@ -582,10 +949,21 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     )
     healthy = PseudoTty()
     _allowed(begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=healthy))
-    bootstrap_code = healthy.secret_values[0][0][1]
-    exchange = _allowed(exchange_bootstrap_code(service, bootstrap_code))
+    bootstrap_code = _secret_code(healthy, "bootstrap-code (one-use, short-lived)")
+    interrupted_handoff = PseudoTty(fail_secret_once=True)
+    bootstrap_result = _allowed(
+        exchange_bootstrap_on_tty(
+            service,
+            submitted_code=bootstrap_code,
+            operator_tty=interrupted_handoff,
+        )
+    )
+    assert bootstrap_result.displayed is False
+    handoff_tty = PseudoTty()
+    bootstrap_result = redisplay_interrupted_bootstrap(bootstrap_result, handoff_tty)
+    assert bootstrap_result.displayed is True
 
-    recovery_tty = PseudoTty(exchange.recovery.operator_code(), fail_secret_once=True)
+    recovery_tty = PseudoTty(_secret_code(handoff_tty, "new-recovery-code"), fail_secret_once=True)
     recovery_result = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
     assert recovery_result.displayed is False
     redisplay_tty = PseudoTty()
@@ -602,14 +980,28 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
     with redirect_stdout(stdout), redirect_stderr(stderr):
         tty = PseudoTty()
         _allowed(begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=tty))
-        bootstrap_code = tty.secret_values[0][0][1]
-        exchange = _allowed(exchange_bootstrap_code(service, bootstrap_code))
+        bootstrap_code = _secret_code(tty, "bootstrap-code (one-use, short-lived)")
+        handoff_tty = PseudoTty()
+        handoff = _allowed(
+            exchange_bootstrap_on_tty(
+                service,
+                submitted_code=bootstrap_code,
+                operator_tty=handoff_tty,
+            )
+        )
+        assert handoff.displayed
+        tty.write_public(handoff_tty.getvalue())
+        session = OpaqueCredential.parse_operator_code(
+            _secret_code(handoff_tty, "new-session-code")
+        )
+        recovery_code = _secret_code(handoff_tty, "new-recovery-code")
+        handed_off_recovery = OpaqueCredential.parse_operator_code(recovery_code)
 
         purpose = AuthPurpose.PROFILE_DELETION
         scopes = frozenset({PURPOSE_SCOPE[purpose]})
         challenge = _allowed(
             service.issue_step_up(
-                session=exchange.session,
+                session=session,
                 actor_id=actor,
                 represented_profile_id=profile,
                 purpose=purpose,
@@ -618,7 +1010,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         )
         wrong = service.consume_step_up(
             challenge=challenge,
-            session=exchange.session,
+            session=session,
             actor_id=actor,
             represented_profile_id=profile,
             purpose=AuthPurpose.DESTRUCTIVE_RESTORE,
@@ -628,7 +1020,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         grant = _allowed(
             service.consume_step_up(
                 challenge=challenge,
-                session=exchange.session,
+                session=session,
                 actor_id=actor,
                 represented_profile_id=profile,
                 purpose=purpose,
@@ -638,7 +1030,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         tty.write_public(f"step-up-correct: {grant.purpose.value}\n")
         replay = service.consume_step_up(
             challenge=challenge,
-            session=exchange.session,
+            session=session,
             actor_id=actor,
             represented_profile_id=profile,
             purpose=purpose,
@@ -646,12 +1038,10 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         )
         tty.write_public(f"step-up-replay: {replay.denial.value}\n")
 
-        recovery_tty = PseudoTty(exchange.recovery.operator_code())
+        recovery_tty = PseudoTty(recovery_code)
         recovered = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
         tty.write_public(recovery_tty.getvalue())
-        tty.write_public(
-            f"old-session: {service.authenticate_session(exchange.session).denial.value}\n"
-        )
+        tty.write_public(f"old-session: {service.authenticate_session(session).denial.value}\n")
         non_tty = PseudoTty(interactive=False)
         recover_headless_on_tty(service, operator_tty=non_tty)
         tty.write_public(non_tty.getvalue())
@@ -659,8 +1049,8 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
     assert stdout.getvalue() == "" and stderr.getvalue() == ""
     credentials = (
         OpaqueCredential.parse_operator_code(bootstrap_code),
-        exchange.session,
-        exchange.recovery,
+        session,
+        handed_off_recovery,
         challenge,
         recovered.exchange.session,
         recovered.exchange.recovery,

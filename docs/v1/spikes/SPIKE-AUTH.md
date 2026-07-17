@@ -32,21 +32,25 @@ AuthService -- Clock / TokenSource / AuthDecisionStore ports
         |
         +-- opaque digest-only session + actor epoch + validity window
         +-- one-use step-up + session + purpose + exact scope
+        +-- immutable exact grant provenance + atomic one-use state
         +-- opaque digest-only long-lived recovery indexed by its own handle
         v
 VolatileAuthDecisionStore (RLock, process memory, bounded garbage collection)
 ```
 
-`TrustedLocalAuthSetup` is the only composition surface that mints roots. It provisions exactly one capability
-for each `RootPurpose` and registers their digests with a single empty volatile store. Merely knowing or
-choosing actor/profile UUIDs cannot bootstrap, reprovision, or revoke authority. Root verification compares the
-secret digest and exact installation, actor, represented profile, and purpose. A forged, cross-bound, wrong-
-purpose, stale, or replayed capability is denied.
+`TrustedLocalAuthSetup` is the only initial composition surface that mints roots. Before any store mutation,
+the adapter requires exactly three distinct record objects, three distinct handles, and exactly one capability
+for each `RootPurpose`, all with the same installation/actor/profile binding. It registers their digests with a
+single empty volatile store. Merely knowing or choosing actor/profile UUIDs cannot bootstrap, reprovision, or
+revoke authority. Root verification compares the secret digest and exact installation, actor, represented
+profile, and purpose. A forged, cross-bound, wrong-purpose, stale, or replayed capability is denied.
 
-The initial root is valid only before the actor's first successful bootstrap exchange. Later bootstraps require
-a current session and an exact `setup_authority_change` step-up grant. The reprovision root is valid only after
-initialization. Root authority is consumed at successful exchange, not before display, so an all-or-nothing
-bootstrap display failure can burn the undisclosed bootstrap record and retry with the same root.
+The initial root is valid only before the actor's first successful bootstrap exchange. Later ordinary
+bootstraps require a current session and an exact `setup_authority_change` step-up grant. A reprovision root is
+valid only after initialization and remains one-use: every successful reprovision atomically registers a fresh,
+canonically bound reprovision capability and hands it off with the new session/recovery. The old root is never
+re-enabled. Root authority is consumed at successful exchange, not at bootstrap-code display. The exchange
+entrypoint warns and confirms before consuming that offline route.
 
 Every secret contains at least 256 bits from the injected token source. The spike adapter uses
 `secrets.token_bytes`; state stores only fixed SHA-256 `SecretDigest` values and compares them with
@@ -77,10 +81,13 @@ lock, the store consumes every recovery record for that actor, increments the ep
 step-ups, and issues exactly one new session/recovery pair. The two-bootstrap sibling regression proves that
 using either sibling makes the other unusable.
 
-If recovery expires and no current session remains, the offline reprovision root may establish fresh auth
-authority for the already-bound installation/actor/profile. It does **not** recover encrypted profile data,
-keys, broker history, or any other lost state. Losing every session, recovery code, and reprovision root is
-total authority loss in this model. No recovery claim is made for that condition.
+If recovery expires and no current session remains, the current offline reprovision root may establish fresh
+auth authority for the already-bound installation/actor/profile. The exchange rotates that root and discloses
+the replacement through the confirmed all-or-nothing operator channel. A regression proves recovery expiry,
+reprovision, second recovery expiry, and second reprovision with three distinct one-use roots. Reprovision does
+**not** recover encrypted profile data, keys, broker history, or any other lost state. Losing every session,
+recovery code, and the current reprovision root is total authority loss in this model. No recovery claim is
+made for that condition.
 
 ## Step-up and incident revocation
 
@@ -89,6 +96,15 @@ submission, key/recovery change, profile deletion, destructive restore, and all-
 checks exact enum types before mapping lookup, so malformed purpose/scope values produce typed denials instead
 of `KeyError`. A grant binds actor, represented profile, current session, one-use evidence, purpose, exact
 scope, not-before, expiry, and actor epoch.
+
+A returned `AuthorityGrant` is not self-authenticating. Only successful step-up consumption creates an
+immutable `GrantProvenanceRecord`, keyed by its evidence ID, while holding the decision lock. Every validation
+or privileged consumer requires exact equality of actor, profile, session, purpose, scope, epoch, time window,
+and evidence with that record; random IDs and any altered field deny. Unconsumed, expired, exhausted, revoked-
+session, and crash-consumed challenges create no usable provenance. Successful validation/use atomically marks
+the provenance used, so concurrent consumers yield one success and one replay. Provenance and replay state are
+retained through the grant's expiry plus the bounded retention window; they are not collected merely because
+the step-up record was consumed earlier.
 
 There are two deliberately separate incident paths:
 
@@ -102,9 +118,12 @@ Recovery itself follows the stricter all-session policy: every prior session and
 
 ## Operator and headless ceremony
 
-Before any secret display, the narrow `OperatorTty` port requires an interactive channel, prints a prominent
-warning to disable recording, saved scrollback, copy synchronization, and session logging, then requires an
-explicit confirmation. It reports finite expiry, attempt, retry, and denial guidance. The port contract's
+Before any secret display or offline-route consumption, the narrow `OperatorTty` port requires an interactive
+channel, prints a prominent warning to disable recording, saved scrollback, copy synchronization, and session
+logging, then requires an explicit confirmation. It reports finite expiry, attempt, retry, and denial guidance.
+Unknown and garbage-collected codes share attempt-agnostic guidance: the code may be unknown or retired,
+remaining attempts are unavailable, and the operator must verify input or use an authorized route. Attempt
+counts are shown only at issuance where the configured count is known. The port contract's
 `write_secret_block` must display the entire block or raise without retaining a partial block. This is a tested
 contract for a synthetic channel, not a claim about a production terminal implementation.
 
@@ -118,16 +137,20 @@ handle indexes the local record and all bindings come from state. Secrets must n
 exec` arguments, environment variables, shell history, remote logging, or a recording session. A non-TTY is
 refused before issuance or recovery.
 
-If bootstrap output is interrupted, the undisclosed bootstrap is burned and the same unconsumed root can retry.
-If output fails after recovery has atomically consumed old authority, the caller temporarily holds the already-
-issued result and may retry its all-or-nothing display without replaying recovery. This is process-memory-only
-behavior; a crash at that point loses the replacement and fails closed. Successful recovery explicitly tells
-the operator that old sessions and old recovery codes were revoked.
+If bootstrap-code output is interrupted, the undisclosed bootstrap is burned and the same unconsumed root can
+retry. Bootstrap exchange is a separate confirmed ceremony: it consumes the code/root, then hands off the new
+session and recovery (and a rotated reprovision root when applicable) in one all-or-nothing block. If this
+handoff fails, the in-process result may be redisplayed without replaying bootstrap. Recovery uses the same
+interrupted-display pattern. These are process-memory-only behaviors; a crash after consume but before handoff
+loses replacements and fails closed. Successful recovery explicitly tells the operator that old sessions and
+old recovery codes were revoked.
 
 The committed [redacted transcript](./SPIKE-AUTH-TRANSCRIPT.txt) is generated by an executable test using the
-real entrypoint helpers. The harness covers warning/confirmation, bootstrap display and exchange, wrong/correct/
-replayed step-up, no-echo recovery, replacement display, old-session invalidation, non-TTY refusal, exact
-credential redaction, and empty actual stdout/stderr. It contains no retained deterministic credential value.
+real entrypoint helpers. The harness covers warning/confirmation, bootstrap display, confirmed session/recovery
+handoff, wrong/correct/replayed step-up, no-echo recovery, replacement display, old-session invalidation,
+non-TTY refusal, exact credential redaction, and empty actual stdout/stderr. The later recovery input is parsed
+from the completed operator handoff, not read from an in-memory `BootstrapExchange`. The artifact contains no
+retained deterministic credential value.
 
 ## Consume, crash, clock, and collection model
 
@@ -139,6 +162,7 @@ Every policy read uses an injected aware-UTC clock. Early use, forward expiry, a
 actor's last observed instant deny as `not_yet_valid`, `expired`, and `clock_rollback`. This is not a trusted
 monotonic clock across reboot or host compromise. Garbage collection accepts only a 0–86,400 second retention
 window and removes expired or explicitly retired volatile roots, bootstraps, sessions, recoveries, and step-ups.
+Grant provenance uses the later live replay horizon instead: expiry plus retention.
 
 The adapter has no transaction log and loses authority and consume history on restart. Production `AUTH-001`
 needs persistent compare-and-swap/transaction evidence at every crash boundary, key protection, backup/restore
@@ -148,16 +172,20 @@ epoch rules, and multi-process tests.
 
 Focused regressions cover:
 
-- forged/wrong-installation/wrong-actor/wrong-profile/wrong-purpose/stale root capabilities;
+- exact-three/unique initial roots and forged/wrong-installation/wrong-actor/wrong-profile/wrong-purpose/stale
+  root capabilities;
 - first bootstrap, authenticated rebootstrap, bounded attempts/expiry, concurrency, and crash consumption;
-- exact typed step-up binding, wrong-purpose denial, replay, session rotation, and malformed enum inputs;
+- exact typed step-up binding, immutable store provenance, every-field alteration, no-provenance failure modes,
+  concurrent one-use, replay-horizon GC, session rotation, and malformed enum inputs;
 - two sibling bootstraps followed by atomic all-recovery consumption and all-session invalidation;
-- six-month recovery, authenticated renewal, 365-day expiry, reprovision, and explicit non-recovery claims;
+- six-month recovery, authenticated renewal, two expiry/reprovision cycles, rotated reprovision handoff, and
+  explicit non-recovery claims;
 - authenticated versus emergency all-session revocation and their distinct replacement policies;
 - canonical store-side recovery binding, immutable adapter boundaries, structural digest-only state, constant-
   time comparison, and exact mutable-state validation;
-- confirmation refusal, non-TTY refusal, interrupted bootstrap, interrupted recovery redisplay, bounded GC,
-  redacted traceback/rendering, no URL/argv path, typed diagnostics, and the executable transcript.
+- confirmation refusal before offline consume, non-TTY refusal, interrupted bootstrap handoff/recovery
+  redisplay, unknown/retired guidance, bounded GC, redacted traceback/rendering, no URL/argv path, typed
+  diagnostics, and the executable transcript.
 
 These tests are spike evidence, not canonical `VFY-AUTH-001`. That verification remains `PLANNED` until
 governance acceptance and independent review authorize an exact criterion/evidence mapping.
