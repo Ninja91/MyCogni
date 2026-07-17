@@ -32,7 +32,7 @@ check: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) ruff check .
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) mypy -p mycogni -p connector_protocol -p simulator
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) lint-imports
-	uv run --all-packages --frozen --python $(PYTHON_VERSION) pytest tests packages/mycogni-connector-sdk/tests
+	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/safety_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/claim_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/threat_catalog_guard.py
@@ -44,7 +44,7 @@ check-python-313: verify-toolchain
 	uv sync --all-groups --all-packages --frozen --python $(PYTHON_COMPAT_VERSION)
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) ruff check .
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) lint-imports
-	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) pytest tests packages/mycogni-connector-sdk/tests
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/safety_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/claim_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/threat_catalog_guard.py
@@ -56,4 +56,4 @@ network-namespace-probe: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/network_namespace.py
 
 test: verify-toolchain
-	uv run --all-packages --frozen --python $(PYTHON_VERSION) pytest tests packages/mycogni-connector-sdk/tests
+	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests

@@ -777,7 +777,14 @@ def _execute_pytest_nodes(registry: Mapping[str, Any], root: Path) -> list[str]:
         environment = os.environ.copy()
         environment["MYCOGNI_THREAT_EVIDENCE_SUBPROCESS"] = "1"
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "--runxfail", "-rA", "-q", node],
+            [
+                sys.executable,
+                "scripts/ci/guarded_pytest.py",
+                "--runxfail",
+                "-rA",
+                "-q",
+                node,
+            ],
             cwd=root,
             check=False,
             capture_output=True,

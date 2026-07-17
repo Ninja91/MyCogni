@@ -4,11 +4,13 @@ Status: implementation complete; independent adversarial acceptance pending.
 
 ## Enforced pytest policy
 
-The root pytest session installs `scripts.ci.network_guard_plugin` before test
-collection. There is no supported guard-off flag. Setting
-`MYCOGNI_DISABLE_NETWORK_GUARD`, removing the plugin, changing its registered
-marker, moving a marked test, inheriting a marker, or adding marker arguments
-fails either pytest configuration/collection or the static CI guard.
+`scripts/ci/guarded_pytest.py` is the only supported repository or package-suite
+pytest launcher. Make, CI, governance evidence and threat evidence all use it.
+Root and connector-package conftests are sentinels: direct pytest fails instead
+of silently running without the plugin. The launcher rejects plugin-autoload
+disablement, guard-off environment state, `-p no:...`, `--noconftest` and
+`--confcutdir`. Removing the launcher/plugin/sentinel wiring fails the static
+CI guard.
 
 Every test receives an input-free opaque test ID. The default capability denies
 DNS and address-bearing socket operations. Only an exact, argument-free
@@ -17,22 +19,34 @@ literal address `127.0.0.1`:
 
 - the four raw-HTTP simulator tests in
   `tests/simulator/test_web_mail_safety.py`;
-- the four local HTTP policy mutation tests in
+- all parameter cases from the five local HTTP policy mutation functions in
   `tests/simulator/test_network_guard_simulator.py`.
 
-The capability is a `ContextVar` installed for one pytest setup/call/teardown
-lifecycle and reset after fixture cleanup. A new thread receives no capability.
-Async work inside that test remains restricted to the same numeric-loopback
-policy. A later test receives a distinct context and cannot reuse the prior
-capability.
+`ci/network-loopback-authority.json` enumerates all 38 authorized pytest nodes,
+including explicit parameter IDs, and pins SHA-256 digests for both source
+files. Runtime collection requires an exact function-level source decorator,
+exact path/function/case node, exact digest and argument-free own marker.
+Inherited, generated, dynamically attached and unregistered parameter cases
+cannot acquire authority.
+
+The capability is a mutable revocation lease referenced by a `ContextVar` for
+one pytest setup/call/teardown lifecycle. Teardown revokes the shared lease
+before resetting context. A new thread receives no capability; an already
+created async task may copy the lease reference but cannot use it after
+revocation. A later test receives a distinct lease.
 
 The runtime guard denies all resolver APIs, non-IPv4 families, IPv6 (including
 IPv4-mapped IPv6), wildcard/broadcast/non-loopback addresses, hostnames,
-integer/hex/encoded IP aliases, Unix sockets, invalid ports, TLS wrapping/SNI,
+integer/hex/encoded IP aliases, filesystem-path Unix sockets, invalid ports, TLS wrapping/SNI,
 non-HTTP URL schemes, userinfo, fragments, default/zero ports, proxy environment
 variables and explicit HTTPX/urllib proxies. It checks each HTTPX send and each
 urllib opener invocation, so a redirect is validated again. Denial tests spy on
 the underlying DNS/socket/async/client primitive and prove it is not invoked.
+Inherited/preconnected descriptors, `fromfd`, descriptor duplication/detach and
+post-revocation send/receive fail closed. Accepted loopback sockets receive the
+same revocable object capability as their listener. Anonymous `socketpair()` is
+permitted only for in-process interpreter/event-loop control; its endpoints
+cannot connect to a filesystem path, detach or duplicate.
 
 The emitted `NetworkDenied` diagnostic payload and its `str`/`repr` rendering
 contain only a finite category, finite reason, and SHA-256-derived opaque test
@@ -45,27 +59,33 @@ diagnostics, not elimination of Python traceback objects from process memory.
 `scripts/ci/network_source_guard.py` pins the plugin and marker provenance,
 rejects unreviewed runtime network/process imports, and preserves the simulator's
 recursive subprocess/dynamic-import/network source guard. `make check` and both
-CI Python lanes execute it; the pytest plugin protects every test command, not
-only the full CI target.
+CI Python lanes execute it. The guarantee applies to guarded-launcher commands;
+unsupported direct pytest invocations fail via repository/package sentinels.
 
 ## Optional OS layer and nonclaims
 
 `make network-namespace-probe` reports one of these exact states without making
 the suite fail:
 
-- `network_namespace=supported_optional`; or
-- `network_namespace=unsupported`.
+- `network_namespace=supported`;
+- `network_namespace=unsupported`;
+- `network_namespace=denied`; or
+- `network_namespace=failure`.
 
 On Linux hosts where unprivileged user/network namespaces are supported,
 `python scripts/ci/network_namespace.py --run <command>` runs the command under
-`unshare --user --map-root-user --net`. A return code of 2 means containment was
-not available and no command ran. CI records the probe; it does not silently
-claim enforcement.
+`unshare --user --map-root-user --net`. For `--run`, unsupported, denied and
+probe/exec failure return 2, 3 and 4 respectively without running the requested
+command. Probe and execution timeouts/OSErrors classify as `failure` instead of
+crashing. CI records the probe; it does not silently claim enforcement.
 
 The Python guard is not an operating-system sandbox and does not defend against
 hostile test code retaining original primitives before installation, native
 code, `ctypes`, a compromised interpreter, or a subprocess deliberately added
-outside the source guard. macOS/Docker Desktop normally reports the namespace
+outside the source guard. A deliberately hostile test could also retain the
+original C socket class, obtain/duplicate descriptors through unpatched native
+or `os` primitives, or disable all Python startup/configuration outside the
+supported launcher. macOS/Docker Desktop normally reports the namespace
 layer unsupported. NET-001 therefore proves the reviewed Python CI/test harness
 does not initiate real network access; it does not prove host-wide packet
 containment.

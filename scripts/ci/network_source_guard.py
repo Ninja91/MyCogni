@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 PYPROJECT = ROOT / "pyproject.toml"
 CONFTEST = ROOT / "tests" / "conftest.py"
-PLUGIN = "scripts.ci.network_guard_plugin"
+PACKAGE_CONFTEST = ROOT / "packages" / "mycogni-connector-sdk" / "tests" / "conftest.py"
+MAKEFILE = ROOT / "Makefile"
+AUTHORITY_REGISTRY = ROOT / "ci" / "network-loopback-authority.json"
 MARKER_ATTRIBUTE = "pytest.mark.simulator_loopback"
 NETWORK_TEST_FILE = ROOT / "tests" / "simulator" / "test_web_mail_safety.py"
 GUARD_TEST_FILE = ROOT / "tests" / "ci" / "test_network_guard.py"
@@ -42,6 +46,35 @@ FORBIDDEN_RUNTIME_IMPORTS = {
 }
 FORBIDDEN_DYNAMIC_CALLS = {"__import__", "compile", "eval", "exec"}
 TEST_ESCAPE_IMPORTS = FORBIDDEN_RUNTIME_IMPORTS | {"_socket", "builtins", "importlib"}
+PROCESS_DYNAMIC_CALLS = {
+    "__import__",
+    "asyncio.create_subprocess_exec",
+    "asyncio.create_subprocess_shell",
+    "builtins.__import__",
+    "builtins.compile",
+    "builtins.eval",
+    "builtins.exec",
+    "compile",
+    "eval",
+    "exec",
+    "importlib.import_module",
+    "os.execv",
+    "os.execve",
+    "os.fork",
+    "os.popen",
+    "os.posix_spawn",
+    "os.posix_spawnp",
+    "os.spawnl",
+    "os.spawnlp",
+    "os.spawnv",
+    "os.spawnvp",
+    "os.system",
+    "subprocess.Popen",
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "subprocess.run",
+}
 TEST_IMPORT_ALLOWLIST = {
     "tests/ci/test_network_guard.py": TEST_ESCAPE_IMPORTS,
     "tests/simulator/test_network_guard_simulator.py": {"httpx", "socket"},
@@ -51,6 +84,15 @@ TEST_IMPORT_ALLOWLIST = {
     "tests/architecture/test_distribution_boundaries.py": {"subprocess"},
     "tests/architecture/test_container_skeleton.py": {"importlib"},
     "tests/architecture/test_package_boundaries.py": {"importlib"},
+}
+PROCESS_CALL_ALLOWLIST = {
+    "tests/ci/test_network_guard.py",
+    "tests/ci/test_governance_traceability.py",
+    "tests/ci/test_toolchain_guards.py",
+    "tests/architecture/test_distribution_boundaries.py",
+    "tests/architecture/test_container_skeleton.py",
+    "tests/architecture/test_package_boundaries.py",
+    "tests/simulator/test_web_mail_safety.py",
 }
 
 
@@ -183,6 +225,60 @@ def _test_escape_errors() -> list[str]:
         }
         if violations:
             errors.append(f"{relative}: unreviewed test network/process/dynamic import")
+        if relative not in PROCESS_CALL_ALLOWLIST:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            calls = {_attribute(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+            if calls & PROCESS_DYNAMIC_CALLS:
+                errors.append(f"{relative}: unreviewed test process/dynamic call")
+    return errors
+
+
+def _launcher_errors() -> list[str]:
+    errors: list[str] = []
+    conftest = CONFTEST.read_text(encoding="utf-8")
+    package_conftest = PACKAGE_CONFTEST.read_text(encoding="utf-8")
+    if "pytest must run through scripts/ci/guarded_pytest.py" not in conftest:
+        errors.append("root pytest guarded-launcher sentinel is missing")
+    if "pytest must run through scripts/ci/guarded_pytest.py" not in package_conftest:
+        errors.append("package pytest guarded-launcher sentinel is missing")
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    pytest_commands = [line for line in makefile.splitlines() if "pytest" in line]
+    if not pytest_commands or any(
+        "scripts/ci/guarded_pytest.py" not in line for line in pytest_commands
+    ):
+        errors.append("Makefile contains an unsupported pytest invocation")
+    for relative in (
+        "scripts/ci/governance_guard.py",
+        "scripts/ci/threat_catalog_guard.py",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        if '"-m", "pytest"' in text or "scripts/ci/guarded_pytest.py" not in text:
+            errors.append(f"{relative}: nested pytest invocation bypasses guarded launcher")
+    return errors
+
+
+def _authority_registry_errors() -> list[str]:
+    errors: list[str] = []
+    try:
+        document = json.loads(AUTHORITY_REGISTRY.read_text(encoding="utf-8"))
+        nodes = document["authorized_nodes"]
+        sources = document["source_sha256"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return ["network loopback authority registry is unreadable"]
+    if document.get("schema_version") != 1 or nodes != sorted(set(nodes)):
+        errors.append("network loopback authority registry is not canonical")
+    for relative, expected in sources.items():
+        path = (ROOT / relative).resolve()
+        try:
+            path.relative_to(ROOT.resolve())
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            errors.append("network loopback authority source is invalid")
+            continue
+        if actual != expected:
+            errors.append("network loopback authority source digest differs")
+    if len(nodes) != 38:
+        errors.append("network loopback authority node count differs from reviewed set")
     return errors
 
 
@@ -197,16 +293,26 @@ def test_import_violations(path: Path) -> set[str]:
     }
 
 
+def test_call_violations(path: Path) -> set[str]:
+    """Return denied process/dynamic calls for an unreviewed test source."""
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    calls = {_attribute(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    return calls & PROCESS_DYNAMIC_CALLS
+
+
 def check() -> list[str]:
     errors: list[str] = []
-    if PLUGIN not in CONFTEST.read_text(encoding="utf-8"):
-        errors.append("root pytest configuration does not load the network guard")
+    if "from scripts.ci import network_guard_plugin" not in CONFTEST.read_text(encoding="utf-8"):
+        errors.append("root pytest configuration lacks the network guard sentinel")
     pyproject = PYPROJECT.read_text(encoding="utf-8")
     if "simulator_loopback: permit numeric 127.0.0.1 TCP" not in pyproject:
         errors.append("exact simulator loopback marker registration is missing")
     errors.extend(_runtime_errors())
     errors.extend(_simulator_marker_errors())
     errors.extend(_test_escape_errors())
+    errors.extend(_launcher_errors())
+    errors.extend(_authority_registry_errors())
     return errors
 
 

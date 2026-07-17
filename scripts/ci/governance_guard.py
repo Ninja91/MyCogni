@@ -486,7 +486,14 @@ def _execute_node(root: Path, reference: str, criterion_ids: Sequence[str]) -> b
     with tempfile.TemporaryDirectory(prefix="mycogni-governance-") as directory:
         artifact = Path(directory) / "result.json"
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "--runxfail", "-rA", "-q", reference],
+            [
+                sys.executable,
+                "scripts/ci/guarded_pytest.py",
+                "--runxfail",
+                "-rA",
+                "-q",
+                reference,
+            ],
             cwd=root,
             check=False,
             capture_output=True,

@@ -420,6 +420,18 @@ def test_raw_http_success_has_deterministic_headers_without_date() -> None:
             400,
         ),
     ],
+    ids=[
+        "missing-host",
+        "external-host",
+        "missing-origin",
+        "external-origin",
+        "duplicate-host",
+        "missing-content-length",
+        "duplicate-content-length",
+        "transfer-encoding",
+        "method",
+        "http10",
+    ],
 )
 @pytest.mark.simulator_loopback
 def test_raw_http_mutations_fail_closed(request_builder: object, status: int) -> None:

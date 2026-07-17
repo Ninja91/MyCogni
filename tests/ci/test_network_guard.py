@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import http.client
+import json
 import os
 import socket
 import ssl
@@ -17,7 +19,26 @@ from typing import Any
 import httpx
 import pytest
 
-from scripts.ci import network_guard, network_source_guard
+from scripts.ci import network_guard, network_namespace, network_source_guard
+
+ROOT = Path(__file__).parents[2]
+GUARDED_PYTEST = ROOT / "scripts" / "ci" / "guarded_pytest.py"
+
+
+def _run_pytest(
+    *arguments: str,
+    cwd: Path = ROOT,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(GUARDED_PYTEST), *arguments],
+        cwd=cwd,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 def _assert_safe_denial(error: NetworkError, *inputs: str) -> None:
@@ -63,6 +84,11 @@ def test_dns_apis_are_denied_without_reaching_os_primitive(
 
 class _FakeSocket:
     family = socket.AF_INET
+    type = socket.SOCK_STREAM
+    _mycogni_anonymous_pair = False
+    _mycogni_lease = None
+    _require_descriptor = network_guard.GuardedSocket._require_descriptor
+    _require_tcp_ipv4 = network_guard.GuardedSocket._require_tcp_ipv4
 
     def getsockname(self) -> tuple[str, int]:
         return ("127.0.0.1", 43123)
@@ -202,6 +228,85 @@ def test_context_does_not_propagate_to_new_thread() -> None:
         network_guard.deactivate_test(token)
 
 
+def test_already_created_async_task_loses_revoked_authority() -> None:
+    async def scenario() -> NetworkError:
+        release = asyncio.Event()
+        handle = network_guard.activate_test("synthetic-async", simulator_loopback=True)
+
+        async def delayed_attempt() -> None:
+            await release.wait()
+            network_guard.authorize_socket_address(socket.AF_INET, ("127.0.0.1", 43123))
+
+        task = asyncio.create_task(delayed_attempt())
+        await asyncio.sleep(0)
+        network_guard.deactivate_test(handle)
+        release.set()
+        with pytest.raises(NetworkError) as raised:
+            await task
+        return raised.value
+
+    denial = asyncio.run(scenario())
+    assert denial.reason is network_guard.DenialReason.AUTHORITY_REVOKED
+
+
+def test_revoked_descriptor_cannot_send_or_receive() -> None:
+    handle = network_guard.activate_test("synthetic-descriptor", simulator_loopback=True)
+    candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        candidate._attach_current_lease()
+        network_guard.deactivate_test(handle)
+        with pytest.raises(NetworkError, match="authority_revoked"):
+            candidate.send(b"synthetic")
+        with pytest.raises(NetworkError, match="authority_revoked"):
+            candidate.recv(1)
+    finally:
+        candidate.close()
+
+
+def test_inherited_and_duplicated_descriptors_fail_before_os_use() -> None:
+    with pytest.raises(NetworkError, match="descriptor_forbidden"):
+        network_guard.GuardedSocket(fileno=999_999)
+    if hasattr(socket, "fromfd"):
+        with pytest.raises(NetworkError, match="descriptor_forbidden"):
+            socket.fromfd(999_999, socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "dup"):
+        with pytest.raises(NetworkError, match="descriptor_forbidden"):
+            socket.dup(999_999)
+
+
+def test_datagram_send_and_connect_are_denied_even_with_loopback_authority() -> None:
+    handle = network_guard.activate_test("synthetic-datagram", simulator_loopback=True)
+    candidate = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        with pytest.raises(NetworkError, match="socket_type_forbidden"):
+            candidate.connect(("127.0.0.1", 43123))
+        with pytest.raises(NetworkError, match="socket_type_forbidden"):
+            candidate.sendto(b"synthetic", ("127.0.0.1", 43123))
+    finally:
+        candidate.close()
+        network_guard.deactivate_test(handle)
+
+
+def test_anonymous_socketpair_is_local_only_and_cannot_be_duplicated() -> None:
+    left, right = socket.socketpair()
+    try:
+        left.sendall(b"x")
+        assert right.recv(1) == b"x"
+        with pytest.raises(NetworkError, match="descriptor_forbidden"):
+            left.dup()
+        with pytest.raises(NetworkError, match="descriptor_forbidden"):
+            left.detach()
+        handle = network_guard.activate_test("synthetic-unix", simulator_loopback=True)
+        try:
+            with pytest.raises(NetworkError, match="family_forbidden"):
+                left.connect("/tmp/synthetic.sock")
+        finally:
+            network_guard.deactivate_test(handle)
+    finally:
+        left.close()
+        right.close()
+
+
 def test_previous_test_capability_is_not_present() -> None:
     with pytest.raises(NetworkError) as raised:
         network_guard.authorize_socket_address(socket.AF_INET, ("127.0.0.1", 43123))
@@ -211,25 +316,10 @@ def test_previous_test_capability_is_not_present() -> None:
 def test_marker_forgery_outside_simulator_is_a_collection_error(tmp_path: Path) -> None:
     mutation = tmp_path / "test_marker_forgery.py"
     mutation.write_text(
-        "import pytest\n\n@pytest.mark.simulator_loopback\ndef test_forged():\n    pass\n",
+        "import pytest\n\n" + "@pytest.mark.simulator_loopback\ndef test_forged():\n    pass\n",
         encoding="utf-8",
     )
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "scripts.ci.network_guard_plugin",
-            str(mutation),
-        ],
-        cwd=Path(__file__).parents[2],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_pytest("-q", str(mutation))
     assert completed.returncode != 0
     assert "simulator loopback marker is restricted" in completed.stderr
 
@@ -237,24 +327,239 @@ def test_marker_forgery_outside_simulator_is_a_collection_error(tmp_path: Path) 
 def test_guard_off_environment_is_a_configuration_error() -> None:
     environment = dict(os.environ)
     environment["MYCOGNI_DISABLE_NETWORK_GUARD"] = "1"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--collect-only",
-            "-q",
-            "tests/domain/test_contracts.py",
-        ],
-        cwd=Path(__file__).parents[2],
-        env=environment,
+    completed = _run_pytest(
+        "--collect-only",
+        "-q",
+        "tests/domain/test_contracts.py",
+        environment=environment,
+    )
+    assert completed.returncode != 0
+    assert "guarded_pytest=denied" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("arguments", "environment"),
+    [
+        (("-p", "no:scripts.ci.network_guard_plugin"), None),
+        (("-pno:network_guard_plugin",), None),
+        (("--noconftest",), None),
+        (("--confcutdir=/tmp",), None),
+        ((), {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}),
+        ((), {"PYTEST_ADDOPTS": "-p no:network_guard_plugin"}),
+    ],
+)
+def test_guard_exclusion_options_fail_in_launcher(
+    arguments: tuple[str, ...], environment: dict[str, str] | None
+) -> None:
+    process_environment = dict(os.environ)
+    if environment:
+        process_environment.update(environment)
+    completed = _run_pytest(
+        *arguments,
+        "--collect-only",
+        "-q",
+        "tests/domain/test_contracts.py",
+        environment=process_environment,
+    )
+    assert completed.returncode == 4
+    assert completed.stdout.strip() == "guarded_pytest=denied"
+
+
+def test_direct_root_and_package_pytest_fail_but_guarded_package_suite_collects() -> None:
+    direct_root = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests/domain/test_contracts.py"],
+        cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=30,
     )
+    assert direct_root.returncode != 0
+    assert "pytest must run through" in direct_root.stderr
+
+    package = ROOT / "packages" / "mycogni-connector-sdk"
+    direct_package = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests/test_boundaries.py"],
+        cwd=package,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert direct_package.returncode != 0
+    assert "pytest must run through" in direct_package.stderr
+
+    guarded_package = _run_pytest(
+        "--collect-only",
+        "-q",
+        "tests/test_boundaries.py",
+        cwd=package,
+    )
+    assert guarded_package.returncode == 0
+    assert "3 tests collected" in guarded_package.stdout
+
+
+def test_dynamic_marker_and_generated_node_lack_reviewed_provenance(tmp_path: Path) -> None:
+    probe = ROOT / "tests" / "simulator" / "test_dynamic_marker_probe.py"
+    plugin = tmp_path / "dynamic_marker_plugin.py"
+    probe.write_text(
+        "import pytest\n\n"
+        + "@pytest.mark.parametrize('case', [1, 2])\ndef test_dynamic(case):\n    pass\n",
+        encoding="utf-8",
+    )
+    plugin.write_text(
+        "import pytest\n\ndef pytest_collection_modifyitems(items):\n"
+        "    for item in items:\n        item.add_marker(pytest.mark.simulator_loopback)\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
+    try:
+        completed = _run_pytest(
+            "-q",
+            "-p",
+            "dynamic_marker_plugin",
+            str(probe),
+            environment=environment,
+        )
+    finally:
+        probe.unlink(missing_ok=True)
     assert completed.returncode != 0
-    assert "network guard cannot be disabled" in completed.stderr
+    assert "provenance" in (completed.stdout + completed.stderr)
+
+
+def test_authority_registry_binds_exact_parameter_nodes_and_source_digests() -> None:
+    registry = json.loads((ROOT / "ci" / "network-loopback-authority.json").read_text())
+    nodes = registry["authorized_nodes"]
+    assert len(nodes) == 38
+    assert nodes == sorted(set(nodes))
+    assert any("[missing-host]" in node for node in nodes)
+    assert any("[overflow-port]" in node for node in nodes)
+    for relative, expected in registry["source_sha256"].items():
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == expected
+
+
+def test_every_runtime_patch_is_integrity_checked_and_leaks_fail_session(tmp_path: Path) -> None:
+    bindings = network_guard.integrity_bindings()
+    names = {
+        (getattr(owner, "__name__", type(owner).__name__), name) for owner, name, _ in bindings
+    }
+    assert {
+        ("socket", "getaddrinfo"),
+        ("socket", "gethostbyname_ex"),
+        ("SSLContext", "wrap_bio"),
+        ("OpenerDirector", "open"),
+        ("ProxyHandler", "__init__"),
+        ("HTTPConnection", "connect"),
+        ("Client", "_send_single_request"),
+        ("AsyncClient", "_send_single_request"),
+    } <= names
+    for owner, name, expected in bindings:
+        setattr(owner, name, object())
+        try:
+            with pytest.raises(RuntimeError, match="integrity failure"):
+                network_guard.assert_installed()
+        finally:
+            setattr(owner, name, expected)
+    network_guard.assert_installed()
+
+    mutation = tmp_path / "test_integrity_leak.py"
+    mutation.write_text(
+        "import socket\n\ndef test_leak():\n    socket.getaddrinfo = lambda *a, **k: []\n",
+        encoding="utf-8",
+    )
+    completed = _run_pytest("-q", str(mutation))
+    assert completed.returncode != 0
+    assert "network guard integrity failure" in (completed.stdout + completed.stderr)
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected"),
+    [
+        (subprocess.TimeoutExpired("unshare", 10), network_namespace.NamespaceState.FAILURE),
+        (OSError("synthetic"), network_namespace.NamespaceState.FAILURE),
+    ],
+)
+def test_namespace_probe_classifies_timeout_and_oserror_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+    side_effect: BaseException,
+    expected: network_namespace.NamespaceState,
+) -> None:
+    monkeypatch.setattr(network_namespace, "_prefix", lambda: ["unshare", "--"])
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise side_effect
+
+    monkeypatch.setattr(network_namespace.subprocess, "run", fail)
+    assert network_namespace.probe() is expected
+
+
+@pytest.mark.parametrize(
+    ("prefix", "returncode", "expected"),
+    [
+        (None, 0, network_namespace.NamespaceState.UNSUPPORTED),
+        (["unshare", "--"], 1, network_namespace.NamespaceState.DENIED),
+        (["unshare", "--"], 0, network_namespace.NamespaceState.SUPPORTED),
+    ],
+)
+def test_namespace_probe_has_exact_nonexception_states(
+    monkeypatch: pytest.MonkeyPatch,
+    prefix: list[str] | None,
+    returncode: int,
+    expected: network_namespace.NamespaceState,
+) -> None:
+    monkeypatch.setattr(network_namespace, "_prefix", lambda: prefix)
+    monkeypatch.setattr(
+        network_namespace.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess([], returncode),
+    )
+    assert network_namespace.probe() is expected
+
+
+@pytest.mark.parametrize(
+    ("state", "returncode", "label"),
+    [
+        (network_namespace.NamespaceState.UNSUPPORTED, 2, "unsupported"),
+        (network_namespace.NamespaceState.DENIED, 3, "denied"),
+        (network_namespace.NamespaceState.FAILURE, 4, "failure"),
+    ],
+)
+def test_namespace_run_refuses_each_unavailable_state_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    state: network_namespace.NamespaceState,
+    returncode: int,
+    label: str,
+) -> None:
+    monkeypatch.setattr(network_namespace, "_prefix", lambda: ["unshare", "--"])
+    monkeypatch.setattr(network_namespace, "probe", lambda: state)
+    assert network_namespace.run(["synthetic-command"]) == returncode
+    assert capsys.readouterr().out.strip() == f"network_namespace={label}"
+
+
+@pytest.mark.parametrize(
+    "side_effect",
+    [subprocess.TimeoutExpired("unshare", 300), OSError("synthetic")],
+)
+def test_namespace_run_classifies_execution_failure_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    side_effect: BaseException,
+) -> None:
+    monkeypatch.setattr(network_namespace, "_prefix", lambda: ["unshare", "--"])
+    monkeypatch.setattr(
+        network_namespace,
+        "probe",
+        lambda: network_namespace.NamespaceState.SUPPORTED,
+    )
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise side_effect
+
+    monkeypatch.setattr(network_namespace.subprocess, "run", fail)
+    assert network_namespace.run(["synthetic-command"]) == 4
+    assert capsys.readouterr().out.strip() == "network_namespace=failure"
 
 
 def test_network_source_architecture_guard_passes() -> None:
@@ -281,3 +586,22 @@ def test_unreviewed_test_escape_import_mutations_fail_static_guard(
     mutation = tmp_path / "test_escape.py"
     mutation.write_text(source, encoding="utf-8")
     assert network_source_guard.test_import_violations(mutation)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import os\nos.system('synthetic')\n",
+        "import os\nos.popen('synthetic')\n",
+        "import asyncio\nasyncio.create_subprocess_shell('synthetic')\n",
+        "import importlib\nimportlib.import_module('socket')\n",
+        "import subprocess\nsubprocess.run(['synthetic'])\n",
+        "import builtins\nbuiltins.__import__('socket')\n",
+    ],
+)
+def test_unreviewed_process_and_dynamic_call_mutations_fail_static_guard(
+    tmp_path: Path, source: str
+) -> None:
+    mutation = tmp_path / "test_process_escape.py"
+    mutation.write_text(source, encoding="utf-8")
+    assert network_source_guard.test_call_violations(mutation)

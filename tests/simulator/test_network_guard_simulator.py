@@ -34,6 +34,22 @@ def _url(scheme: str, authority: str, path: str = "/") -> str:
         _url("http", "127.0.0.1:0"),
         _url("http", "127.0.0.1:65536"),
     ],
+    ids=[
+        "https",
+        "ftp",
+        "file",
+        "localhost",
+        "alternate-loopback",
+        "integer-ip",
+        "hex-ip",
+        "ipv6",
+        "mapped-ipv6",
+        "userinfo",
+        "encoded-ip",
+        "default-port",
+        "zero-port",
+        "overflow-port",
+    ],
 )
 def test_noncanonical_local_http_urls_fail_before_transport(url: str) -> None:
     with pytest.raises(network_guard.NetworkDenied) as raised:
@@ -56,6 +72,7 @@ def test_noncanonical_local_http_urls_fail_before_transport(url: str) -> None:
         (socket.AF_INET6, ("::ffff:127.0.0.1", 43123, 0, 0)),
         (socket.AF_UNIX, "/tmp/synthetic.sock"),
     ],
+    ids=["alternate-ipv4", "wildcard-ipv4", "ipv6", "mapped-ipv6", "unix-path"],
 )
 def test_ip_family_alias_and_unix_socket_escapes_fail(family: int, address: object) -> None:
     with pytest.raises(network_guard.NetworkDenied):
@@ -95,7 +112,11 @@ def test_valid_local_http_policy_is_exact() -> None:
 
 
 @pytest.mark.simulator_loopback
-@pytest.mark.parametrize("name", ["HTTP_PROXY", "https_proxy", "No_PrOxY", "ALL_PROXY"])
+@pytest.mark.parametrize(
+    "name",
+    ["HTTP_PROXY", "https_proxy", "No_PrOxY", "ALL_PROXY"],
+    ids=["http", "https", "no-proxy", "all"],
+)
 def test_proxy_environment_names_are_case_insensitive_and_forbidden(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
