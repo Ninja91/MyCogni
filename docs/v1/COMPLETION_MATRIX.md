@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-17. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness awaiting independent acceptance. It does not yet contain a remover runtime, accepted Docker image, accepted network-deny proof or live connector.
+Snapshot date: 2026-07-17. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness with code-level acceptance. Auth remediation and the pure runner/mailbox spike are active. It does not yet contain a remover runtime, accepted Docker image, formally promoted network-deny package or live connector.
 
 ## Status vocabulary
 
@@ -136,13 +136,18 @@ These do not block M0 foundation work, but they block their named milestones:
 
 ## Next executable slice
 
-Current next slice after the implemented toolchain, boundary, CI, database and shared-contract foundations:
+Current next slice after the implemented toolchain, boundary, CI, database, shared-contract,
+simulator and network-deny foundations:
 
-1. restore a responsive Docker engine and capture successful PF-002 amd64/arm64 build and inspection logs;
-2. complete GOV-001 and independently review the deterministic SIM-001 corpus/simulator;
-3. land NET-001 before any non-simulator HTTP/browser/mail adapter can enter CI;
-4. run the auth/key/egress/runner/browser/backup P0 spikes and update this matrix with ADR/test evidence;
-5. add connector SDK minimum/latest Pydantic compatibility coverage before any public SDK release.
+1. finish SPIKE-AUTH remediation and obtain independent security/recovery,
+   product/operator and backend/concurrency dispositions;
+2. finish the pure SPIKE-RUNNER mailbox/protocol slice and independently review its
+   state, identity, replay, cleanup and secret-retention boundaries;
+3. restore a responsive Docker engine and capture PF-002 amd64/arm64 build and
+   runtime-inspection logs before making any OCI-isolation acceptance claim;
+4. start SQLITE-DUR-001 and SPIKE-KEY after the active spike contracts stabilize;
+5. retain SPIKE-EGRESS and SPIKE-BROWSER behind the accepted NET boundary, and add
+   connector SDK minimum/latest Pydantic coverage before any public SDK release.
 
 ## Canonical work-package inventory
 
@@ -217,12 +222,12 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: RESTORE-INTENT-001 | RESTORE-INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: RUN-001 | RUN-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SCHED-001 | SCHED-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `IN_PROGRESS` | volatile spike integrated; remediation and three-hat re-review active | no package acceptance or AUTH-001 promotion claim |
 | Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-KEY | SPIKE-KEY | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `IN_PROGRESS` | pure mailbox/protocol implementation active in the boundary lane | real OCI evidence remains gated by PF-002 |
 | Canonical inventory: TRUST-001 | TRUST-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPDATE-001 | UPDATE-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPG-001 | UPG-001 | `NOT_STARTED` | — | follow work-package dependency order |

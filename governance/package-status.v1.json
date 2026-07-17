@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "registry_version": "2.0.0",
+  "registry_version": "2.0.1",
   "milestone_definitions": [
     {
       "id": "MDEF-M0",
@@ -484,7 +484,7 @@
     },
     {
       "id": "SPIKE-AUTH",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence_ids": []
     },
     {
@@ -509,7 +509,7 @@
     },
     {
       "id": "SPIKE-RUNNER",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence_ids": []
     },
     {
