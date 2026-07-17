@@ -68,3 +68,31 @@ locked required plugins and network guard. Its lane evidence reports 133 focused
 87 raw/policy simulator and 935 full-suite tests on both Python versions. Independent
 re-review is still required; this paragraph is an implementation disposition, not
 acceptance.
+
+## Final remediation re-review
+
+Target: integration commit `362795e`.
+
+Verdict: **ACCEPT at code-review level** — zero open P0, P1 or P2 findings.
+
+The reviewer independently reproduced that:
+
+- plugin/configuration, alternate-config, missing/malformed, split/equals/quoted and
+  environment-plus-argv injection forms deny before pytest import for root and package;
+- rejected positive plugins, `PYTEST_PLUGINS` and synthetic installed auto-plugins do
+  not execute their sentinel, while only locked Hypothesis/AnyIO/pytest-cov and the
+  internal guard are explicitly registered;
+- safe quoted options and checked-in repository plugins still work;
+- full normalized collector/node, top-level AST, runtime code/module and own-marker
+  identity is checked at collection and immediately before authority activation;
+- generated/class/module/parameter collisions and post-collection substitution deny;
+- lifecycle revocation, task/thread isolation, descriptor policy, complete patch
+  integrity, namespace finite states, safe diagnostics and GOV/threat nested evidence
+  remain active.
+
+Final review evidence included 108 NET guard tests, 25 local-policy tests, 45 governance
+tests and a 240-test combined selection. The stated Python CI/test-harness contract is
+accepted; OS sandboxing and hostile native/interpreter code remain explicit nonclaims.
+
+No authenticated package attestation or optional Linux namespace reproduction is
+installed, so NET-001 remains `IN_PROGRESS` in machine truth.
