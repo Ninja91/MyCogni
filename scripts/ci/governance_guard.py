@@ -6,6 +6,7 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -268,10 +269,12 @@ def _git_commit_is_ancestor(root: Path, commit: str) -> bool:
 
 
 def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
-    """Evaluate a deliberately small set of literal/tautological expressions."""
+    """Evaluate a bounded heuristic set of literal/tautological expressions."""
 
     if isinstance(node, ast.Constant):
         return True, node.value
+    if isinstance(node, ast.NamedExpr):
+        return _static_value(node.value, names)
     if isinstance(node, ast.Name) and node.id in names:
         return True, names[node.id]
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -329,6 +332,8 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
                 return True, +value
             if isinstance(node.op, ast.USub):
                 return True, -value
+            if isinstance(node.op, ast.Invert) and isinstance(value, int):
+                return True, ~value
     if isinstance(node, ast.BinOp):
         left_known, left = _static_value(node.left, names)
         right_known, right = _static_value(node.right, names)
@@ -342,13 +347,38 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
                     value = left * right
                 elif isinstance(node.op, ast.FloorDiv):
                     value = left // right
+                elif isinstance(node.op, ast.Div):
+                    value = left / right
                 elif isinstance(node.op, ast.Mod):
                     value = left % right
+                elif isinstance(node.op, ast.Pow):
+                    if (
+                        not isinstance(left, (int, float))
+                        or isinstance(left, bool)
+                        or not isinstance(right, int)
+                        or isinstance(right, bool)
+                        or abs(right) > 64
+                        or (isinstance(left, int) and left.bit_length() > 64)
+                    ):
+                        return False, None
+                    value = left**right
+                elif isinstance(node.op, ast.BitAnd):
+                    value = left & right
+                elif isinstance(node.op, ast.BitOr):
+                    value = left | right
+                elif isinstance(node.op, ast.BitXor):
+                    value = left ^ right
+                elif isinstance(node.op, (ast.LShift, ast.RShift)):
+                    if not isinstance(right, int) or not 0 <= right <= 64:
+                        return False, None
+                    value = left << right if isinstance(node.op, ast.LShift) else left >> right
                 else:
                     return False, None
             except (TypeError, ValueError, ZeroDivisionError, OverflowError):
                 return False, None
             if isinstance(value, int) and value.bit_length() > 4096:
+                return False, None
+            if isinstance(value, float) and not math.isfinite(value):
                 return False, None
             if isinstance(value, (str, bytes, list, tuple)) and len(value) > 4096:
                 return False, None
@@ -367,21 +397,44 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
             resolved = [value for _, value in values]
             comparisons = []
             for operator, left, right in zip(node.ops, resolved[:-1], resolved[1:], strict=True):
-                if isinstance(operator, ast.Eq):
-                    comparisons.append(left == right)
-                elif isinstance(operator, ast.NotEq):
-                    comparisons.append(left != right)
-                elif isinstance(operator, ast.In):
-                    comparisons.append(left in right)
-                elif isinstance(operator, ast.NotIn):
-                    comparisons.append(left not in right)
-                elif isinstance(operator, ast.Is):
-                    comparisons.append(left is right)
-                elif isinstance(operator, ast.IsNot):
-                    comparisons.append(left is not right)
-                else:
+                try:
+                    if isinstance(operator, ast.Eq):
+                        comparisons.append(left == right)
+                    elif isinstance(operator, ast.NotEq):
+                        comparisons.append(left != right)
+                    elif isinstance(operator, ast.In):
+                        comparisons.append(left in right)
+                    elif isinstance(operator, ast.NotIn):
+                        comparisons.append(left not in right)
+                    elif isinstance(operator, ast.Is):
+                        comparisons.append(left is right)
+                    elif isinstance(operator, ast.IsNot):
+                        comparisons.append(left is not right)
+                    elif isinstance(operator, ast.Lt):
+                        comparisons.append(left < right)
+                    elif isinstance(operator, ast.LtE):
+                        comparisons.append(left <= right)
+                    elif isinstance(operator, ast.Gt):
+                        comparisons.append(left > right)
+                    elif isinstance(operator, ast.GtE):
+                        comparisons.append(left >= right)
+                    else:
+                        return False, None
+                except TypeError:
                     return False, None
             return True, all(comparisons)
+    if isinstance(node, ast.IfExp):
+        known, condition = _static_value(node.test, names)
+        if known:
+            return _static_value(node.body if condition else node.orelse, names)
+    if isinstance(node, ast.Subscript):
+        value_known, value = _static_value(node.value, names)
+        index_known, index = _static_value(node.slice, names)
+        if value_known and index_known:
+            try:
+                return True, value[index]
+            except (IndexError, KeyError, TypeError):
+                return False, None
     return False, None
 
 
@@ -1380,7 +1433,39 @@ def _load_protected_approvals(root: Path, revision: str) -> dict[str, Mapping[st
     return _parse_protected_approvals(document)
 
 
-def _load_external_protected_approvals(root: Path) -> dict[str, Mapping[str, Any]]:
+def _assert_trust_root_isolated(root: Path, trust_root: str, event_base: str | None) -> None:
+    if threat_guard._is_shallow_repository(root):
+        raise ValueError("external governance trust root cannot be verified in a shallow Git graph")
+    if not threat_guard._commit_exists(root, trust_root):
+        raise ValueError("external governance trust root is not an available full commit SHA")
+    head = threat_guard._head_commit(root)
+    comparisons = {"current HEAD": head}
+    if event_base is not None:
+        if not threat_guard._commit_exists(root, event_base):
+            raise ValueError("event base is unavailable while verifying governance trust isolation")
+        comparisons["event base"] = event_base
+    for label, ordinary_commit in comparisons.items():
+        if trust_root == ordinary_commit:
+            raise ValueError(f"external governance trust root must not equal {label}")
+        merge_base = subprocess.run(
+            ["git", "merge-base", trust_root, ordinary_commit],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if merge_base.returncode == 0:
+            raise ValueError(
+                f"external governance trust root shares ordinary branch history with {label}"
+            )
+        if merge_base.returncode != 1:
+            raise ValueError("cannot prove external governance trust-root history isolation")
+
+
+def _load_external_protected_approvals(
+    root: Path, event_base: str | None = None
+) -> dict[str, Mapping[str, Any]]:
     local_path = root / PROTECTED_APPROVALS_PATH.relative_to(ROOT)
     if local_path.is_file():
         raise ValueError(
@@ -1389,8 +1474,7 @@ def _load_external_protected_approvals(root: Path) -> dict[str, Mapping[str, Any
     trust_root = os.environ.get(TRUST_ROOT_SHA_ENV, "").strip()
     if not trust_root:
         return {}
-    if not threat_guard._commit_exists(root, trust_root):
-        raise ValueError("external governance trust root is not an available full commit SHA")
+    _assert_trust_root_isolated(root, trust_root, event_base)
     return _load_protected_approvals(root, trust_root)
 
 
@@ -1440,7 +1524,7 @@ def render_report(data: Mapping[str, Any]) -> str:
             "",
             "## Claim boundary",
             "",
-            "Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires an externally configured immutable trust-root approval that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; branch history cannot authorize promotion, and canonical status remains below COMPLETE until every promotion rule passes.",
+            "Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires an externally configured immutable, history-disjoint trust-root approval that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; ordinary branch history cannot authorize promotion, and canonical status remains below COMPLETE until every promotion rule passes.",
             "No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.",
             "GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.",
             "",
@@ -1463,48 +1547,57 @@ def main(argv: Sequence[str] | None = None) -> int:
     base_ref = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
     ci_mode = os.environ.get("MYCOGNI_GOVERNANCE_CI", "") == "1"
     base_state = "NOT CHECKED"
-    try:
-        approvals = _load_external_protected_approvals(ROOT)
-    except ValueError as error:
-        errors.append(str(error))
-        approvals = {}
+    effective_base: str | None = None
+    base_kind: str | None = None
+    base_resolved = False
     if base_ref:
         try:
             effective_base, base_kind = threat_guard.resolve_trusted_baseline(ROOT, base_ref)
         except ValueError as error:
             errors.append(str(error))
         else:
-            if effective_base is None:
-                errors.extend(_untrusted_promotions(documents))
-                base_state = "GENESIS BOOTSTRAP"
-            else:
-                try:
-                    baseline = _load_base_documents(ROOT, effective_base)
-                    baseline_scope = _load_base_scope(ROOT, effective_base)
-                    current_scope = _current_scope(ROOT)
-                except ValueError as error:
-                    errors.append(str(error))
-                else:
-                    if not baseline:
-                        errors.append(
-                            "trusted base cannot omit all governance documents; "
-                            "configure an external recovery state"
-                        )
-                    else:
-                        errors.extend(
-                            validate_against_base(
-                                documents,
-                                baseline,
-                                approvals,
-                                current_scope=current_scope,
-                                baseline_scope=baseline_scope,
-                            )
-                        )
-                        base_state = f"VERIFIED ({base_kind})"
+            base_resolved = True
     else:
         if ci_mode:
             errors.append("CI requires an immutable trusted base revision")
+
+    try:
+        approvals = _load_external_protected_approvals(
+            ROOT, effective_base if base_resolved else None
+        )
+    except ValueError as error:
+        errors.append(str(error))
+        approvals = {}
+
+    if not base_resolved:
         errors.extend(_untrusted_promotions(documents))
+    elif effective_base is None:
+        errors.extend(_untrusted_promotions(documents))
+        base_state = "GENESIS BOOTSTRAP"
+    else:
+        try:
+            baseline = _load_base_documents(ROOT, effective_base)
+            baseline_scope = _load_base_scope(ROOT, effective_base)
+            current_scope = _current_scope(ROOT)
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            if not baseline:
+                errors.append(
+                    "trusted base cannot omit all governance documents; "
+                    "configure an external recovery state"
+                )
+            else:
+                errors.extend(
+                    validate_against_base(
+                        documents,
+                        baseline,
+                        approvals,
+                        current_scope=current_scope,
+                        baseline_scope=baseline_scope,
+                    )
+                )
+                base_state = f"VERIFIED ({base_kind})"
     if errors:
         print("\n".join(sorted(set(errors))))
         return 1

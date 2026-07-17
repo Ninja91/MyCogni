@@ -518,6 +518,49 @@ def _commit_exists(root: Path, revision: str) -> bool:
     return result.returncode == 0
 
 
+def _is_shallow_repository(root: Path) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0 or result.stdout.strip() not in {"true", "false"}:
+        raise ValueError("cannot prove Git history completeness")
+    return result.stdout.strip() == "true"
+
+
+def _head_commit(root: Path) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    head = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        raise ValueError("current HEAD is not an available full commit SHA")
+    return head
+
+
+def _is_strict_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    if ancestor == descendant:
+        return False
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode == 0
+
+
 def resolve_trusted_baseline(root: Path, event_base: str) -> tuple[str | None, str]:
     """Resolve an event base without treating all-zero as branch creation authority."""
 
@@ -528,24 +571,27 @@ def resolve_trusted_baseline(root: Path, event_base: str) -> tuple[str | None, s
 
     genesis = os.environ.get(GENESIS_SHA_ENV, "").strip()
     recovery = os.environ.get(RECOVERY_BASE_SHA_ENV, "").strip()
+    if _is_shallow_repository(root):
+        raise ValueError("zero event base cannot be resolved from a shallow Git graph")
     if genesis and recovery:
         raise ValueError("zero event base has ambiguous genesis and recovery anchors")
     if recovery:
         if not _commit_exists(root, recovery):
             raise ValueError("external recovery base is not an available full commit SHA")
+        head = _head_commit(root)
+        if recovery == head:
+            raise ValueError("external recovery base must not equal current HEAD")
+        if not _is_strict_ancestor(root, recovery, head):
+            raise ValueError(
+                "external recovery base must be a strict ancestor of current HEAD; "
+                "unrelated or descendant state is not comparable"
+            )
         return recovery, "EXTERNAL_RECOVERY"
     if not genesis or not _commit_exists(root, genesis):
         raise ValueError(
             "zero event base requires an external immutable genesis or recovery anchor"
         )
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).stdout.strip()
+    head = _head_commit(root)
     parents = subprocess.run(
         ["git", "rev-list", "--parents", "-n", "1", genesis],
         cwd=root,

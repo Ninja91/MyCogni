@@ -9,7 +9,8 @@ These exact-schema registries, not Markdown prose, own the scoped GOV-001 truth:
 
 `COMPLETE` requires dependency closure, nonempty package-specific criteria, a structural runtime criterion
 witness, a real `PASSED` result, and an exact `ACCEPT` attestation. The AST/runtime checks only reject known
-no-ops; they do not establish that a criterion or test is semantically adequate. That judgment belongs to an
+no-ops using a bounded heuristic constant evaluator; they are not a semantic interpreter and do not establish
+that a criterion or test is semantically adequate. That judgment belongs to an
 externally rooted reviewer approval which explicitly says `semantic_adequacy=APPROVED` and binds the exact
 criterion, evidence, attestation, reviewer and reviewed-tree digests. Without that approval, promotion is
 impossible.
@@ -30,8 +31,10 @@ and tags and fail closed if the event base is missing. An all-zero event predece
 bootstrap evidence. It is accepted only when the repository-admin `MYCOGNI_GOVERNANCE_GENESIS_SHA` equals
 `HEAD` and that commit has no parent. A later ref recreation must provide an externally configured immutable
 `MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA`; the guard then performs the normal full baseline comparison against
-that commit. Missing, ambiguous or unavailable anchors fail closed, and genesis bootstrap still forbids
-attestations and promotions.
+that commit. A recovery commit must be available in a complete graph, differ from `HEAD`, and be a strict
+ancestor of `HEAD`; an equal, descendant, unrelated, missing or shallow comparison fails closed. This ensures
+the retained prior canonical state is distinct and makes ordinary monotonic scope-deletion checks non-vacuous.
+Genesis bootstrap still forbids attestations and promotions.
 
 Content changes require a monotonic registry version. Work-package/matrix IDs, status IDs, trace records,
 criteria, evidence, milestone definitions and attestations cannot disappear or be rebound behind a version
@@ -39,9 +42,13 @@ bump. Review authority never comes from the PR/push base or any later branch com
 `governance/protected-approvals.v1.json` is a hard error. New attestations and all promotions to `COMPLETE` or
 `VERIFIED` consult only the exact full commit in the repository-admin
 `MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA` variable. That out-of-branch commit must contain the strict approval
-registry binding subject/content digests, reviewer identity and explicit semantic adequacy. Empty means no
-approval authority; malformed, unavailable or missing trust-root state fails closed. The variable is not
-configured yet, so authenticated external reviewer keys and workflow remain prerequisites.
+registry binding subject/content digests, reviewer identity and explicit semantic adequacy. Its full Git
+history must be available and history-disjoint from both current `HEAD` and the effective event/recovery base:
+`git merge-base` must find no common ancestor with either. Equality, any shared ancestry (including an approval
+added in one ordinary-branch commit and deleted later), missing objects and shallow graphs all fail closed.
+An orphan or separately fetched approval history with no common ancestor is admissible. Empty means no
+approval authority; malformed or missing trust-root state fails closed. The variable is not configured yet,
+so authenticated external reviewer keys and workflow remain prerequisites.
 
 The current GOV implementation is intentionally `IN_PROGRESS`. Three records are `IMPLEMENTED`, no review
 attestation is authenticated, and canonical package completion is empty. The deterministic report lists

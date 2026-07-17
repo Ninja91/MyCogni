@@ -1,6 +1,6 @@
 # GOV-001 adversarial review disposition
 
-Status: second remediation implemented; independent re-review pending. GOV-001 remains `IN_PROGRESS`.
+Status: third remediation implemented; independent re-review pending. GOV-001 remains `IN_PROGRESS`.
 
 The final Sol-labelled governance review rejected v3 on four P1 boundaries. This record describes the
 implementation response without claiming that the response is independently accepted.
@@ -35,3 +35,23 @@ The current machine truth remains deliberately non-promotional: all 106 packages
 there are three `IMPLEMENTED` trace records, zero package attestations, zero milestone attestations, zero
 `COMPLETE`, and zero `VERIFIED` packages. The integration lane retains its existing SIM-001 progress row;
 this governance change does not promote or regress any package status.
+
+The second remediation was independently re-rejected with zero P0, two P1 and one P2 findings. Merely naming
+an approval commit in a repository variable did not prove that it was outside ordinary branch ancestry, and a
+recovery commit equal to `HEAD` made the comparison vacuous. The bounded no-op evaluator also missed division,
+named expressions and adjacent folded forms. The third remediation therefore fixes explicit graph invariants:
+
+- an approval trust root must be an available full commit in a complete graph and have no merge base with
+  either `HEAD` or the effective event/recovery base; equality and all shared ancestry fail, including an
+  approval staged in commit A and deleted in ordinary-branch commit B;
+- a recovery base must be an available full commit in a complete graph, differ from `HEAD`, and be a strict
+  ancestor of `HEAD`; equal, descendant, unrelated, missing and shallow states fail. The retained ancestor is
+  loaded through the same full registry and Markdown-scope comparison, whose negative probe catches coordinated
+  work-package and completion-matrix deletion;
+- the structural heuristic now recognizes division, named expressions, bounded power/bit operations, ordered
+  comparisons, conditional expressions and literal subscripting in addition to the previous forms. These
+  rejections reduce obvious false witnesses but make no semantic-adequacy claim.
+
+Negative graph probes cover HEAD, event base, ancestors, branch add/delete, an unrelated orphan trust root,
+strict-ancestor recovery, self-comparison, unrelated and missing recovery, and shallow clones. This disposition
+does not claim independent acceptance and does not promote GOV-001.

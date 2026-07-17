@@ -32,6 +32,31 @@ def _node_digest(blob: bytes | None, function_name: str) -> str:
     return hashlib.sha256(source).hexdigest()
 
 
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(
+        root,
+        "-c",
+        "user.name=Governance Test",
+        "-c",
+        "user.email=governance@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        message,
+    )
+    return _git(root, "rev-parse", "HEAD")
+
+
 def test_machine_governance_and_report_are_current() -> None:
     documents = _documents()
     errors, report = governance_guard.validate_governance(documents, governance_guard.ROOT)
@@ -61,14 +86,17 @@ def test_exact_acceptance_nodes_execute_runtime_criterion_witnesses() -> None:
 @pytest.mark.parametrize(
     "name",
     [
+        "adjacent_fold_true",
         "annotated_true",
         "assert_true",
         "assigned_true",
         "computed_true",
+        "division_true",
         "lambda_true",
         "nested_uncalled",
         "tautological_len",
         "unpacked_true",
+        "walrus_true",
     ],
 )
 def test_constant_or_uncalled_nested_assert_is_not_acceptance(name: str) -> None:
@@ -362,7 +390,7 @@ def test_version_bump_cannot_shrink_or_rebind_governance_scope() -> None:
     )
 
 
-def test_coordinated_markdown_scope_deletion_fails() -> None:
+def test_recovery_comparison_rejects_coordinated_markdown_scope_deletion() -> None:
     documents = _documents()
     current_scope = {
         "work package": {"CT-001": "row"},
@@ -417,6 +445,104 @@ def test_unconfigured_external_trust_root_cannot_authorize_later_promotion(
         "new attestation lacks external trust-root approval: ATT-BRANCH-LOCAL"
         in governance_guard.validate_against_base(current, baseline, approvals)
     )
+
+
+def test_trust_root_rejects_head_ancestor_missing_and_branch_add_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _git(tmp_path, "init", "-q")
+    marker = tmp_path / "marker.txt"
+    marker.write_text("ordinary\n", encoding="utf-8")
+    _git(tmp_path, "add", "marker.txt")
+    ordinary_base = _commit(tmp_path, "ordinary base")
+
+    governance = tmp_path / "governance"
+    governance.mkdir()
+    approval = governance / "protected-approvals.v1.json"
+    approval.write_text('{"schema_version":2,"approvals":[]}', encoding="utf-8")
+    _git(tmp_path, "add", "governance/protected-approvals.v1.json")
+    branch_approval = _commit(tmp_path, "stage branch approval")
+    approval.unlink()
+    _git(tmp_path, "add", "-u")
+    head = _commit(tmp_path, "delete branch approval")
+
+    with pytest.raises(ValueError, match="must not equal current HEAD"):
+        governance_guard._assert_trust_root_isolated(tmp_path, head, ordinary_base)
+    monkeypatch.setenv(governance_guard.TRUST_ROOT_SHA_ENV, branch_approval)
+    with pytest.raises(ValueError, match="shares ordinary branch history"):
+        governance_guard._load_external_protected_approvals(tmp_path, ordinary_base)
+    with pytest.raises(ValueError, match="shares ordinary branch history"):
+        governance_guard._assert_trust_root_isolated(tmp_path, ordinary_base, ordinary_base)
+    with pytest.raises(ValueError, match="not an available full commit SHA"):
+        governance_guard._assert_trust_root_isolated(tmp_path, "f" * 40, ordinary_base)
+
+
+def test_unrelated_orphan_trust_root_loads_and_cannot_be_the_event_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _git(tmp_path, "init", "-q")
+    marker = tmp_path / "marker.txt"
+    marker.write_text("ordinary\n", encoding="utf-8")
+    _git(tmp_path, "add", "marker.txt")
+    ordinary = _commit(tmp_path, "ordinary")
+    branch = _git(tmp_path, "branch", "--show-current")
+
+    _git(tmp_path, "checkout", "-q", "--orphan", "governance-trust")
+    marker.unlink()
+    _git(tmp_path, "add", "-u")
+    governance = tmp_path / "governance"
+    governance.mkdir()
+    (governance / "protected-approvals.v1.json").write_text(
+        """{
+  "schema_version": 2,
+  "approvals": [{
+    "id": "PAPP-TEST-001",
+    "subject_type": "PACKAGE_ATTESTATION",
+    "subject_id": "ATT-TEST-001",
+    "reviewer_id": "reviewer",
+    "subject_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "criteria_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "evidence_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "semantic_adequacy": "APPROVED"
+  }]
+}
+""",
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "-A")
+    trust_root = _commit(tmp_path, "external approval root")
+    _git(tmp_path, "checkout", "-q", branch)
+
+    governance_guard._assert_trust_root_isolated(tmp_path, trust_root, ordinary)
+    monkeypatch.setenv(governance_guard.TRUST_ROOT_SHA_ENV, trust_root)
+    approvals = governance_guard._load_external_protected_approvals(tmp_path, ordinary)
+    assert set(approvals) == {"ATT-TEST-001"}
+    with pytest.raises(ValueError, match="must not equal event base"):
+        governance_guard._assert_trust_root_isolated(tmp_path, trust_root, trust_root)
+
+
+def test_shallow_graph_rejects_trust_root_and_zero_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _git(source, "init", "-q")
+    marker = source / "marker.txt"
+    marker.write_text("one\n", encoding="utf-8")
+    _git(source, "add", "marker.txt")
+    first = _commit(source, "first")
+    marker.write_text("two\n", encoding="utf-8")
+    _git(source, "add", "marker.txt")
+    _commit(source, "second")
+    shallow = tmp_path / "shallow"
+    _git(tmp_path, "clone", "-q", "--depth", "1", f"file://{source}", str(shallow))
+
+    with pytest.raises(ValueError, match="shallow Git graph"):
+        governance_guard._assert_trust_root_isolated(shallow, first, None)
+    monkeypatch.delenv(threat_guard.GENESIS_SHA_ENV, raising=False)
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, first)
+    with pytest.raises(ValueError, match="shallow Git graph"):
+        threat_guard.resolve_trusted_baseline(shallow, governance_guard.ZERO_GIT_OBJECT)
 
 
 def test_complete_to_verified_requires_protected_milestone_authorization() -> None:
@@ -535,12 +661,41 @@ def test_zero_base_accepts_only_exact_genesis_or_external_recovery(
         "EXTERNAL_RECOVERY",
     )
 
+    head = _git(tmp_path, "rev-parse", "HEAD")
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, head)
+    with pytest.raises(ValueError, match="must not equal current HEAD"):
+        threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT)
+
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, "f" * 40)
+    with pytest.raises(ValueError, match="not an available full commit SHA"):
+        threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT)
+
+    marker.write_text("descendant\n", encoding="utf-8")
+    _git(tmp_path, "add", "marker.txt")
+    descendant = _commit(tmp_path, "descendant recovery")
+    _git(tmp_path, "checkout", "-q", "-b", "retained-head", head)
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, descendant)
+    with pytest.raises(ValueError, match="must be a strict ancestor"):
+        threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT)
+
+    branch = _git(tmp_path, "branch", "--show-current")
+    _git(tmp_path, "checkout", "-q", "--orphan", "unrelated-recovery")
+    marker.unlink()
+    unrelated_marker = tmp_path / "unrelated.txt"
+    unrelated_marker.write_text("unrelated\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    unrelated = _commit(tmp_path, "unrelated recovery")
+    _git(tmp_path, "checkout", "-q", branch)
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, unrelated)
+    with pytest.raises(ValueError, match="must be a strict ancestor"):
+        threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT)
+
 
 def test_zero_ref_recreation_runs_full_external_recovery_comparison(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     recovery = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", "HEAD^"],
         cwd=governance_guard.ROOT,
         check=True,
         capture_output=True,
