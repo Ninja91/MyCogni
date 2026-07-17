@@ -49,3 +49,29 @@ unpacked, additive and lambda fixtures. It did not yet prove external-state isol
 The current machine truth remained honest and unpromoted. This second rejection is
 the authoritative review state until another independent re-review accepts a later
 integrated revision.
+
+## Final remediation re-review
+
+Target: integration commit `d1af517`.
+
+Verdict: **ACCEPT at code-review level** — zero open P0, P1 or P2 findings.
+
+The reviewer independently reproduced that:
+
+- approval trust roots equal to or sharing history with `HEAD`, event base,
+  recovery base or an ordinary add/delete approval commit fail closed;
+- missing objects and shallow graphs fail, while only a complete history-disjoint
+  approval commit can supply exact digest-bound approvals;
+- an all-zero base grants no authority except exact configured parentless genesis;
+- recovery equal to `HEAD`, descendant, unrelated, missing or shallow fails; a
+  distinct strict ancestor runs the full monotonic comparison and detects coordinated
+  work-package/matrix deletion;
+- annotated, unpacked, lambda, division, walrus and adjacent-fold constant witnesses
+  fail, while a runtime-dependent assertion remains a structural witness;
+- governance and threat nested evidence still runs through the NET guarded launcher;
+- focused review evidence passed 156 tests on Python 3.12.12.
+
+This acceptance does not install an external trust root or authenticate a human
+reviewer. The repository still has zero package attestations, zero milestone
+attestations and zero `COMPLETE`/`VERIFIED` packages, so GOV-001 remains
+`IN_PROGRESS` in machine truth.

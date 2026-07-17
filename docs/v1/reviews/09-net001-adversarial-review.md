@@ -30,3 +30,21 @@ model and not a hostile-code or operating-system containment assessment.
 
 Passing evidence did not cover the rejected invocation, lifecycle, provenance,
 integrity and descriptor cases. Every P1 fix must return to an independent reviewer.
+
+## First remediation re-review
+
+Target: integration commit `88aee6e`.
+
+Verdict: **REJECT** — zero P0, two P1 and zero P2 findings. The remediation
+successfully closed lifecycle revocation, patch-manifest integrity, descriptor and
+Unix-socket scope, namespace finite states, exact five-policy/38-node enumeration,
+diagnostics, package sentinels and ordinary launcher-exclusion cases.
+
+| Severity | Finding | Required disposition |
+| --- | --- | --- |
+| P1 | `PYTEST_ADDOPTS` was tokenized with whitespace splitting while pytest applies shell-style quoting. A quoted combination of `--noconftest` and full plugin exclusion passed the supported launcher, removing both sentinel and guard. | Parse environment options with exact fail-closed shell semantics, reject malformed quoting, normalize plugin tokens and cover quoted/combined environment-plus-argv forms for root and package suites. |
+| P1 | Runtime marker identity used path plus `item.name` and discarded full collector/class hierarchy. A generated/class-shaped item could collide with an authorized top-level function; file digest and top-level AST checks did not bind the collected callable/ancestry. | Bind the registry to exact normalized `item.nodeid` plus reviewed top-level callable/code identity. Reject parameter/class/module/generated/duplicate-name/post-collection mutations with exact regressions. |
+
+The reviewer reran 84 focused NET tests plus selected governance evidence. Those
+passed, but did not cover the two composed identity cases above. NET-001 remains
+`IN_PROGRESS` pending remediation and another independent re-review.
