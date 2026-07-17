@@ -52,6 +52,13 @@ def _element_by_id(document: SiteDocument, identifier: str) -> dict[str, str] | 
     return None
 
 
+def _element_by_class(document: SiteDocument, class_name: str) -> dict[str, str] | None:
+    for _tag, attributes in document.elements:
+        if class_name in attributes.get("class", "").split():
+            return attributes
+    return None
+
+
 def validate_repository(root: Path = ROOT) -> list[str]:
     """Return finite, deterministic validation errors for the checked-out site."""
 
@@ -63,6 +70,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     matrix_path = root / "docs/v1/COMPLETION_MATRIX.md"
     deployment_path = root / "docs/07-deployment-architecture.md"
     provenance_path = site / "ASSET_PROVENANCE.md"
+    site_readme_path = site / "README.md"
     image_path = site / "og.png"
 
     required_files = (
@@ -72,6 +80,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         matrix_path,
         deployment_path,
         provenance_path,
+        site_readme_path,
         image_path,
     )
     for path in required_files:
@@ -84,7 +93,9 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     css = css_path.read_text(encoding="utf-8")
     script = script_path.read_text(encoding="utf-8")
     matrix = matrix_path.read_text(encoding="utf-8")
+    deployment = deployment_path.read_text(encoding="utf-8")
     provenance = provenance_path.read_text(encoding="utf-8")
+    site_readme = site_readme_path.read_text(encoding="utf-8")
     document = SiteDocument()
     document.feed(html)
 
@@ -131,6 +142,37 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     if "| M0 milestone | all M0 | `IN_PROGRESS` |" not in matrix:
         errors.append("completion matrix no longer reports the M0 milestone IN_PROGRESS")
 
+    status_panel = _element_by_class(document, "project-status")
+    matrix_statuses = {
+        "data-gov-status": r"\| Full traceability validator \| GOV-001 \| `([A-Z_]+)` \|",
+        "data-net-status": r"\| Network-deny proof \| NET-001 \| `([A-Z_]+)` \|",
+        "data-spikes-status": r"\| Auth/key/egress/runner/browser/backup spikes \| SPIKE-\* \| `([A-Z_]+)` \|",
+        "data-sqlite-dur-status": r"\| SQLite/process durability contract \| SQLITE-DUR-001 \| `([A-Z_]+)` \|",
+    }
+    if status_panel is None:
+        errors.append("site has no project-status element")
+    else:
+        for attribute, pattern in matrix_statuses.items():
+            match = re.search(pattern, matrix)
+            if not match:
+                errors.append(f"completion matrix row is missing for {attribute}")
+            elif status_panel.get(attribute) != match.group(1):
+                errors.append(
+                    f"site {attribute}={status_panel.get(attribute)!r} does not match matrix {match.group(1)!r}"
+                )
+
+    deployment_contract = (
+        "## Profile A: local-lite",
+        "one `mycogni all-in-one` container",
+        "periodic rather than continuously busy operation",
+    )
+    for phrase in deployment_contract:
+        if phrase not in deployment:
+            errors.append(f"deployment specification lost site-linked contract: {phrase}")
+    for phrase in ("Local-lite, single tenant", "all-in-one container", "sporadically on a laptop"):
+        if phrase.lower() not in html.lower():
+            errors.append(f"site is missing deployment target evidence: {phrase}")
+
     no_script = " ".join(" ".join(document.noscript_text).split()).lower()
     for heading in (
         "product promise",
@@ -141,6 +183,16 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     ):
         if heading not in no_script:
             errors.append(f"no-script walkthrough is missing: {heading}")
+    for concept in (
+        "corroborated verification",
+        "connector digest",
+        "outcome remains unknown",
+        "2–5 capabilities",
+        "no runnable remover",
+        "stable-cohort evidence",
+    ):
+        if concept not in no_script:
+            errors.append(f"no-script overview is missing substantive concept: {concept}")
 
     for identifier in ("promise-panel", "case-panel", "phase-panel"):
         attributes = _element_by_id(document, identifier)
@@ -161,8 +213,20 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         errors.append("active chapter navigation does not maintain aria-current")
     if re.search(r"\.chapter-nav\s*\{[^}]*display:\s*none", css, flags=re.DOTALL):
         errors.append("responsive CSS removes chapter navigation without a replacement")
-    if ".architecture-section :focus-visible" not in css or "outline-color: var(--lime)" not in css:
+    focus_selectors = (
+        ".architecture-section :focus-visible",
+        ".phase-panel:focus-visible",
+        ".project-status :focus-visible",
+        ".deployment-status > div:last-child :focus-visible",
+        "footer :focus-visible",
+    )
+    if (
+        any(selector not in css for selector in focus_selectors)
+        or "outline-color: var(--lime)" not in css
+    ):
         errors.append("dark surfaces do not provide the high-contrast focus treatment")
+    if "frame-ancestors" not in site_readme or "clickjacking" not in site_readme:
+        errors.append("site README does not disclose the meta-CSP framing nonclaim")
 
     expected_hash_match = re.search(r"SHA-256:\*\* `([0-9a-f]{64})`", provenance)
     if not expected_hash_match:

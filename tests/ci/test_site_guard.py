@@ -62,3 +62,36 @@ def test_incomplete_no_script_story_fails_closed(tmp_path: Path) -> None:
         "no-script walkthrough is missing: system authority" in error
         for error in validate_repository(root)
     )
+
+
+def test_matrix_status_drift_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    matrix = root / "docs/v1/COMPLETION_MATRIX.md"
+    matrix.write_text(
+        matrix.read_text(encoding="utf-8").replace(
+            "| Network-deny proof | NET-001 | `IN_PROGRESS` |",
+            "| Network-deny proof | NET-001 | `COMPLETE` |",
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "data-net-status" in error and "does not match matrix" in error
+        for error in validate_repository(root)
+    )
+
+
+def test_placeholder_no_script_bodies_fail_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    html = index.read_text(encoding="utf-8")
+    start = html.index("<noscript>")
+    end = html.index("</noscript>") + len("</noscript>")
+    index.write_text(
+        html[:start]
+        + "<noscript><section><h2>Product promise</h2><h2>Intended case experience</h2><h2>System authority</h2><h2>Failure behavior</h2><h2>Delivery path and current status</h2><p>Placeholder</p></section></noscript>"
+        + html[end:],
+        encoding="utf-8",
+    )
+
+    assert any("substantive concept" in error for error in validate_repository(root))

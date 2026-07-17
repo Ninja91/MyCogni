@@ -301,7 +301,7 @@
         </div>
         <p class="roadmap-note">Cloud-small, OpenClaw, and optional local-assist evaluation come <strong>after v1</strong>. The week ranges are a planning envelope, not a promise; the completion matrix and evidence gates are authoritative.</p>
         <div class="deployment-status">
-          <div><span>CURRENT</span><h3>No accepted deployable image yet.</h3><p>M0 is building and reviewing the synthetic simulator, governance, network-deny harness, auth ceremony, runner boundary, keys, durability, backup, egress, and browser isolation. Docker multi-architecture evidence is still open.</p></div>
+          <div><span>CURRENT</span><h3>No accepted deployable image yet.</h3><p>Executable foundations and the synthetic simulator are integrated. GOV-001 has code-level acceptance; NET-001 remains in remediation review. Auth, runner, key, durability, backup, egress, and browser spikes are still unaccepted work, and Docker multi-architecture evidence is open.</p></div>
           <div><span>V1 TARGET</span><h3>Local-lite, single tenant.</h3><p>A pinned all-in-one container should run sporadically on a laptop or small CPU host. Cloud-small, OpenClaw integration, and optional local inference remain post-v1 evaluation paths—not current capabilities.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/07-deployment-architecture.md">Read the deployment specification →</a></div>
         </div>
       </section>
@@ -344,9 +344,9 @@
       <section class="chapter next-section" id="next" aria-labelledby="next-title">
         <p class="eyebrow">Choose your way in</p>
         <h2 id="next-title">The architecture is verified.<br>M0 implementation is in progress.</h2>
-        <div class="project-status" data-project-status="M0_IN_PROGRESS" data-status-date="2026-07-17">
+        <div class="project-status" data-project-status="M0_IN_PROGRESS" data-status-date="2026-07-17" data-gov-status="IN_PROGRESS" data-net-status="IN_PROGRESS" data-spikes-status="NOT_STARTED" data-sqlite-dur-status="NOT_STARTED">
           <span>STATUS · 2026-07-17</span>
-          <p><strong>Current truth:</strong> executable foundations and a deterministic synthetic simulator exist, but there is no runnable remover, accepted Docker image, or supported real-broker connector. GOV-001 and NET-001 remain under independent review; formal completion stays fail-closed.</p>
+          <p><strong>Current truth:</strong> executable foundations and a deterministic synthetic simulator exist, but there is no runnable remover, accepted Docker image, or supported real-broker connector. GOV-001 and NET-001 are <code>IN_PROGRESS</code>; the grouped security/deployment spikes and SQLite durability package are <code>NOT_STARTED</code> in the authoritative matrix. Formal completion stays fail-closed.</p>
           <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/COMPLETION_MATRIX.md">Open the authoritative completion matrix →</a>
         </div>
         <div class="path-grid">
@@ -370,8 +370,8 @@
     <noscript>
       <section class="noscript-story" aria-labelledby="noscript-title">
         <p class="eyebrow">Static walkthrough</p>
-        <h2 id="noscript-title">The full project story—without JavaScript.</h2>
-        <p>The interactive controls above show their first state. This section preserves every other narrative state when scripts are unavailable.</p>
+        <h2 id="noscript-title">An essential project overview—without JavaScript.</h2>
+        <p>The interactive controls above show their first state. This section preserves the essential product, authority, failure, delivery, and release truths when scripts are unavailable; the linked specifications remain the complete source.</p>
 
         <details open><summary>Product promise</summary><div class="noscript-grid">
           <article><h3>Local custody</h3><p>Identity attributes remain encrypted under user-controlled infrastructure. Only values in an authorized plan may leave for its displayed destination.</p></article>
@@ -414,7 +414,7 @@
           <li><strong>M5–M6 release evidence:</strong> corroborated verification, signed multi-architecture artifacts, recovery drills, accessibility, usability, and at least twelve weeks of stable-cohort evidence.</li>
         </ol><p><strong>2026-07-17:</strong> architecture is verified and M0 implementation is in progress. There is no runnable remover, accepted Docker image, or supported real-broker connector. <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/COMPLETION_MATRIX.md">Read the completion matrix.</a></p></details>
       </section>
-      <div class="noscript-note">JavaScript is unavailable. The complete static walkthrough appears above.</div>
+      <div class="noscript-note">JavaScript is unavailable. The essential static overview appears above.</div>
     </noscript>
   </body>
 </html>

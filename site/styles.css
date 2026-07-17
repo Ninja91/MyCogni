@@ -60,7 +60,10 @@ a { color: inherit; }
 }
 
 .architecture-section :focus-visible,
+.phase-panel:focus-visible,
 .phase-panel :focus-visible,
+.project-status :focus-visible,
+.deployment-status > div:last-child :focus-visible,
 footer :focus-visible {
   outline-color: var(--lime);
 }
