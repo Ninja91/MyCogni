@@ -51,6 +51,7 @@ testpaths = ["tests"]
 xfail_strict = true
 markers = [
   "governance_acceptance: exact package acceptance criterion evidence",
+  "simulator_loopback: permit numeric 127.0.0.1 TCP for an exact simulator test",
   "threat_evidence: exact assertion-bearing test permitted as executable threat evidence",
 ]
 

@@ -34,6 +34,8 @@ jobs:
         run: uv python install 3.12.12
       - name: Bootstrap frozen workspace
         run: make bootstrap
+      - name: Record optional Linux network-namespace support
+        run: make network-namespace-probe
       - name: Run workspace checks
         run: make check
 

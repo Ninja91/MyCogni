@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-15. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, and a deterministic synthetic-only simulator. It does not yet contain a remover runtime, accepted Docker image, network-deny proof or live connector.
+Snapshot date: 2026-07-17. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness awaiting independent acceptance. It does not yet contain a remover runtime, accepted Docker image, accepted network-deny proof or live connector.
 
 ## Status vocabulary
 
@@ -22,7 +22,7 @@ Documentation describing a future component is not implementation evidence for t
 | Interactive architecture walkthrough | `VERIFIED` | static `site/`, local static-server smoke tests, published Pages workflow | keep release status architecture-only until runtime evidence exists |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist, but machine governance has not closed structured attestations and prerequisite chains; frozen lock and dual-Python checks remain active | PF-002 needs real two-architecture build evidence; structured M0 acceptance and remaining packages are open |
-| Synthetic simulator/network-deny harness | `NOT_STARTED` | SIM-001 implementation and mutation suite are in adversarial remediation; the combined harness remains unavailable | SIM-001 acceptance and NET-001 network/DNS/protocol denial |
+| Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 is integrated; NET-001 adds a default-deny pytest guard, exact numeric-loopback capability, static marker/source guard, finite PII-safe diagnostics, optional namespace probe, 53 focused policy tests and 855-test full-suite evidence | independent NET-001 adversarial acceptance and optional Linux namespace reproduction |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
@@ -44,7 +44,7 @@ Documentation describing a future component is not implementation evidence for t
 | SQLite and migration baseline | DB-001 | `IN_PROGRESS` | `4b8e154`, `da7f406`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Shared contracts | CT-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisites and protected-review authorization before package completion |
 | Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6` plus remediation; canonical reserved-domain corpus/scenario goldens, synchronized transactional clock/web/mail protocol and 86 focused tests are integrated | complete independent adversarial re-review; NET-001 remains separate |
-| Network-deny proof | NET-001 | `NOT_STARTED` | — | depends on CI and simulator |
+| Network-deny proof | NET-001 | `IN_PROGRESS` | `docs/v1/NET-001-NETWORK-DENY.md`; default-deny DNS/socket/TLS/client guard, exact reviewed simulator marker set, OS-primitive spies, redirect/proxy/alias/thread-leak mutations, 53 focused and 855 full-suite tests | independent adversarial review and dual-Python reproduction; OS-level containment remains a nonclaim |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `NOT_STARTED` | — | execute and record ADRs |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
 | Synthetic-only authenticated shell | UX-001 | `NOT_STARTED` | — | depends on auth/contracts |

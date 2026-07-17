@@ -355,6 +355,7 @@ def _raw_valid(port: int, *, method: str = "GET", extra: bytes = b"") -> bytes:
     )
 
 
+@pytest.mark.simulator_loopback
 def test_raw_http_success_has_deterministic_headers_without_date() -> None:
     with _running_server() as (_, engine, server):
         port = server.server_port
@@ -420,6 +421,7 @@ def test_raw_http_success_has_deterministic_headers_without_date() -> None:
         ),
     ],
 )
+@pytest.mark.simulator_loopback
 def test_raw_http_mutations_fail_closed(request_builder: object, status: int) -> None:
     builder = request_builder
     assert callable(builder)
@@ -430,6 +432,7 @@ def test_raw_http_mutations_fail_closed(request_builder: object, status: int) ->
     assert b"\r\nDate:" not in response
 
 
+@pytest.mark.simulator_loopback
 def test_raw_http_concurrency_is_bounded() -> None:
     with _running_server() as (_, _, server):
         port = server.server_port
@@ -456,6 +459,7 @@ def test_raw_http_concurrency_is_bounded() -> None:
                 client.close()
 
 
+@pytest.mark.simulator_loopback
 def test_incomplete_raw_request_is_closed_by_read_timeout() -> None:
     with (
         _running_server() as (_, _, server),
