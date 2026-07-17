@@ -50,6 +50,23 @@ def test_stale_status_and_missing_asset_fail_closed(tmp_path: Path) -> None:
     assert any("missing local src asset" in error for error in errors)
 
 
+def test_superseded_net_remediation_claim_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "GOV-001 and NET-001 have code-level acceptance",
+            "GOV-001 has code-level acceptance; NET-001 remains in remediation review",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "stale project-status phrase" in error for error in validate_repository(root)
+    )
+
+
 def test_incomplete_no_script_story_fails_closed(tmp_path: Path) -> None:
     root = _site_fixture(tmp_path)
     index = root / "site/index.html"

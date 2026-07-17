@@ -124,7 +124,11 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         if local_reference and not (site / local_reference).is_file():
             errors.append(f"missing local {kind} asset: {reference}")
 
-    forbidden_status = ("The implementation is next", "architecture complete")
+    forbidden_status = (
+        "The implementation is next",
+        "architecture complete",
+        "NET-001 remains in remediation review",
+    )
     for phrase in forbidden_status:
         if phrase in html:
             errors.append(f"stale project-status phrase: {phrase}")
