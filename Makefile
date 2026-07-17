@@ -34,6 +34,7 @@ check: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) lint-imports
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/safety_guard.py
+	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/site_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/claim_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/threat_catalog_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python -m scripts.ci.governance_guard
@@ -46,6 +47,7 @@ check-python-313: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) lint-imports
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/safety_guard.py
+	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/site_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/claim_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python scripts/ci/threat_catalog_guard.py
 	uv run --all-packages --frozen --python $(PYTHON_COMPAT_VERSION) python -m scripts.ci.governance_guard
