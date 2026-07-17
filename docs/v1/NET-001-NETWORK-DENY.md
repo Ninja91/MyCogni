@@ -9,8 +9,11 @@ pytest launcher. Make, CI, governance evidence and threat evidence all use it.
 Root and connector-package conftests are sentinels: direct pytest fails instead
 of silently running without the plugin. The launcher rejects plugin-autoload
 disablement, guard-off environment state, `-p no:...`, `--noconftest` and
-`--confcutdir`. Removing the launcher/plugin/sentinel wiring fails the static
-CI guard.
+`--confcutdir`. `PYTEST_ADDOPTS` is parsed with POSIX shell quoting before the
+environment options and command-line options are evaluated together. Malformed
+quoting and split, combined, equals, quoted, or environment-plus-command-line
+exclusion forms fail closed before pytest starts. Removing the
+launcher/plugin/sentinel wiring fails the static CI guard.
 
 Every test receives an input-free opaque test ID. The default capability denies
 DNS and address-bearing socket operations. Only an exact, argument-free
@@ -24,16 +27,24 @@ literal address `127.0.0.1`:
 
 `ci/network-loopback-authority.json` enumerates all 38 authorized pytest nodes,
 including explicit parameter IDs, and pins SHA-256 digests for both source
-files. Runtime collection requires an exact function-level source decorator,
-exact path/function/case node, exact digest and argument-free own marker.
-Inherited, generated, dynamically attached and unregistered parameter cases
-cannot acquire authority.
+files. It also pins the normalized AST digest and line plus runtime code line
+and qualified name of each of the nine reviewed top-level test callables.
+Runtime collection requires the exact normalized `item.nodeid`, preserving all
+collector, class and parameter hierarchy; an exact top-level function and
+function-level source decorator; matching AST and code identity; the module's
+original callable object; and one argument-free own marker. Inherited,
+parameter-, class- or module-level, generated, dynamically attached, duplicate
+name, collector-collision and unregistered parameter cases cannot acquire
+authority.
 
-The capability is a mutable revocation lease referenced by a `ContextVar` for
-one pytest setup/call/teardown lifecycle. Teardown revokes the shared lease
-before resetting context. A new thread receives no capability; an already
-created async task may copy the lease reference but cannot use it after
-revocation. A later test receives a distinct lease.
+The capability is a mutable revocation lease referenced by a `ContextVar` only
+during the reviewed Python test-function call, never fixture setup or teardown.
+The plugin snapshots provenance at collection and revalidates the exact node,
+callable, code object, module binding, AST identity and marker immediately
+before granting the lease. It revokes the lease immediately after the call. A
+new thread receives no capability; an already created async task may copy the
+lease reference but cannot use it after revocation. A later test receives a
+distinct lease.
 
 The runtime guard denies all resolver APIs, non-IPv4 families, IPv6 (including
 IPv4-mapped IPv6), wildcard/broadcast/non-loopback addresses, hostnames,

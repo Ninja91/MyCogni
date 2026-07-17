@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,24 +22,44 @@ FORBIDDEN_OPTIONS = {
 }
 
 
+def _parsed_addopts(environment: dict[str, str]) -> list[str] | None:
+    try:
+        return shlex.split(environment.get("PYTEST_ADDOPTS", ""), posix=True)
+    except ValueError:
+        return None
+
+
+def _is_exclusion(tokens: Sequence[str]) -> bool:
+    for index, argument in enumerate(tokens):
+        lowered = argument.casefold()
+        if lowered == "--noconftest" or lowered.startswith("--noconftest="):
+            return True
+        if lowered == "--confcutdir" or lowered.startswith("--confcutdir="):
+            return True
+        if lowered.startswith("-pno:") or lowered.startswith("-p=no:"):
+            return True
+        if (
+            lowered == "-p"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].casefold().startswith("no:")
+        ):
+            return True
+    return False
+
+
 def _disabled(arguments: Sequence[str], environment: dict[str, str]) -> bool:
     if (
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD" in environment
         or "MYCOGNI_DISABLE_NETWORK_GUARD" in environment
     ):
         return True
-    all_arguments = [*environment.get("PYTEST_ADDOPTS", "").split(), *arguments]
-    for index, argument in enumerate(all_arguments):
-        lowered = argument.lower()
-        if argument in FORBIDDEN_OPTIONS or argument.startswith("--confcutdir"):
-            return True
-        if lowered.startswith("-pno:") and "network_guard" in lowered:
-            return True
-        if argument == "-p" and index + 1 < len(all_arguments):
-            value = all_arguments[index + 1].lower()
-            if value.startswith("no:") and "network_guard" in value:
-                return True
-    return False
+    addopts = _parsed_addopts(environment)
+    if addopts is None:
+        return True
+    all_arguments = [*addopts, *arguments]
+    return any(argument in FORBIDDEN_OPTIONS for argument in all_arguments) or _is_exclusion(
+        all_arguments
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

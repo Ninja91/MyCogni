@@ -115,6 +115,19 @@ def _calls(function: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return {_attribute(node.func) for node in ast.walk(function) if isinstance(node, ast.Call)}
 
 
+def _ast_sha256(node: ast.AST) -> str:
+    try:
+        canonical = ast.dump(
+            node,
+            annotate_fields=True,
+            include_attributes=False,
+            show_empty=True,
+        )
+    except TypeError:  # Python 3.12 always includes empty optional fields.
+        canonical = ast.dump(node, annotate_fields=True, include_attributes=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: set[str] = set()
@@ -263,9 +276,16 @@ def _authority_registry_errors() -> list[str]:
         document = json.loads(AUTHORITY_REGISTRY.read_text(encoding="utf-8"))
         nodes = document["authorized_nodes"]
         sources = document["source_sha256"]
+        callables = document["callable_provenance"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError):
         return ["network loopback authority registry is unreadable"]
-    if document.get("schema_version") != 1 or nodes != sorted(set(nodes)):
+    if (
+        set(document)
+        != {"schema_version", "source_sha256", "callable_provenance", "authorized_nodes"}
+        or document.get("schema_version") != 2
+        or nodes != sorted(set(nodes))
+        or list(callables) != sorted(callables)
+    ):
         errors.append("network loopback authority registry is not canonical")
     for relative, expected in sources.items():
         path = (ROOT / relative).resolve()
@@ -279,6 +299,55 @@ def _authority_registry_errors() -> list[str]:
             errors.append("network loopback authority source digest differs")
     if len(nodes) != 38:
         errors.append("network loopback authority node count differs from reviewed set")
+    bases: set[str] = set()
+    for nodeid in nodes:
+        parts = nodeid.split("::")
+        if len(parts) != 2:
+            errors.append("network loopback authority node has collector hierarchy")
+            continue
+        bases.add(f"{parts[0]}::{parts[1].split('[', 1)[0]}")
+    if set(callables) != bases or len(callables) != 9:
+        errors.append("network callable provenance does not cover exact top-level nodes")
+    for nodeid, review in callables.items():
+        relative, separator, function_name = nodeid.partition("::")
+        if (
+            not separator
+            or not function_name
+            or set(review)
+            != {
+                "ast_sha256",
+                "ast_lineno",
+                "code_firstlineno",
+                "qualname",
+            }
+        ):
+            errors.append("network callable provenance entry is invalid")
+            continue
+        path = ROOT / relative
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            errors.append("network callable provenance source is unreadable")
+            continue
+        matches = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function_name
+        ]
+        if len(matches) != 1:
+            errors.append("network callable provenance is not a unique top-level function")
+            continue
+        function = matches[0]
+        ast_digest = _ast_sha256(function)
+        if (
+            review["ast_sha256"] != ast_digest
+            or review["ast_lineno"] != function.lineno
+            or review["qualname"] != function_name
+            or not isinstance(review["code_firstlineno"], int)
+            or MARKER_ATTRIBUTE not in _decorators(function)
+        ):
+            errors.append("network callable provenance differs from reviewed AST identity")
     return errors
 
 

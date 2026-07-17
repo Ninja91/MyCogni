@@ -19,7 +19,12 @@ from typing import Any
 import httpx
 import pytest
 
-from scripts.ci import network_guard, network_namespace, network_source_guard
+from scripts.ci import (
+    network_guard,
+    network_guard_plugin,
+    network_namespace,
+    network_source_guard,
+)
 
 ROOT = Path(__file__).parents[2]
 GUARDED_PYTEST = ROOT / "scripts" / "ci" / "guarded_pytest.py"
@@ -342,10 +347,18 @@ def test_guard_off_environment_is_a_configuration_error() -> None:
     [
         (("-p", "no:scripts.ci.network_guard_plugin"), None),
         (("-pno:network_guard_plugin",), None),
+        (("-p=no:scripts.ci.network_guard_plugin",), None),
         (("--noconftest",), None),
+        (("--noconftest=true",), None),
         (("--confcutdir=/tmp",), None),
         ((), {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}),
         ((), {"PYTEST_ADDOPTS": "-p no:network_guard_plugin"}),
+        ((), {"PYTEST_ADDOPTS": "'-pno:scripts.ci.network_guard_plugin'"}),
+        ((), {"PYTEST_ADDOPTS": "'-p=no:scripts.ci.network_guard_plugin'"}),
+        ((), {"PYTEST_ADDOPTS": "'--noconftest'"}),
+        (("no:scripts.ci.network_guard_plugin",), {"PYTEST_ADDOPTS": "'-p'"}),
+        (("--noconftest",), {"PYTEST_ADDOPTS": "'-q'"}),
+        ((), {"PYTEST_ADDOPTS": "'malformed"}),
     ],
 )
 def test_guard_exclusion_options_fail_in_launcher(
@@ -363,6 +376,44 @@ def test_guard_exclusion_options_fail_in_launcher(
     )
     assert completed.returncode == 4
     assert completed.stdout.strip() == "guarded_pytest=denied"
+
+
+def test_exact_quoted_addopts_exclusion_denies_root_and_package_before_pytest() -> None:
+    environment = dict(os.environ)
+    environment["PYTEST_ADDOPTS"] = "'--noconftest' '-p' 'no:scripts.ci.network_guard_plugin'"
+    package = ROOT / "packages" / "mycogni-connector-sdk"
+    for cwd, target in (
+        (ROOT, "tests/domain/test_contracts.py"),
+        (package, "tests/test_boundaries.py"),
+    ):
+        completed = _run_pytest(
+            "--collect-only",
+            "-q",
+            target,
+            cwd=cwd,
+            environment=environment,
+        )
+        assert completed.returncode == 4
+        assert completed.stdout.strip() == "guarded_pytest=denied"
+        assert completed.stderr == ""
+
+
+def test_safely_quoted_addopts_remains_supported_for_root_and_package() -> None:
+    environment = dict(os.environ)
+    environment["PYTEST_ADDOPTS"] = "'-q'"
+    root = _run_pytest(
+        "--collect-only",
+        "tests/domain/test_contracts.py",
+        environment=environment,
+    )
+    package = _run_pytest(
+        "--collect-only",
+        "tests/test_boundaries.py",
+        cwd=ROOT / "packages" / "mycogni-connector-sdk",
+        environment=environment,
+    )
+    assert root.returncode == 0
+    assert package.returncode == 0
 
 
 def test_direct_root_and_package_pytest_fail_but_guarded_package_suite_collects() -> None:
@@ -428,13 +479,114 @@ def test_dynamic_marker_and_generated_node_lack_reviewed_provenance(tmp_path: Pa
     assert "provenance" in (completed.stdout + completed.stderr)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "import pytest\n\n"
+            "@pytest.mark.parametrize('case', "
+            "[pytest.param(1, marks=pytest.mark.simulator_loopback)])\n"
+            "def test_parameter_marker(case):\n    pass\n"
+        ),
+        (
+            "import pytest\n\n"
+            "@pytest.mark.simulator_loopback\n"
+            "class TestCollision:\n"
+            "    def test_raw_http_success_has_deterministic_headers_without_date(self):\n"
+            "        pass\n"
+        ),
+        (
+            "import pytest\n\npytestmark = pytest.mark.simulator_loopback\n\n"
+            "def test_module_marker():\n    pass\n"
+        ),
+    ],
+    ids=["parameter-level", "class-level-duplicate-name", "module-level"],
+)
+def test_non_function_marker_scopes_never_gain_authority(tmp_path: Path, source: str) -> None:
+    probe = ROOT / "tests" / "simulator" / "test_marker_scope_probe.py"
+    probe.write_text(source, encoding="utf-8")
+    try:
+        completed = _run_pytest("-q", str(probe))
+    finally:
+        probe.unlink(missing_ok=True)
+    assert completed.returncode != 0
+    assert "provenance" in (completed.stdout + completed.stderr)
+
+
+def test_canonical_node_preserves_full_collector_and_parameter_hierarchy() -> None:
+    path = ROOT / "tests" / "simulator" / "test_web_mail_safety.py"
+
+    class FakeItem:
+        def __init__(self, nodeid: str) -> None:
+            self.path = path
+            self.nodeid = nodeid
+
+    class_collision = FakeItem(
+        "ignored-prefix::TestCollision::"
+        "test_raw_http_success_has_deterministic_headers_without_date[duplicate]"
+    )
+    canonical = network_guard_plugin._canonical_node(class_collision)  # type: ignore[arg-type]
+    assert canonical.endswith(
+        "::TestCollision::test_raw_http_success_has_deterministic_headers_without_date[duplicate]"
+    )
+    assert canonical not in network_guard_plugin._REGISTRY.nodes
+
+
+def test_custom_generated_item_cannot_spoof_authorized_top_level_node() -> None:
+    path = ROOT / "tests" / "simulator" / "test_web_mail_safety.py"
+    canonical = (
+        "tests/simulator/test_web_mail_safety.py::"
+        "test_raw_http_success_has_deterministic_headers_without_date"
+    )
+
+    class FakeGeneratedItem:
+        def __init__(self) -> None:
+            self.nodeid = canonical
+            self.name = "test_raw_http_success_has_deterministic_headers_without_date"
+            self.originalname = self.name
+            self.parent = object()
+            self.path = path
+
+    fake = FakeGeneratedItem()
+    assert network_guard_plugin._canonical_node(fake) == canonical  # type: ignore[arg-type]
+    assert network_guard_plugin._reviewed_item(fake) is None  # type: ignore[arg-type]
+
+
+def test_post_collection_node_and_callable_mutation_revokes_authority(tmp_path: Path) -> None:
+    plugin = tmp_path / "post_collection_mutator.py"
+    plugin.write_text(
+        "import pytest\n\n"
+        "@pytest.hookimpl(trylast=True)\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    for item in items:\n"
+        "        item._nodeid = item.nodeid + '::mutated'\n"
+        "        item._obj = lambda: None\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(ROOT)))
+    completed = _run_pytest(
+        "-q",
+        "-p",
+        "post_collection_mutator",
+        "tests/simulator/test_web_mail_safety.py::"
+        "test_raw_http_success_has_deterministic_headers_without_date",
+        environment=environment,
+    )
+    assert completed.returncode != 0
+    assert "provenance" in (completed.stdout + completed.stderr)
+
+
 def test_authority_registry_binds_exact_parameter_nodes_and_source_digests() -> None:
     registry = json.loads((ROOT / "ci" / "network-loopback-authority.json").read_text())
+    assert registry["schema_version"] == 2
     nodes = registry["authorized_nodes"]
     assert len(nodes) == 38
     assert nodes == sorted(set(nodes))
     assert any("[missing-host]" in node for node in nodes)
     assert any("[overflow-port]" in node for node in nodes)
+    assert len(registry["callable_provenance"]) == 9
+    assert all(node.count("::") == 1 for node in nodes)
     for relative, expected in registry["source_sha256"].items():
         assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == expected
 
