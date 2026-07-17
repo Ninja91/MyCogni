@@ -1,0 +1,380 @@
+"""Application-owned ports and orchestration for the volatile auth spike."""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timedelta
+from typing import Protocol, runtime_checkable
+
+from mycogni.application.ports import Clock
+from mycogni.domain import OpaqueId
+from mycogni.domain.auth import (
+    PURPOSE_SCOPE,
+    AuthDenial,
+    AuthorityGrant,
+    AuthOutcome,
+    AuthPolicy,
+    AuthPurpose,
+    AuthScope,
+    BootstrapExchange,
+    BootstrapRecord,
+    OpaqueCredential,
+    RecoveryRecord,
+    SecretDigest,
+    SessionRecord,
+    StepUpRecord,
+    require_utc,
+)
+
+TOKEN_BYTES = 32
+
+
+@runtime_checkable
+class TokenSource(Protocol):
+    """High-entropy opaque material source owned by application composition."""
+
+    def generate(self, length: int) -> bytes:
+        """Return exactly ``length`` fresh bytes."""
+        ...
+
+
+@runtime_checkable
+class AuthDecisionStore(Protocol):
+    """Atomic decision operations required from an auth-state adapter."""
+
+    def create_bootstrap(self, record: BootstrapRecord, now: datetime) -> None: ...
+
+    def exchange_bootstrap(
+        self,
+        handle: OpaqueId,
+        presented_digest: SecretDigest,
+        now: datetime,
+        session: SessionRecord,
+        recovery: RecoveryRecord,
+    ) -> AuthOutcome[SessionRecord]: ...
+
+    def authenticate_session(
+        self, credential: OpaqueCredential, presented_digest: SecretDigest, now: datetime
+    ) -> AuthOutcome[SessionRecord]: ...
+
+    def create_step_up(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        now: datetime,
+        challenge: StepUpRecord,
+    ) -> AuthOutcome[StepUpRecord]: ...
+
+    def consume_step_up(
+        self,
+        challenge: OpaqueCredential,
+        challenge_digest: SecretDigest,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        purpose: AuthPurpose,
+        scopes: frozenset[AuthScope],
+        now: datetime,
+    ) -> AuthOutcome[StepUpRecord]: ...
+
+    def rotate_session(
+        self,
+        current: OpaqueCredential,
+        current_digest: SecretDigest,
+        now: datetime,
+        replacement: SessionRecord,
+    ) -> AuthOutcome[SessionRecord]: ...
+
+    def revoke_session(
+        self, current: OpaqueCredential, current_digest: SecretDigest, now: datetime
+    ) -> AuthOutcome[OpaqueId]: ...
+
+    def revoke_all(self, actor_id: OpaqueId, now: datetime) -> AuthOutcome[int]: ...
+
+    def recover(
+        self,
+        recovery: OpaqueCredential,
+        recovery_digest: SecretDigest,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        now: datetime,
+        session: SessionRecord,
+        replacement_recovery: RecoveryRecord,
+    ) -> AuthOutcome[int]: ...
+
+    def validate_grant(
+        self,
+        grant: AuthorityGrant,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[AuthorityGrant]: ...
+
+
+class AuthService:
+    """Synthetic auth ceremonies with injected time, material, and state ports."""
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        token_source: TokenSource,
+        store: AuthDecisionStore,
+        policy: AuthPolicy | None = None,
+    ) -> None:
+        self._clock = clock
+        self._token_source = token_source
+        self._store = store
+        self._policy = policy if policy is not None else AuthPolicy()
+
+    def _now(self) -> datetime:
+        now = self._clock.now()
+        require_utc(now, "clock value")
+        return now
+
+    def _credential(self) -> tuple[OpaqueCredential, SecretDigest]:
+        material = self._token_source.generate(TOKEN_BYTES)
+        if type(material) is not bytes or len(material) != TOKEN_BYTES:
+            raise RuntimeError("token source violated the opaque-material contract")
+        credential = OpaqueCredential.from_secret(OpaqueId.new(), material)
+        return credential, SecretDigest(hashlib.sha256(material).digest())
+
+    def _window(self, now: datetime, ttl_seconds: int) -> tuple[datetime, datetime]:
+        not_before = now + timedelta(seconds=self._policy.activation_delay_seconds)
+        return not_before, not_before + timedelta(seconds=ttl_seconds)
+
+    def begin_bootstrap(
+        self, *, actor_id: OpaqueId, represented_profile_id: OpaqueId
+    ) -> OpaqueCredential:
+        """Create one one-use bootstrap code; composition controls disclosure."""
+        now = self._now()
+        credential, digest = self._credential()
+        not_before, expires = self._window(now, self._policy.bootstrap_ttl_seconds)
+        self._store.create_bootstrap(
+            BootstrapRecord(
+                handle=credential.handle,
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                digest=digest,
+                not_before_utc=not_before,
+                expires_at_utc=expires,
+                attempts_remaining=self._policy.max_attempts,
+            ),
+            now,
+        )
+        return credential
+
+    def exchange_bootstrap(self, bootstrap: OpaqueCredential) -> AuthOutcome[BootstrapExchange]:
+        """Consume bootstrap once and atomically issue opaque session/recovery state."""
+        now = self._now()
+        session, session_digest = self._credential()
+        recovery, recovery_digest = self._credential()
+        session_not_before, session_expires = self._window(now, self._policy.session_ttl_seconds)
+        recovery_not_before, recovery_expires = self._window(now, self._policy.recovery_ttl_seconds)
+        placeholder = OpaqueId.new()
+        result = self._store.exchange_bootstrap(
+            bootstrap.handle,
+            SecretDigest(hashlib.sha256(bootstrap.secret.reveal()).digest()),
+            now,
+            SessionRecord(
+                handle=session.handle,
+                actor_id=placeholder,
+                represented_profile_id=placeholder,
+                digest=session_digest,
+                epoch=1,
+                not_before_utc=session_not_before,
+                expires_at_utc=session_expires,
+            ),
+            RecoveryRecord(
+                handle=recovery.handle,
+                actor_id=placeholder,
+                represented_profile_id=placeholder,
+                digest=recovery_digest,
+                epoch=1,
+                not_before_utc=recovery_not_before,
+                expires_at_utc=recovery_expires,
+                attempts_remaining=self._policy.max_attempts,
+            ),
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        assert result.value is not None
+        record = result.value
+        return AuthOutcome.allowed(
+            BootstrapExchange(
+                session=session,
+                recovery=recovery,
+                actor_id=record.actor_id,
+                represented_profile_id=record.represented_profile_id,
+                epoch=record.epoch,
+            )
+        )
+
+    def authenticate_session(self, session: OpaqueCredential) -> AuthOutcome[OpaqueId]:
+        result = self._store.authenticate_session(session, self._digest(session), self._now())
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        assert result.value is not None
+        return AuthOutcome.allowed(result.value.handle)
+
+    def issue_step_up(
+        self,
+        *,
+        session: OpaqueCredential,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        purpose: AuthPurpose,
+        scopes: frozenset[AuthScope],
+    ) -> AuthOutcome[OpaqueCredential]:
+        if scopes != frozenset({PURPOSE_SCOPE[purpose]}):
+            return AuthOutcome.denied(AuthDenial.SCOPE_WIDENING)
+        now = self._now()
+        credential, digest = self._credential()
+        not_before, expires = self._window(now, self._policy.step_up_ttl_seconds)
+        proposed = StepUpRecord(
+            handle=credential.handle,
+            actor_id=actor_id,
+            represented_profile_id=represented_profile_id,
+            session_id=session.handle,
+            digest=digest,
+            epoch=1,
+            purpose=purpose,
+            scopes=scopes,
+            not_before_utc=not_before,
+            expires_at_utc=expires,
+            attempts_remaining=self._policy.max_attempts,
+        )
+        result = self._store.create_step_up(session, self._digest(session), now, proposed)
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(credential)
+
+    def consume_step_up(
+        self,
+        *,
+        challenge: OpaqueCredential,
+        session: OpaqueCredential,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        purpose: AuthPurpose,
+        scopes: frozenset[AuthScope],
+    ) -> AuthOutcome[AuthorityGrant]:
+        now = self._now()
+        result = self._store.consume_step_up(
+            challenge,
+            self._digest(challenge),
+            session,
+            self._digest(session),
+            actor_id,
+            represented_profile_id,
+            purpose,
+            scopes,
+            now,
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        assert result.value is not None
+        record = result.value
+        return AuthOutcome.allowed(
+            AuthorityGrant(
+                actor_id=record.actor_id,
+                represented_profile_id=record.represented_profile_id,
+                session_id=record.session_id,
+                authority_evidence_id=record.handle,
+                purpose=record.purpose,
+                scopes=record.scopes,
+                not_before_utc=record.not_before_utc,
+                expires_at_utc=record.expires_at_utc,
+                epoch=record.epoch,
+            )
+        )
+
+    def rotate_session(self, session: OpaqueCredential) -> AuthOutcome[OpaqueCredential]:
+        now = self._now()
+        replacement, replacement_digest = self._credential()
+        not_before, expires = self._window(now, self._policy.session_ttl_seconds)
+        placeholder = OpaqueId.new()
+        result = self._store.rotate_session(
+            session,
+            self._digest(session),
+            now,
+            SessionRecord(
+                handle=replacement.handle,
+                actor_id=placeholder,
+                represented_profile_id=placeholder,
+                digest=replacement_digest,
+                epoch=1,
+                not_before_utc=not_before,
+                expires_at_utc=expires,
+            ),
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(replacement)
+
+    def revoke_session(self, session: OpaqueCredential) -> AuthOutcome[OpaqueId]:
+        return self._store.revoke_session(session, self._digest(session), self._now())
+
+    def revoke_all(self, actor_id: OpaqueId) -> AuthOutcome[int]:
+        return self._store.revoke_all(actor_id, self._now())
+
+    def recover(
+        self,
+        *,
+        recovery: OpaqueCredential,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+    ) -> AuthOutcome[BootstrapExchange]:
+        now = self._now()
+        session, session_digest = self._credential()
+        replacement, replacement_digest = self._credential()
+        session_not_before, session_expires = self._window(now, self._policy.session_ttl_seconds)
+        recovery_not_before, recovery_expires = self._window(now, self._policy.recovery_ttl_seconds)
+        result = self._store.recover(
+            recovery,
+            self._digest(recovery),
+            actor_id,
+            represented_profile_id,
+            now,
+            SessionRecord(
+                handle=session.handle,
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                digest=session_digest,
+                epoch=1,
+                not_before_utc=session_not_before,
+                expires_at_utc=session_expires,
+            ),
+            RecoveryRecord(
+                handle=replacement.handle,
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                digest=replacement_digest,
+                epoch=1,
+                not_before_utc=recovery_not_before,
+                expires_at_utc=recovery_expires,
+                attempts_remaining=self._policy.max_attempts,
+            ),
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        assert result.value is not None
+        return AuthOutcome.allowed(
+            BootstrapExchange(
+                session=session,
+                recovery=replacement,
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                epoch=result.value,
+            )
+        )
+
+    def validate_grant(
+        self, grant: AuthorityGrant, session: OpaqueCredential
+    ) -> AuthOutcome[AuthorityGrant]:
+        return self._store.validate_grant(grant, session, self._digest(session), self._now())
+
+    @staticmethod
+    def _digest(credential: OpaqueCredential) -> SecretDigest:
+        return SecretDigest(hashlib.sha256(credential.secret.reveal()).digest())
