@@ -48,3 +48,23 @@ diagnostics, package sentinels and ordinary launcher-exclusion cases.
 The reviewer reran 84 focused NET tests plus selected governance evidence. Those
 passed, but did not cover the two composed identity cases above. NET-001 remains
 `IN_PROGRESS` pending remediation and another independent re-review.
+
+## Second remediation re-review
+
+Target: integration commit `e09c720`.
+
+Verdict: **REJECT** — zero P0, two P1 and zero P2 findings. Shell-accurate
+quoted environment parsing and full collector/callable identity closed the prior
+findings, but two earlier launcher phases remained configurable.
+
+| Severity | Finding | Required disposition |
+| --- | --- | --- |
+| P1 | Pytest configuration override and alternate-configuration arguments could inject disabling `addopts`, removing both conftest sentinels and guard hooks. | Reject override/alternate-config surfaces before pytest starts, across argv/environment, split/equals/quoted/malformed forms and root/package suites. |
+| P1 | A user-supplied positive plugin could run before the guard's collection snapshot and replace a reviewed callable while forging the checked metadata. | Reject plugin injection/loading inputs before import, control plugin autoload explicitly, and prove a synthetic substitution plugin never executes. |
+
+The second remediation at `362795e` now denies user plugin/config overrides before
+pytest import, disables automatic plugin discovery and explicitly registers only the
+locked required plugins and network guard. Its lane evidence reports 133 focused,
+87 raw/policy simulator and 935 full-suite tests on both Python versions. Independent
+re-review is still required; this paragraph is an implementation disposition, not
+acceptance.
