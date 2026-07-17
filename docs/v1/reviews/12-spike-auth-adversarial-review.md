@@ -21,6 +21,16 @@ must be rerun with an available independent lane.
 | P1 | The retained transcript described bootstrap exchange and step-up behavior the TTY entrypoint did not execute; leak tests wrapped an unrelated exception rather than the real disclosure path. | Generate a redacted retained transcript from one executable end-to-end synthetic ceremony and assert real entrypoint stdout/stderr behavior. |
 | P2 | Terminal disclosure lacked scrollback/save warning, recovery did not announce old-session invalidation, denial strings lacked safe guidance, headless IDs/no-echo/SSH/container/interrupted-output procedures were unclear, and expired volatile records had no bounded cleanup. | Make the operator contract finite and testable or narrow it; add bounded retention/cleanup evidence. |
 
+The independent backend/concurrency/OSS review also rejected the initial revision and
+added these findings:
+
+| Severity | Finding | Required disposition |
+| --- | --- | --- |
+| P1 | The recovery port validated scalar actor/profile inputs but stored caller-constructed session/recovery records after changing only epoch, allowing cross-bound authority through an alternate caller. | Canonically build replacement records from the consumed recovery actor/profile; reject cross-bound inputs and test the port directly. |
+| P2 | Mutable record booleans/state were incompletely validated and store methods exposed mutable internal record objects. | Validate exact field types and return immutable copies/snapshots or keep mutation entirely private; test alias mutation. |
+| P2 | `issue_step_up` indexed the purpose map before validating public purpose/scope types, leaking `KeyError` for malformed input. | Validate public domain types first and return a deliberate validation/typed result. |
+| P2 | The digest-retention test projected only digest fields, so it would remain green if raw credentials were later retained elsewhere. | Structurally inspect the complete store graph or constrain storage representation and prove no raw credential/sensitive value is retained. |
+
 ## Positive evidence retained
 
 The review found the redacted credential rendering, fixed-size digest comparison,
