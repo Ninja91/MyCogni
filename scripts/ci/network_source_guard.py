@@ -149,7 +149,7 @@ def _runtime_errors() -> list[str]:
         ROOT / "scripts" / "ci" / "network_guard_plugin.py",
         ROOT / "simulator" / "web.py",
     }
-    for base in (ROOT / "src", ROOT / "packages", ROOT / "simulator"):
+    for base in (ROOT / "src", ROOT / "packages", ROOT / "services", ROOT / "simulator"):
         for path in sorted(base.rglob("*.py")):
             if path in guarded or "tests" in path.parts:
                 continue

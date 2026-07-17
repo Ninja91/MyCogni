@@ -14,6 +14,7 @@ RUNTIME_ROOTS = (
     "packages/",
     "tests/",
     "connectors/",
+    "services/",
     "broker-registry/",
     "simulator/",
 )

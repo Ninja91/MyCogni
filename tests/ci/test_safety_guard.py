@@ -9,6 +9,10 @@ def test_guard_treats_simulator_as_a_pii_scanned_runtime_surface() -> None:
     assert "simulator/" in RUNTIME_ROOTS
 
 
+def test_guard_treats_services_as_a_pii_scanned_runtime_surface() -> None:
+    assert "services/" in RUNTIME_ROOTS
+
+
 def test_guard_rejects_secret_canary(tmp_path: Path) -> None:
     canary = tmp_path / "secret.py"
     # Write the assembled value so the repository never stores a scanner-triggering token.
