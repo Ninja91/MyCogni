@@ -48,7 +48,7 @@
     <main id="main">
       <section class="hero chapter" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Architecture in public · not yet a working remover</p>
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> M0 implementation in progress · not a working remover</p>
           <h1 id="hero-title">Remove the record.<br><em>Prove what changed.</em></h1>
           <p class="hero-lede">MyCogni is a planned open-source system for recurring U.S. personal-data removal. It keeps identity data under the user's control and treats every external action as something that must be explained, constrained, and verified.</p>
           <div class="hero-actions">
@@ -65,7 +65,8 @@
         <div class="hero-console" role="region" aria-label="Illustrative MyCogni case summary">
           <div class="console-bar">
             <span>CASE / SYNTHETIC-042</span>
-            <span class="console-live"><i aria-hidden="true"></i> evidence current</span>
+            <span class="console-demo-badge">ILLUSTRATIVE SYNTHETIC DEMO</span>
+            <span class="console-live"><i aria-hidden="true"></i> mock state</span>
           </div>
           <div class="console-body">
             <div class="console-score">
@@ -140,7 +141,7 @@
             <button type="button" role="tab" aria-selected="false" aria-controls="promise-panel" id="promise-automation" data-promise="automation" tabindex="-1">03 · Automation</button>
             <button type="button" role="tab" aria-selected="false" aria-controls="promise-panel" id="promise-clarity" data-promise="clarity" tabindex="-1">04 · Clarity</button>
           </div>
-          <div class="promise-panel" id="promise-panel" role="tabpanel" tabindex="0" aria-labelledby="promise-custody">
+          <div class="promise-panel" id="promise-panel" role="tabpanel" tabindex="0" aria-labelledby="promise-custody" aria-live="polite" aria-atomic="true">
             <div class="promise-number" id="promise-number" aria-hidden="true">01</div>
             <div>
               <p class="panel-label" id="promise-label">LOCAL CUSTODY</p>
@@ -176,7 +177,7 @@
             <button type="button" role="tab" aria-selected="false" aria-controls="case-panel" id="case-verify" data-case="verify" tabindex="-1"><span>6</span> Verify</button>
           </div>
 
-          <div class="case-panel" id="case-panel" role="tabpanel" tabindex="0" aria-labelledby="case-observe">
+          <div class="case-panel" id="case-panel" role="tabpanel" tabindex="0" aria-labelledby="case-observe" aria-live="polite" aria-atomic="true">
             <div class="case-main">
               <div class="case-meta"><span id="case-step-label">STEP 1 OF 6</span><span>SYNTHETIC CASE</span></div>
               <h3 id="case-heading">A candidate record appears.</h3>
@@ -232,7 +233,7 @@
             <span class="map-line line-b" aria-hidden="true"></span>
             <span class="map-line line-c" aria-hidden="true"></span>
           </div>
-          <div class="architecture-detail" aria-live="polite">
+          <div class="architecture-detail" aria-live="polite" aria-atomic="true">
             <p class="panel-label" id="arch-label">AUTHENTICATED USER CONTROL</p>
             <h3 id="arch-heading">The user establishes intent and exceptions.</h3>
             <p id="arch-copy">The CLI or local web interface authenticates the actor, records separate scan consent, previews exact disclosures, and requires a dedicated step-up per-capability ceremony before automation can leave global pause.</p>
@@ -256,14 +257,14 @@
         </div>
 
         <div class="scenario-lab">
-          <div class="scenario-list" role="list" aria-label="Failure scenarios">
+          <div class="scenario-list" role="group" aria-label="Failure scenarios">
             <button type="button" class="is-selected" data-scenario="ambiguous" aria-pressed="true"><span>01</span> Ambiguous identity match</button>
             <button type="button" data-scenario="challenge" aria-pressed="false"><span>02</span> CAPTCHA or MFA appears</button>
             <button type="button" data-scenario="timeout" aria-pressed="false"><span>03</span> Timeout after dispatch</button>
             <button type="button" data-scenario="drift" aria-pressed="false"><span>04</span> Connector behavior drifts</button>
             <button type="button" data-scenario="ai" aria-pressed="false"><span>05</span> Local AI suggests an action</button>
           </div>
-          <div class="scenario-answer" aria-live="polite">
+          <div class="scenario-answer" aria-live="polite" aria-atomic="true">
             <div class="stop-badge" id="scenario-badge">AUTOMATION STOPS</div>
             <h3 id="scenario-heading">The match stays ambiguous.</h3>
             <p id="scenario-copy">MyCogni presents the attribute-level explanation and asks the user to confirm or reject it. A name-only or conflicting match cannot enter automatic submission.</p>
@@ -294,11 +295,15 @@
           <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-v1" data-phase="v1" tabindex="-1"><span>26–32</span><strong>RC</strong></button>
           <button type="button" role="tab" aria-selected="false" aria-controls="phase-panel" id="phase-stable" data-phase="stable" tabindex="-1"><span>32–40+</span><strong>Stable gate</strong></button>
         </div>
-        <div class="phase-panel" id="phase-panel" role="tabpanel" tabindex="0" aria-labelledby="phase-foundation">
+        <div class="phase-panel" id="phase-panel" role="tabpanel" tabindex="0" aria-labelledby="phase-foundation" aria-live="polite" aria-atomic="true">
           <div><p class="panel-label" id="phase-label">WEEKS 0–4</p><h3 id="phase-heading">Build the foundation that can say “no.”</h3><p id="phase-copy">Land locked project boundaries, a deterministic simulator, hermetic network-deny CI, stable threat IDs, and executable security spikes.</p></div>
           <div class="phase-gates"><span>EXIT GATES</span><ul id="phase-gates"><li>P0 ADRs accepted</li><li>Synthetic-only test path</li><li>Threat-to-requirement traceability</li></ul></div>
         </div>
         <p class="roadmap-note">Cloud-small, OpenClaw, and optional local-assist evaluation come <strong>after v1</strong>. The week ranges are a planning envelope, not a promise; the completion matrix and evidence gates are authoritative.</p>
+        <div class="deployment-status">
+          <div><span>CURRENT</span><h3>No accepted deployable image yet.</h3><p>M0 is building and reviewing the synthetic simulator, governance, network-deny harness, auth ceremony, runner boundary, keys, durability, backup, egress, and browser isolation. Docker multi-architecture evidence is still open.</p></div>
+          <div><span>V1 TARGET</span><h3>Local-lite, single tenant.</h3><p>A pinned all-in-one container should run sporadically on a laptop or small CPU host. Cloud-small, OpenClaw integration, and optional local inference remain post-v1 evaluation paths—not current capabilities.</p><a href="https://github.com/Ninja91/MyCogni/blob/main/docs/07-deployment-architecture.md">Read the deployment specification →</a></div>
+        </div>
       </section>
 
       <section class="chapter review-section" id="reviews" data-chapter="reviews" aria-labelledby="reviews-title">
@@ -338,14 +343,19 @@
 
       <section class="chapter next-section" id="next" aria-labelledby="next-title">
         <p class="eyebrow">Choose your way in</p>
-        <h2 id="next-title">The architecture is ready.<br>The implementation is next.</h2>
+        <h2 id="next-title">The architecture is verified.<br>M0 implementation is in progress.</h2>
+        <div class="project-status" data-project-status="M0_IN_PROGRESS" data-status-date="2026-07-17">
+          <span>STATUS · 2026-07-17</span>
+          <p><strong>Current truth:</strong> executable foundations and a deterministic synthetic simulator exist, but there is no runnable remover, accepted Docker image, or supported real-broker connector. GOV-001 and NET-001 remain under independent review; formal completion stays fail-closed.</p>
+          <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/COMPLETION_MATRIX.md">Open the authoritative completion matrix →</a>
+        </div>
         <div class="path-grid">
           <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/README.md"><span>BUILD</span><h3>Start with M0</h3><p>Trace more than 100 work packages, dependencies, adversarial dispositions, acceptance evidence, and release gates.</p><i aria-hidden="true">→</i></a>
           <a href="https://github.com/Ninja91/MyCogni/blob/main/CONTRIBUTING.md"><span>CONTRIBUTE</span><h3>Take a synthetic task</h3><p>Improve tests, threat cases, accessibility, broker facts, or architecture without using real PII.</p><i aria-hidden="true">→</i></a>
           <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/15-product-market-fit.md"><span>RESEARCH</span><h3>Test the wedge</h3><p>Run exposure-preview, proof-comprehension, switching, and recurring-burden experiments.</p><i aria-hidden="true">→</i></a>
         </div>
         <div class="final-cta">
-          <div><span class="status-dot" aria-hidden="true"></span><p><strong>Current truth:</strong> architecture complete; no runnable remover or supported real-broker connector yet.</p></div>
+          <div><span class="status-dot" aria-hidden="true"></span><p><strong>Release truth:</strong> architecture verified; M0 implementation in progress; no runnable remover or supported real-broker connector.</p></div>
           <a class="button button-primary" href="https://github.com/Ninja91/MyCogni">Explore the repository <span aria-hidden="true">↗</span></a>
         </div>
       </section>
@@ -357,6 +367,54 @@
       <div><a href="https://github.com/Ninja91/MyCogni/blob/main/LICENSE">Apache-2.0</a><a href="https://github.com/Ninja91/MyCogni/blob/main/SECURITY.md">Security</a><a href="https://github.com/Ninja91/MyCogni">GitHub</a></div>
     </footer>
 
-    <noscript><div class="noscript-note">The full project story remains readable without JavaScript. Enable JavaScript to explore the interactive panels.</div></noscript>
+    <noscript>
+      <section class="noscript-story" aria-labelledby="noscript-title">
+        <p class="eyebrow">Static walkthrough</p>
+        <h2 id="noscript-title">The full project story—without JavaScript.</h2>
+        <p>The interactive controls above show their first state. This section preserves every other narrative state when scripts are unavailable.</p>
+
+        <details open><summary>Product promise</summary><div class="noscript-grid">
+          <article><h3>Local custody</h3><p>Identity attributes remain encrypted under user-controlled infrastructure. Only values in an authorized plan may leave for its displayed destination.</p></article>
+          <article><h3>Proof before claims</h3><p>Submission, acknowledgement, broker assertion, one absence observation, corroborated verification, and resurfacing remain separate facts.</p></article>
+          <article><h3>Bounded automation</h3><p>External actions begin paused. A capability acts only inside a fresh, narrow grant; drift, challenges, stale authority, and unknown outcomes stop it.</p></article>
+          <article><h3>No mystery queues</h3><p>Every unfinished case exposes its state, reason, owner, last evidence, next action, and next date.</p></article>
+        </div></details>
+
+        <details><summary>Intended case experience</summary><ol>
+          <li><strong>Observe:</strong> a separately authorized read-only search records a candidate without claiming ownership.</li>
+          <li><strong>Confirm:</strong> conflicting or insufficient evidence remains ambiguous and cannot enter automation.</li>
+          <li><strong>Plan:</strong> destination, transport, purpose, warnings, attachments, and minimum fields become inspectable and hash-bound.</li>
+          <li><strong>Authorize:</strong> actor, profile, plan, policy, connector digest, fence, and revocation epoch must agree.</li>
+          <li><strong>Submit:</strong> the first outbound byte crosses a current gateway decision; post-dispatch timeout becomes unknown, never blind retry permission.</li>
+          <li><strong>Verify:</strong> independent, policy-timed observations are required; blocks and ambiguity remain inconclusive.</li>
+        </ol></details>
+
+        <details><summary>System authority</summary><div class="noscript-grid">
+          <article><h3>Control plane</h3><p>The authenticated user grants, pauses, revokes, exports, and deletes; it cannot bless an ambiguous identity match.</p></article>
+          <article><h3>Trusted core</h3><p>Deterministic policy owns state, plans, authority, evidence semantics, and the intent journal; it never delegates truth to a connector or model.</p></article>
+          <article><h3>Encrypted state</h3><p>Random profile keys are wrapped outside the managed archive and tracked through deletion and backup expiry.</p></article>
+          <article><h3>Connector and gateway</h3><p>A digest-pinned artifact gets one bounded task. A separate egress boundary checks plan, origin, protocol, disclosure, byte budget, fence, and revocation state.</p></article>
+          <article><h3>Hostile destination</h3><p>Broker sites, inboxes, scripts, redirects, and responses are untrusted and cannot declare MyCogni verification.</p></article>
+          <article><h3>Optional local assist</h3><p>Post-v1 evaluation may allow sanitized suggestions only. A model receives no tools, raw PII, network, authority, or state-mutation power.</p></article>
+        </div></details>
+
+        <details><summary>Failure behavior</summary><ul>
+          <li><strong>Ambiguous match:</strong> automation stops for user review or stronger evidence.</li>
+          <li><strong>CAPTCHA, MFA, identity document, login, or changed terms:</strong> a visible user task replaces bypass attempts.</li>
+          <li><strong>Post-dispatch timeout:</strong> outcome remains unknown until non-mutating reconciliation.</li>
+          <li><strong>Destination, disclosure, policy, DOM, or behavior drift:</strong> the capability is quarantined and must be revalidated.</li>
+          <li><strong>Local-model output:</strong> remains an untrusted suggestion requiring deterministic validation and human review.</li>
+        </ul></details>
+
+        <details><summary>Delivery path and current status</summary><ol>
+          <li><strong>M0 foundation:</strong> synthetic-only contracts, simulator, deny guards, and executable security/deployment spikes.</li>
+          <li><strong>M1 kernel:</strong> auth, keys, durable jobs/evidence, backup/restore, journal, pause and fail-closed gateway.</li>
+          <li><strong>M2–M3 preview/guided:</strong> authorized read-only searches, explained candidates, exact plans, guided work, export, deletion, and restore.</li>
+          <li><strong>M4 automation:</strong> only 2–5 capabilities that pass shared and capability-specific review and controlled canaries.</li>
+          <li><strong>M5–M6 release evidence:</strong> corroborated verification, signed multi-architecture artifacts, recovery drills, accessibility, usability, and at least twelve weeks of stable-cohort evidence.</li>
+        </ol><p><strong>2026-07-17:</strong> architecture is verified and M0 implementation is in progress. There is no runnable remover, accepted Docker image, or supported real-broker connector. <a href="https://github.com/Ninja91/MyCogni/blob/main/docs/v1/COMPLETION_MATRIX.md">Read the completion matrix.</a></p></details>
+      </section>
+      <div class="noscript-note">JavaScript is unavailable. The complete static walkthrough appears above.</div>
+    </noscript>
   </body>
 </html>

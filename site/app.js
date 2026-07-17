@@ -360,7 +360,10 @@ if ("IntersectionObserver" in window) {
       .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
     if (!visible) return;
     document.querySelectorAll("[data-nav]").forEach((link) => {
-      link.classList.toggle("is-active", link.dataset.nav === visible.target.dataset.chapter);
+      const active = link.dataset.nav === visible.target.dataset.chapter;
+      link.classList.toggle("is-active", active);
+      if (active) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
     });
   }, { rootMargin: "-25% 0px -55%", threshold: [0.05, 0.2, 0.5] });
   chapterSections.forEach((section) => observer.observe(section));
