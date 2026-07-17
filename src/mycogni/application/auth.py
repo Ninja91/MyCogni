@@ -19,8 +19,11 @@ from mycogni.domain.auth import (
     BootstrapExchange,
     BootstrapRecord,
     OpaqueCredential,
+    RecoveryIssue,
     RecoveryRecord,
+    RootCapability,
     SecretDigest,
+    SessionIssue,
     SessionRecord,
     StepUpRecord,
     require_utc,
@@ -42,7 +45,24 @@ class TokenSource(Protocol):
 class AuthDecisionStore(Protocol):
     """Atomic decision operations required from an auth-state adapter."""
 
-    def create_bootstrap(self, record: BootstrapRecord, now: datetime) -> None: ...
+    def create_root_bootstrap(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]: ...
+
+    def create_authenticated_bootstrap(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]: ...
+
+    def cancel_bootstrap(self, handle: OpaqueId, now: datetime) -> None: ...
 
     def exchange_bootstrap(
         self,
@@ -90,18 +110,39 @@ class AuthDecisionStore(Protocol):
         self, current: OpaqueCredential, current_digest: SecretDigest, now: datetime
     ) -> AuthOutcome[OpaqueId]: ...
 
-    def revoke_all(self, actor_id: OpaqueId, now: datetime) -> AuthOutcome[int]: ...
+    def renew_recovery(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]: ...
+
+    def revoke_all_authenticated(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]: ...
+
+    def emergency_revoke(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[int]: ...
 
     def recover(
         self,
         recovery: OpaqueCredential,
         recovery_digest: SecretDigest,
-        actor_id: OpaqueId,
-        represented_profile_id: OpaqueId,
         now: datetime,
-        session: SessionRecord,
-        replacement_recovery: RecoveryRecord,
-    ) -> AuthOutcome[int]: ...
+        session: SessionIssue,
+        replacement_recovery: RecoveryIssue,
+    ) -> AuthOutcome[SessionRecord]: ...
 
     def validate_grant(
         self,
@@ -110,6 +151,8 @@ class AuthDecisionStore(Protocol):
         session_digest: SecretDigest,
         now: datetime,
     ) -> AuthOutcome[AuthorityGrant]: ...
+
+    def garbage_collect(self, now: datetime, retention_seconds: int) -> int: ...
 
 
 class AuthService:
@@ -144,26 +187,58 @@ class AuthService:
         not_before = now + timedelta(seconds=self._policy.activation_delay_seconds)
         return not_before, not_before + timedelta(seconds=ttl_seconds)
 
-    def begin_bootstrap(
-        self, *, actor_id: OpaqueId, represented_profile_id: OpaqueId
-    ) -> OpaqueCredential:
-        """Create one one-use bootstrap code; composition controls disclosure."""
+    def begin_bootstrap(self, root: RootCapability) -> AuthOutcome[OpaqueCredential]:
+        """Create a bootstrap only with exact trusted composition authority."""
         now = self._now()
         credential, digest = self._credential()
         not_before, expires = self._window(now, self._policy.bootstrap_ttl_seconds)
-        self._store.create_bootstrap(
-            BootstrapRecord(
-                handle=credential.handle,
-                actor_id=actor_id,
-                represented_profile_id=represented_profile_id,
-                digest=digest,
-                not_before_utc=not_before,
-                expires_at_utc=expires,
-                attempts_remaining=self._policy.max_attempts,
-            ),
+        record = BootstrapRecord(
+            handle=credential.handle,
+            actor_id=root.actor_id,
+            represented_profile_id=root.represented_profile_id,
+            digest=digest,
+            not_before_utc=not_before,
+            expires_at_utc=expires,
+            attempts_remaining=self._policy.max_attempts,
+            root_capability_id=root.credential.handle,
+            root_purpose=root.purpose,
+        )
+        result = self._store.create_root_bootstrap(
+            root,
+            self._digest(root.credential),
+            record,
             now,
         )
-        return credential
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(credential)
+
+    def begin_authenticated_bootstrap(
+        self, *, session: OpaqueCredential, grant: AuthorityGrant
+    ) -> AuthOutcome[OpaqueCredential]:
+        """Rebootstrap an initialized actor only through current step-up authority."""
+        now = self._now()
+        credential, digest = self._credential()
+        not_before, expires = self._window(now, self._policy.bootstrap_ttl_seconds)
+        record = BootstrapRecord(
+            handle=credential.handle,
+            actor_id=grant.actor_id,
+            represented_profile_id=grant.represented_profile_id,
+            digest=digest,
+            not_before_utc=not_before,
+            expires_at_utc=expires,
+            attempts_remaining=self._policy.max_attempts,
+        )
+        result = self._store.create_authenticated_bootstrap(
+            session, self._digest(session), grant, record, now
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(credential)
+
+    def cancel_bootstrap(self, handle: OpaqueId) -> None:
+        """Burn an undisclosed/partially disclosed code while preserving root retry."""
+        self._store.cancel_bootstrap(handle, self._now())
 
     def exchange_bootstrap(self, bootstrap: OpaqueCredential) -> AuthOutcome[BootstrapExchange]:
         """Consume bootstrap once and atomically issue opaque session/recovery state."""
@@ -227,6 +302,10 @@ class AuthService:
         purpose: AuthPurpose,
         scopes: frozenset[AuthScope],
     ) -> AuthOutcome[OpaqueCredential]:
+        if type(purpose) is not AuthPurpose:
+            return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+        if type(scopes) is not frozenset or any(type(scope) is not AuthScope for scope in scopes):
+            return AuthOutcome.denied(AuthDenial.SCOPE_WIDENING)
         if scopes != frozenset({PURPOSE_SCOPE[purpose]}):
             return AuthOutcome.denied(AuthDenial.SCOPE_WIDENING)
         now = self._now()
@@ -316,15 +395,60 @@ class AuthService:
     def revoke_session(self, session: OpaqueCredential) -> AuthOutcome[OpaqueId]:
         return self._store.revoke_session(session, self._digest(session), self._now())
 
-    def revoke_all(self, actor_id: OpaqueId) -> AuthOutcome[int]:
-        return self._store.revoke_all(actor_id, self._now())
+    def renew_recovery(
+        self, *, session: OpaqueCredential, grant: AuthorityGrant
+    ) -> AuthOutcome[OpaqueCredential]:
+        """Rotate offline recovery through a current key-recovery step-up."""
+        now = self._now()
+        replacement, replacement_digest = self._credential()
+        not_before, expires = self._window(now, self._policy.recovery_ttl_seconds)
+        proposed = RecoveryRecord(
+            handle=replacement.handle,
+            actor_id=grant.actor_id,
+            represented_profile_id=grant.represented_profile_id,
+            digest=replacement_digest,
+            epoch=grant.epoch,
+            not_before_utc=not_before,
+            expires_at_utc=expires,
+            attempts_remaining=self._policy.max_attempts,
+        )
+        result = self._store.renew_recovery(session, self._digest(session), grant, proposed, now)
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(replacement)
+
+    def revoke_all_authenticated(
+        self, *, session: OpaqueCredential, grant: AuthorityGrant
+    ) -> AuthOutcome[OpaqueCredential]:
+        """Revoke every session/recovery and return one replacement recovery code."""
+        now = self._now()
+        replacement, replacement_digest = self._credential()
+        not_before, expires = self._window(now, self._policy.recovery_ttl_seconds)
+        proposed = RecoveryRecord(
+            handle=replacement.handle,
+            actor_id=grant.actor_id,
+            represented_profile_id=grant.represented_profile_id,
+            digest=replacement_digest,
+            epoch=grant.epoch,
+            not_before_utc=not_before,
+            expires_at_utc=expires,
+            attempts_remaining=self._policy.max_attempts,
+        )
+        result = self._store.revoke_all_authenticated(
+            session, self._digest(session), grant, proposed, now
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(replacement)
+
+    def emergency_revoke(self, root: RootCapability) -> AuthOutcome[int]:
+        """Consume exact offline emergency authority and invalidate all actor authority."""
+        return self._store.emergency_revoke(root, self._digest(root.credential), self._now())
 
     def recover(
         self,
         *,
         recovery: OpaqueCredential,
-        actor_id: OpaqueId,
-        represented_profile_id: OpaqueId,
     ) -> AuthOutcome[BootstrapExchange]:
         now = self._now()
         session, session_digest = self._credential()
@@ -334,27 +458,19 @@ class AuthService:
         result = self._store.recover(
             recovery,
             self._digest(recovery),
-            actor_id,
-            represented_profile_id,
             now,
-            SessionRecord(
+            SessionIssue(
                 handle=session.handle,
-                actor_id=actor_id,
-                represented_profile_id=represented_profile_id,
                 digest=session_digest,
-                epoch=1,
                 not_before_utc=session_not_before,
                 expires_at_utc=session_expires,
             ),
-            RecoveryRecord(
+            RecoveryIssue(
                 handle=replacement.handle,
-                actor_id=actor_id,
-                represented_profile_id=represented_profile_id,
                 digest=replacement_digest,
-                epoch=1,
                 not_before_utc=recovery_not_before,
                 expires_at_utc=recovery_expires,
-                attempts_remaining=self._policy.max_attempts,
+                attempts=self._policy.max_attempts,
             ),
         )
         if result.denial is not None:
@@ -364,9 +480,9 @@ class AuthService:
             BootstrapExchange(
                 session=session,
                 recovery=replacement,
-                actor_id=actor_id,
-                represented_profile_id=represented_profile_id,
-                epoch=result.value,
+                actor_id=result.value.actor_id,
+                represented_profile_id=result.value.represented_profile_id,
+                epoch=result.value.epoch,
             )
         )
 
@@ -374,6 +490,14 @@ class AuthService:
         self, grant: AuthorityGrant, session: OpaqueCredential
     ) -> AuthOutcome[AuthorityGrant]:
         return self._store.validate_grant(grant, session, self._digest(session), self._now())
+
+    def garbage_collect(self, retention_seconds: int) -> int:
+        return self._store.garbage_collect(self._now(), retention_seconds)
+
+    @property
+    def policy(self) -> AuthPolicy:
+        """Expose immutable finite operator guidance, never credential state."""
+        return self._policy
 
     @staticmethod
     def _digest(credential: OpaqueCredential) -> SecretDigest:

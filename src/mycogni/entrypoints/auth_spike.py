@@ -1,11 +1,13 @@
 """Explicit operator-channel helpers for the synthetic SPIKE-AUTH ceremony.
 
-This module is intentionally not installed as a command. In particular, it has
-no command-line secret argument and no web/query-string transport.
+This module is intentionally not installed as a command. It accepts no command-
+line secret argument and implements no web or query-string transport.
 """
 
 from __future__ import annotations
 
+from contextlib import suppress
+from dataclasses import dataclass
 from typing import Protocol
 
 from mycogni.application.auth import AuthService
@@ -15,79 +17,162 @@ from mycogni.domain.auth import (
     AuthOutcome,
     BootstrapExchange,
     OpaqueCredential,
+    RootCapability,
 )
+
+SCROLLBACK_WARNING = (
+    "WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback saving, "
+    "copy synchronization and session logging before continuing."
+)
+
+DENIAL_GUIDANCE: dict[AuthDenial, str] = {
+    AuthDenial.INVALID_PROOF: "check the no-echo input and retry only while attempts remain",
+    AuthDenial.ATTEMPTS_EXHAUSTED: "this code is burned; use another authorized recovery path",
+    AuthDenial.REPLAYED: "this one-use code is already burned; do not retry it",
+    AuthDenial.EXPIRED: "renew while authenticated or use the one-use reprovision capability",
+    AuthDenial.NOT_YET_VALID: "wait for the activation instant before retrying",
+    AuthDenial.CLOCK_ROLLBACK: "correct the trusted clock; retries remain blocked",
+    AuthDenial.STALE_EPOCH: "authority changed; use the newest recovery or reprovision capability",
+    AuthDenial.NON_INTERACTIVE: "attach a private interactive operator terminal",
+    AuthDenial.MALFORMED_CREDENTIAL: "re-enter the complete code through no-echo input",
+    AuthDenial.OPERATOR_DECLINED: "no credential was issued or consumed",
+    AuthDenial.OUTPUT_INTERRUPTED: "the undisclosed bootstrap was burned; repeat with the same root capability",
+}
 
 
 class OperatorTty(Protocol):
-    """Narrow interactive channel; ordinary stdout/stderr are not authority channels."""
+    """Narrow no-echo/all-or-nothing secret channel supplied by composition.
+
+    ``write_secret_block`` must either display the complete block or raise
+    ``OSError`` without retaining a partial block. This spike proves the port
+    contract with a synthetic channel; it does not claim a real terminal driver.
+    """
 
     def isatty(self) -> bool: ...
 
-    def write(self, value: str) -> int: ...
+    def write_public(self, value: str) -> None: ...
 
-    def read_secret(self) -> str:
-        """Read without echo or history retention."""
-        ...
+    def confirm_secret_display(self, warning: str) -> bool: ...
 
-    def flush(self) -> None: ...
+    def read_secret_no_echo(self) -> str: ...
+
+    def write_secret_block(self, values: tuple[tuple[str, str], ...]) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorRecoveryResult:
+    exchange: BootstrapExchange
+    displayed: bool
+
+
+def _deny(operator_tty: OperatorTty, prefix: str, denial: AuthDenial) -> None:
+    guidance = DENIAL_GUIDANCE.get(denial, "follow the reviewed recovery procedure")
+    operator_tty.write_public(f"{prefix}-denied: {denial.value}; {guidance}\n")
 
 
 def begin_bootstrap_on_tty(
     service: AuthService,
     *,
-    actor_id: OpaqueId,
-    represented_profile_id: OpaqueId,
+    root: RootCapability,
     operator_tty: OperatorTty,
 ) -> AuthOutcome[OpaqueId]:
-    """Issue and disclose bootstrap material only on an interactive channel."""
+    """Issue/disclose bootstrap only after root authorization and confirmation."""
     if not operator_tty.isatty():
-        operator_tty.write("bootstrap-denied: non_interactive\n")
+        _deny(operator_tty, "bootstrap", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
-    credential = service.begin_bootstrap(
-        actor_id=actor_id, represented_profile_id=represented_profile_id
+    operator_tty.write_public(SCROLLBACK_WARNING + "\n")
+    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+        _deny(operator_tty, "bootstrap", AuthDenial.OPERATOR_DECLINED)
+        return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
+    outcome = service.begin_bootstrap(root)
+    if outcome.denial is not None:
+        _deny(operator_tty, "bootstrap", outcome.denial)
+        return AuthOutcome.denied(outcome.denial)
+    assert outcome.value is not None
+    credential = outcome.value
+    try:
+        operator_tty.write_secret_block(
+            (("bootstrap-code (one-use, short-lived)", credential.operator_code()),)
+        )
+    except OSError:
+        service.cancel_bootstrap(credential.handle)
+        with suppress(OSError):
+            _deny(operator_tty, "bootstrap", AuthDenial.OUTPUT_INTERRUPTED)
+        return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
+    operator_tty.write_public(
+        f"bootstrap-guidance: expires in {service.policy.bootstrap_ttl_seconds} seconds; "
+        f"burns after {service.policy.max_attempts} failed proofs\n"
     )
-    operator_tty.write("bootstrap-code (one-use, short-lived): ")
-    operator_tty.write(credential.operator_code())
-    operator_tty.write("\n")
-    operator_tty.flush()
     return AuthOutcome.allowed(credential.handle)
+
+
+def exchange_bootstrap_code(
+    service: AuthService, submitted_code: str
+) -> AuthOutcome[BootstrapExchange]:
+    """Model a manual body submission without URL, argv, echo, or logging."""
+    try:
+        credential = OpaqueCredential.parse_operator_code(submitted_code)
+    except ValueError:
+        return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
+    return service.exchange_bootstrap(credential)
+
+
+def _display_recovery(exchange: BootstrapExchange, operator_tty: OperatorTty) -> bool:
+    try:
+        operator_tty.write_secret_block(
+            (
+                ("new-session-code", exchange.session.operator_code()),
+                ("new-recovery-code", exchange.recovery.operator_code()),
+            )
+        )
+    except OSError:
+        return False
+    operator_tty.write_public("recovery-succeeded: old sessions and old recovery codes revoked\n")
+    return True
 
 
 def recover_headless_on_tty(
     service: AuthService,
     *,
-    actor_id: OpaqueId,
-    represented_profile_id: OpaqueId,
     operator_tty: OperatorTty,
-) -> AuthOutcome[BootstrapExchange]:
-    """Recover without browser state, rotating all prior actor authority."""
+) -> AuthOutcome[OperatorRecoveryResult]:
+    """Recover by opaque handle lookup without browser, actor ID, profile ID or argv."""
     if not operator_tty.isatty():
-        operator_tty.write("recovery-denied: non_interactive\n")
+        _deny(operator_tty, "recovery", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
-    operator_tty.write("recovery-code: ")
-    operator_tty.flush()
-    raw = operator_tty.read_secret()
+    operator_tty.write_public(SCROLLBACK_WARNING + "\n")
+    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+        _deny(operator_tty, "recovery", AuthDenial.OPERATOR_DECLINED)
+        return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
+    operator_tty.write_public("recovery-code (input hidden): ")
+    raw = operator_tty.read_secret_no_echo()
     try:
         credential = OpaqueCredential.parse_operator_code(raw)
     except ValueError:
-        operator_tty.write("recovery-denied: malformed_credential\n")
+        _deny(operator_tty, "recovery", AuthDenial.MALFORMED_CREDENTIAL)
         return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
-    outcome = service.recover(
-        recovery=credential,
-        actor_id=actor_id,
-        represented_profile_id=represented_profile_id,
-    )
+    outcome = service.recover(recovery=credential)
     if outcome.denial is not None:
-        operator_tty.write(f"recovery-denied: {outcome.denial.value}\n")
-        return outcome
+        _deny(operator_tty, "recovery", outcome.denial)
+        return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
-    operator_tty.write("new-session-code: ")
-    operator_tty.write(outcome.value.session.operator_code())
-    operator_tty.write("\nnew-recovery-code: ")
-    operator_tty.write(outcome.value.recovery.operator_code())
-    operator_tty.write("\n")
-    operator_tty.flush()
-    return outcome
+    displayed = _display_recovery(outcome.value, operator_tty)
+    return AuthOutcome.allowed(OperatorRecoveryResult(exchange=outcome.value, displayed=displayed))
+
+
+def redisplay_interrupted_recovery(
+    result: OperatorRecoveryResult, operator_tty: OperatorTty
+) -> OperatorRecoveryResult:
+    """Retry an all-or-nothing display without reusing consumed recovery authority."""
+    if result.displayed or not operator_tty.isatty():
+        return result
+    operator_tty.write_public(SCROLLBACK_WARNING + "\n")
+    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+        return result
+    return OperatorRecoveryResult(
+        exchange=result.exchange,
+        displayed=_display_recovery(result.exchange, operator_tty),
+    )
 
 
 def redact_operator_transcript(transcript: str, credentials: tuple[OpaqueCredential, ...]) -> str:

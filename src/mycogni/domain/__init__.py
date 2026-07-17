@@ -14,6 +14,9 @@ from mycogni.domain.auth import (
     AuthScope,
     BootstrapExchange,
     OpaqueCredential,
+    RootAuthorityBundle,
+    RootCapability,
+    RootPurpose,
 )
 from mycogni.domain.contracts import (
     Ciphertext,
@@ -36,5 +39,8 @@ __all__ = (
     "OpaqueId",
     "OptimisticVersion",
     "Redacted",
+    "RootAuthorityBundle",
+    "RootCapability",
+    "RootPurpose",
     "Sensitive",
 )

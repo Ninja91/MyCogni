@@ -10,7 +10,10 @@ import pytest
 from mycogni.domain import OpaqueId, Sensitive
 from mycogni.domain.auth import (
     AUTH_SECRET_CATEGORY,
+    DEFAULT_RECOVERY_SECONDS,
     PURPOSE_SCOPE,
+    RECOVERY_MAX_SECONDS,
+    RECOVERY_MIN_SECONDS,
     AuthDenial,
     AuthorityGrant,
     AuthOutcome,
@@ -18,7 +21,11 @@ from mycogni.domain.auth import (
     AuthPurpose,
     AuthScope,
     OpaqueCredential,
+    RecoveryRecord,
+    RootCapabilityRecord,
+    RootPurpose,
     SecretDigest,
+    SessionRecord,
 )
 
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
@@ -78,10 +85,13 @@ def test_purpose_scope_mapping_cannot_be_mutated_at_runtime() -> None:
         AuthPolicy(bootstrap_ttl_seconds=1),
         AuthPolicy(max_attempts=1),
         AuthPolicy(activation_delay_seconds=60),
+        AuthPolicy(recovery_ttl_seconds=RECOVERY_MIN_SECONDS),
+        AuthPolicy(recovery_ttl_seconds=RECOVERY_MAX_SECONDS),
     ],
 )
 def test_policy_accepts_reviewed_bounds(policy: AuthPolicy) -> None:
     assert policy.max_attempts >= 1
+    assert AuthPolicy().recovery_ttl_seconds == DEFAULT_RECOVERY_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -91,6 +101,8 @@ def test_policy_accepts_reviewed_bounds(policy: AuthPolicy) -> None:
         {"session_ttl_seconds": 604_801},
         {"activation_delay_seconds": -1},
         {"max_attempts": 11},
+        {"recovery_ttl_seconds": RECOVERY_MIN_SECONDS - 1},
+        {"recovery_ttl_seconds": RECOVERY_MAX_SECONDS + 1},
     ],
 )
 def test_policy_rejects_unbounded_values(arguments: dict[str, int]) -> None:
@@ -129,3 +141,38 @@ def test_authority_grant_requires_exact_scope_utc_window_and_positive_epoch() ->
         AuthorityGrant(**{**common, "not_before_utc": NOW.astimezone(timezone(timedelta(hours=1)))})  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="positive"):
         AuthorityGrant(**{**common, "epoch": 0})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("record_type", "flag_name"),
+    [
+        (RootCapabilityRecord, "consumed"),
+        (SessionRecord, "revoked"),
+        (RecoveryRecord, "consumed"),
+    ],
+)
+def test_mutable_records_require_exact_boolean_state_and_utc_retirement(
+    record_type: type[object], flag_name: str
+) -> None:
+    common: dict[str, object] = {
+        "handle": OpaqueId.new(),
+        "actor_id": OpaqueId.new(),
+        "represented_profile_id": OpaqueId.new(),
+        "digest": SecretDigest(_material()),
+    }
+    if record_type is RootCapabilityRecord:
+        common.update(installation_id=OpaqueId.new(), purpose=RootPurpose.INITIAL_BOOTSTRAP)
+    else:
+        common.update(
+            epoch=1,
+            not_before_utc=NOW,
+            expires_at_utc=NOW + timedelta(days=365),
+        )
+    if record_type is RecoveryRecord:
+        common["attempts_remaining"] = 5
+    with pytest.raises(TypeError, match="state flag must be boolean"):
+        record_type(**{**common, flag_name: 1})  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="aware UTC"):
+        record_type(  # type: ignore[call-arg]
+            **{**common, "retired_at_utc": datetime(2030, 1, 1)}
+        )

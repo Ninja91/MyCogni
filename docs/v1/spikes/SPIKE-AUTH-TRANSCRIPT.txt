@@ -1,0 +1,15 @@
+WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback saving, copy synchronization and session logging before continuing.
+secret-display-confirmation: accepted
+bootstrap-code (one-use, short-lived): [REDACTED:auth_secret]
+bootstrap-guidance: expires in 300 seconds; burns after 5 failed proofs
+step-up-wrong-purpose: wrong_purpose
+step-up-correct: profile_deletion
+step-up-replay: replayed
+WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback saving, copy synchronization and session logging before continuing.
+secret-display-confirmation: accepted
+recovery-code (input hidden): [NO-ECHO INPUT]
+new-session-code: [REDACTED:auth_secret]
+new-recovery-code: [REDACTED:auth_secret]
+recovery-succeeded: old sessions and old recovery codes revoked
+old-session: stale_epoch
+recovery-denied: non_interactive; attach a private interactive operator terminal

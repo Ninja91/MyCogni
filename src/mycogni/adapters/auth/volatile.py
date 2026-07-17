@@ -19,8 +19,13 @@ from mycogni.domain.auth import (
     AuthScope,
     BootstrapRecord,
     OpaqueCredential,
+    RecoveryIssue,
     RecoveryRecord,
+    RootCapability,
+    RootCapabilityRecord,
+    RootPurpose,
     SecretDigest,
+    SessionIssue,
     SessionRecord,
     StepUpRecord,
     require_utc,
@@ -59,10 +64,13 @@ class VolatileAuthDecisionStore:
     def __init__(self) -> None:
         self._lock = RLock()
         self._actors: dict[OpaqueId, ActorRecord] = {}
+        self._installation_actors: dict[OpaqueId, OpaqueId] = {}
+        self._roots: dict[OpaqueId, RootCapabilityRecord] = {}
         self._bootstraps: dict[OpaqueId, BootstrapRecord] = {}
         self._sessions: dict[OpaqueId, SessionRecord] = {}
         self._recoveries: dict[OpaqueId, RecoveryRecord] = {}
         self._step_ups: dict[OpaqueId, StepUpRecord] = {}
+        self._used_grants: set[OpaqueId] = set()
         self._crash_once: CrashPoint | None = None
 
     def arm_crash_once(self, point: CrashPoint) -> None:
@@ -101,35 +109,169 @@ class VolatileAuthDecisionStore:
 
     @staticmethod
     def _wrong_proof(
-        record: BootstrapRecord | RecoveryRecord | StepUpRecord,
+        record: BootstrapRecord | RecoveryRecord | StepUpRecord, now: datetime
     ) -> AuthDenial:
         record.attempts_remaining -= 1
         if record.attempts_remaining == 0:
             record.consumed = True
+            record.retired_at_utc = now
             return AuthDenial.ATTEMPTS_EXHAUSTED
         return AuthDenial.INVALID_PROOF
 
-    def create_bootstrap(self, record: BootstrapRecord, now: datetime) -> None:
+    def initialize_installation(
+        self,
+        *,
+        installation_id: OpaqueId,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        records: tuple[RootCapabilityRecord, ...],
+        now: datetime,
+    ) -> None:
+        """Called only by trusted local composition before application startup."""
         with self._lock:
-            require_utc(now, "bootstrap creation time")
-            actor = self._actors.get(record.actor_id)
-            if actor is None:
-                self._actors[record.actor_id] = ActorRecord(
-                    actor_id=record.actor_id,
-                    represented_profile_id=record.represented_profile_id,
-                    epoch=1,
-                    last_observed_utc=now,
-                )
-            elif actor.represented_profile_id != record.represented_profile_id:
-                raise ValueError("actor bootstrap cannot change represented profile")
-            elif now < actor.last_observed_utc:
-                raise ValueError("bootstrap creation rejected a clock rollback")
-            else:
-                actor.last_observed_utc = now
-            for existing in self._bootstraps.values():
-                if existing.actor_id == record.actor_id and not existing.consumed:
-                    existing.consumed = True
-            self._bootstraps[record.handle] = record
+            require_utc(now, "trusted installation setup time")
+            if installation_id in self._installation_actors or actor_id in self._actors:
+                raise ValueError("installation or actor is already initialized")
+            if {record.purpose for record in records} != set(RootPurpose):
+                raise ValueError("trusted setup requires exactly one root capability per purpose")
+            if any(
+                record.installation_id != installation_id
+                or record.actor_id != actor_id
+                or record.represented_profile_id != represented_profile_id
+                for record in records
+            ):
+                raise ValueError("root capability bindings do not match trusted setup")
+            self._installation_actors[installation_id] = actor_id
+            self._actors[actor_id] = ActorRecord(
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                epoch=1,
+                last_observed_utc=now,
+            )
+            self._roots.update({record.handle: replace(record) for record in records})
+
+    def _validate_root_locked(
+        self,
+        capability: RootCapability,
+        digest: SecretDigest,
+        expected_purposes: frozenset[RootPurpose],
+    ) -> AuthOutcome[RootCapabilityRecord]:
+        record = self._roots.get(capability.credential.handle)
+        if record is None or not self._matches(record.digest, digest):
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        if capability.installation_id != record.installation_id:
+            return AuthOutcome.denied(AuthDenial.WRONG_INSTALLATION)
+        if capability.actor_id != record.actor_id:
+            return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
+        if capability.represented_profile_id != record.represented_profile_id:
+            return AuthOutcome.denied(AuthDenial.WRONG_PROFILE)
+        if capability.purpose is not record.purpose or record.purpose not in expected_purposes:
+            return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+        if record.consumed:
+            return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+        return AuthOutcome.allowed(record)
+
+    def _invalidate_bootstraps(self, actor_id: OpaqueId, now: datetime) -> None:
+        for existing in self._bootstraps.values():
+            if existing.actor_id == actor_id and not existing.consumed:
+                existing.consumed = True
+                existing.retired_at_utc = now
+
+    def create_root_bootstrap(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        with self._lock:
+            validated = self._validate_root_locked(
+                root,
+                root_digest,
+                frozenset({RootPurpose.INITIAL_BOOTSTRAP, RootPurpose.REPROVISION}),
+            )
+            if validated.denial is not None:
+                return AuthOutcome.denied(validated.denial)
+            actor = self._actors[root.actor_id]
+            clock_denial = self._observe(actor.actor_id, now)
+            if clock_denial is not None:
+                return AuthOutcome.denied(clock_denial)
+            if root.purpose is RootPurpose.INITIAL_BOOTSTRAP and actor.initialized:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            if root.purpose is RootPurpose.REPROVISION and not actor.initialized:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            if (
+                record.actor_id != actor.actor_id
+                or record.represented_profile_id != actor.represented_profile_id
+                or record.root_capability_id != root.credential.handle
+                or record.root_purpose is not root.purpose
+            ):
+                return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
+            self._invalidate_bootstraps(actor.actor_id, now)
+            stored = replace(record)
+            self._bootstraps[stored.handle] = stored
+            return AuthOutcome.allowed(replace(stored))
+
+    def create_authenticated_bootstrap(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        with self._lock:
+            authorized = self._authorize_grant_locked(
+                session,
+                session_digest,
+                grant,
+                AuthPurpose.SETUP_AUTHORITY_CHANGE,
+                now,
+                consume=True,
+            )
+            if authorized.denial is not None:
+                return AuthOutcome.denied(authorized.denial)
+            if (
+                record.actor_id != grant.actor_id
+                or record.represented_profile_id != grant.represented_profile_id
+                or record.root_capability_id is not None
+            ):
+                return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
+            self._invalidate_bootstraps(record.actor_id, now)
+            stored = replace(record)
+            self._bootstraps[stored.handle] = stored
+            return AuthOutcome.allowed(replace(stored))
+
+    def cancel_bootstrap(self, handle: OpaqueId, now: datetime) -> None:
+        with self._lock:
+            record = self._bootstraps.get(handle)
+            if record is not None and not record.consumed:
+                record.consumed = True
+                record.retired_at_utc = now
+
+    def _retire_actor_authority(self, actor_id: OpaqueId, now: datetime) -> None:
+        for session in self._sessions.values():
+            if session.actor_id == actor_id:
+                session.revoked = True
+                session.retired_at_utc = now
+        for challenge in self._step_ups.values():
+            if challenge.actor_id == actor_id:
+                challenge.consumed = True
+                challenge.retired_at_utc = now
+        for recovery in self._recoveries.values():
+            if recovery.actor_id == actor_id:
+                recovery.consumed = True
+                recovery.retired_at_utc = now
+
+    def _consume_actor_recoveries(self, actor_id: OpaqueId, now: datetime) -> None:
+        for recovery in self._recoveries.values():
+            if recovery.actor_id == actor_id:
+                recovery.consumed = True
+                recovery.retired_at_utc = now
+
+    def _consume_root(self, record: RootCapabilityRecord, now: datetime) -> None:
+        record.consumed = True
+        record.retired_at_utc = now
 
     def exchange_bootstrap(
         self,
@@ -157,12 +299,27 @@ class VolatileAuthDecisionStore:
             if time_denial is not None:
                 if time_denial is AuthDenial.EXPIRED:
                     record.consumed = True
+                    record.retired_at_utc = now
                 return AuthOutcome.denied(time_denial)
             if not self._matches(record.digest, presented_digest):
-                return AuthOutcome.denied(self._wrong_proof(record))
-            record.consumed = True
-            self._crash_if_armed(CrashPoint.BOOTSTRAP)
+                return AuthOutcome.denied(self._wrong_proof(record, now))
             actor = self._actors[record.actor_id]
+            if record.root_capability_id is not None:
+                root = self._roots.get(record.root_capability_id)
+                if root is None or root.consumed or root.purpose is not record.root_purpose:
+                    return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+                if root.purpose is RootPurpose.INITIAL_BOOTSTRAP and actor.initialized:
+                    return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+                if root.purpose is RootPurpose.REPROVISION and not actor.initialized:
+                    return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+                self._consume_root(root, now)
+                if root.purpose is RootPurpose.REPROVISION:
+                    actor.epoch += 1
+                    self._retire_actor_authority(actor.actor_id, now)
+                actor.initialized = True
+            record.consumed = True
+            record.retired_at_utc = now
+            self._crash_if_armed(CrashPoint.BOOTSTRAP)
             issued_session = replace(
                 session,
                 actor_id=actor.actor_id,
@@ -177,7 +334,7 @@ class VolatileAuthDecisionStore:
             )
             self._sessions[issued_session.handle] = issued_session
             self._recoveries[issued_recovery.handle] = issued_recovery
-            return AuthOutcome.allowed(issued_session)
+            return AuthOutcome.allowed(replace(issued_session))
 
     def _authenticate_session_locked(
         self, credential: OpaqueCredential, digest: SecretDigest, now: datetime
@@ -204,7 +361,11 @@ class VolatileAuthDecisionStore:
         self, credential: OpaqueCredential, presented_digest: SecretDigest, now: datetime
     ) -> AuthOutcome[SessionRecord]:
         with self._lock:
-            return self._authenticate_session_locked(credential, presented_digest, now)
+            outcome = self._authenticate_session_locked(credential, presented_digest, now)
+            if outcome.denial is not None:
+                return AuthOutcome.denied(outcome.denial)
+            assert outcome.value is not None
+            return AuthOutcome.allowed(replace(outcome.value))
 
     def create_step_up(
         self,
@@ -225,7 +386,7 @@ class VolatileAuthDecisionStore:
                 return AuthOutcome.denied(AuthDenial.WRONG_PROFILE)
             issued = replace(challenge, session_id=current.handle, epoch=current.epoch)
             self._step_ups[issued.handle] = issued
-            return AuthOutcome.allowed(issued)
+            return AuthOutcome.allowed(replace(issued))
 
     def consume_step_up(
         self,
@@ -263,9 +424,10 @@ class VolatileAuthDecisionStore:
             if time_denial is not None:
                 if time_denial is AuthDenial.EXPIRED:
                     record.consumed = True
+                    record.retired_at_utc = now
                 return AuthOutcome.denied(time_denial)
             if not self._matches(record.digest, challenge_digest):
-                return AuthOutcome.denied(self._wrong_proof(record))
+                return AuthOutcome.denied(self._wrong_proof(record, now))
             if actor_id != record.actor_id:
                 return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
             if represented_profile_id != record.represented_profile_id:
@@ -275,8 +437,9 @@ class VolatileAuthDecisionStore:
             if scopes != record.scopes:
                 return AuthOutcome.denied(AuthDenial.SCOPE_WIDENING)
             record.consumed = True
+            record.retired_at_utc = now
             self._crash_if_armed(CrashPoint.STEP_UP)
-            return AuthOutcome.allowed(record)
+            return AuthOutcome.allowed(replace(record))
 
     def rotate_session(
         self,
@@ -292,9 +455,11 @@ class VolatileAuthDecisionStore:
             assert authenticated.value is not None
             prior = authenticated.value
             prior.revoked = True
+            prior.retired_at_utc = now
             for challenge in self._step_ups.values():
                 if challenge.session_id == prior.handle:
                     challenge.consumed = True
+                    challenge.retired_at_utc = now
             issued = replace(
                 replacement,
                 actor_id=prior.actor_id,
@@ -302,7 +467,7 @@ class VolatileAuthDecisionStore:
                 epoch=prior.epoch,
             )
             self._sessions[issued.handle] = issued
-            return AuthOutcome.allowed(issued)
+            return AuthOutcome.allowed(replace(issued))
 
     def revoke_session(
         self, current: OpaqueCredential, current_digest: SecretDigest, now: datetime
@@ -313,36 +478,140 @@ class VolatileAuthDecisionStore:
                 return AuthOutcome.denied(authenticated.denial)
             assert authenticated.value is not None
             authenticated.value.revoked = True
+            authenticated.value.retired_at_utc = now
             for challenge in self._step_ups.values():
                 if challenge.session_id == authenticated.value.handle:
                     challenge.consumed = True
+                    challenge.retired_at_utc = now
             return AuthOutcome.allowed(authenticated.value.handle)
 
-    def revoke_all(self, actor_id: OpaqueId, now: datetime) -> AuthOutcome[int]:
+    def _authorize_grant_locked(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        purpose: AuthPurpose,
+        now: datetime,
+        *,
+        consume: bool,
+    ) -> AuthOutcome[AuthorityGrant]:
+        authenticated = self._authenticate_session_locked(session, session_digest, now)
+        if authenticated.denial is not None:
+            return AuthOutcome.denied(authenticated.denial)
+        assert authenticated.value is not None
+        current = authenticated.value
+        actor = self._actors[current.actor_id]
+        if grant.actor_id != current.actor_id:
+            return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
+        if grant.represented_profile_id != current.represented_profile_id:
+            return AuthOutcome.denied(AuthDenial.WRONG_PROFILE)
+        if grant.session_id != current.handle:
+            return AuthOutcome.denied(AuthDenial.WRONG_SESSION)
+        if grant.epoch != actor.epoch:
+            return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+        if grant.purpose is not purpose:
+            return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+        time_denial = self._time_denial(now, grant.not_before_utc, grant.expires_at_utc)
+        if time_denial is not None:
+            return AuthOutcome.denied(time_denial)
+        if grant.authority_evidence_id in self._used_grants:
+            return AuthOutcome.denied(AuthDenial.REPLAYED)
+        if consume:
+            self._used_grants.add(grant.authority_evidence_id)
+        return AuthOutcome.allowed(grant)
+
+    def renew_recovery(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]:
         with self._lock:
-            clock_denial = self._observe(actor_id, now)
+            authorized = self._authorize_grant_locked(
+                session,
+                session_digest,
+                grant,
+                AuthPurpose.KEY_RECOVERY_CHANGE,
+                now,
+                consume=True,
+            )
+            if authorized.denial is not None:
+                return AuthOutcome.denied(authorized.denial)
+            actor = self._actors[grant.actor_id]
+            self._consume_actor_recoveries(actor.actor_id, now)
+            issued = replace(
+                replacement,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                epoch=actor.epoch,
+            )
+            self._recoveries[issued.handle] = issued
+            return AuthOutcome.allowed(replace(issued))
+
+    def revoke_all_authenticated(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]:
+        with self._lock:
+            authorized = self._authorize_grant_locked(
+                session,
+                session_digest,
+                grant,
+                AuthPurpose.ALL_SESSION_REVOKE,
+                now,
+                consume=True,
+            )
+            if authorized.denial is not None:
+                return AuthOutcome.denied(authorized.denial)
+            actor = self._actors[grant.actor_id]
+            actor.epoch += 1
+            self._retire_actor_authority(actor.actor_id, now)
+            issued = replace(
+                replacement,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                epoch=actor.epoch,
+            )
+            self._recoveries[issued.handle] = issued
+            return AuthOutcome.allowed(replace(issued))
+
+    def emergency_revoke(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[int]:
+        with self._lock:
+            validated = self._validate_root_locked(
+                root, root_digest, frozenset({RootPurpose.EMERGENCY_REVOKE})
+            )
+            if validated.denial is not None:
+                return AuthOutcome.denied(validated.denial)
+            assert validated.value is not None
+            clock_denial = self._observe(root.actor_id, now)
             if clock_denial is not None:
                 return AuthOutcome.denied(clock_denial)
-            actor = self._actors[actor_id]
+            root_record = validated.value
+            self._consume_root(root_record, now)
+            actor = self._actors[root.actor_id]
             actor.epoch += 1
-            for session in self._sessions.values():
-                if session.actor_id == actor_id:
-                    session.revoked = True
-            for challenge in self._step_ups.values():
-                if challenge.actor_id == actor_id:
-                    challenge.consumed = True
+            self._retire_actor_authority(actor.actor_id, now)
             return AuthOutcome.allowed(actor.epoch)
 
     def recover(
         self,
         recovery: OpaqueCredential,
         recovery_digest: SecretDigest,
-        actor_id: OpaqueId,
-        represented_profile_id: OpaqueId,
         now: datetime,
-        session: SessionRecord,
-        replacement_recovery: RecoveryRecord,
-    ) -> AuthOutcome[int]:
+        session: SessionIssue,
+        replacement_recovery: RecoveryIssue,
+    ) -> AuthOutcome[SessionRecord]:
         with self._lock:
             record = self._recoveries.get(recovery.handle)
             if record is None:
@@ -361,28 +630,41 @@ class VolatileAuthDecisionStore:
             if time_denial is not None:
                 if time_denial is AuthDenial.EXPIRED:
                     record.consumed = True
+                    record.retired_at_utc = now
                 return AuthOutcome.denied(time_denial)
             if not self._matches(record.digest, recovery_digest):
-                return AuthOutcome.denied(self._wrong_proof(record))
-            if actor_id != record.actor_id:
-                return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
-            if represented_profile_id != record.represented_profile_id:
-                return AuthOutcome.denied(AuthDenial.WRONG_PROFILE)
-            record.consumed = True
+                return AuthOutcome.denied(self._wrong_proof(record, now))
             actor = self._actors[record.actor_id]
+            if record.epoch != actor.epoch:
+                record.consumed = True
+                record.retired_at_utc = now
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            self._consume_actor_recoveries(actor.actor_id, now)
             actor.epoch += 1
-            for prior_session in self._sessions.values():
-                if prior_session.actor_id == actor.actor_id:
-                    prior_session.revoked = True
-            for challenge in self._step_ups.values():
-                if challenge.actor_id == actor.actor_id:
-                    challenge.consumed = True
+            self._retire_actor_authority(actor.actor_id, now)
             self._crash_if_armed(CrashPoint.RECOVERY)
-            issued_session = replace(session, epoch=actor.epoch)
-            issued_recovery = replace(replacement_recovery, epoch=actor.epoch)
+            issued_session = SessionRecord(
+                handle=session.handle,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                digest=session.digest,
+                epoch=actor.epoch,
+                not_before_utc=session.not_before_utc,
+                expires_at_utc=session.expires_at_utc,
+            )
+            issued_recovery = RecoveryRecord(
+                handle=replacement_recovery.handle,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                digest=replacement_recovery.digest,
+                epoch=actor.epoch,
+                not_before_utc=replacement_recovery.not_before_utc,
+                expires_at_utc=replacement_recovery.expires_at_utc,
+                attempts_remaining=replacement_recovery.attempts,
+            )
             self._sessions[issued_session.handle] = issued_session
             self._recoveries[issued_recovery.handle] = issued_recovery
-            return AuthOutcome.allowed(actor.epoch)
+            return AuthOutcome.allowed(replace(issued_session))
 
     def validate_grant(
         self,
@@ -392,35 +674,52 @@ class VolatileAuthDecisionStore:
         now: datetime,
     ) -> AuthOutcome[AuthorityGrant]:
         with self._lock:
-            authenticated = self._authenticate_session_locked(session, session_digest, now)
-            if authenticated.denial is not None:
-                return AuthOutcome.denied(authenticated.denial)
-            assert authenticated.value is not None
-            current = authenticated.value
-            actor = self._actors[current.actor_id]
-            if grant.actor_id != current.actor_id:
-                return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
-            if grant.represented_profile_id != current.represented_profile_id:
-                return AuthOutcome.denied(AuthDenial.WRONG_PROFILE)
-            if grant.session_id != current.handle:
-                return AuthOutcome.denied(AuthDenial.WRONG_SESSION)
-            if grant.epoch != actor.epoch:
-                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
-            time_denial = self._time_denial(now, grant.not_before_utc, grant.expires_at_utc)
-            if time_denial is not None:
-                return AuthOutcome.denied(time_denial)
-            return AuthOutcome.allowed(grant)
-
-    def retained_secret_material(self) -> tuple[SecretDigest, ...]:
-        """Test-only inspection proving volatile state stores digest objects only."""
-        with self._lock:
-            return tuple(
-                record.digest
-                for collection in (
-                    self._bootstraps,
-                    self._sessions,
-                    self._recoveries,
-                    self._step_ups,
-                )
-                for record in collection.values()
+            return self._authorize_grant_locked(
+                session,
+                session_digest,
+                grant,
+                grant.purpose,
+                now,
+                consume=False,
             )
+
+    def garbage_collect(self, now: datetime, retention_seconds: int) -> int:
+        """Delete retired/expired volatile records after a small bounded audit window."""
+        require_utc(now, "garbage collection time")
+        if type(retention_seconds) is not int or not 0 <= retention_seconds <= 86_400:
+            raise ValueError("retention_seconds must be from 0 through 86400")
+        cutoff = now.timestamp() - retention_seconds
+
+        def retired(record: object) -> bool:
+            retired_at = getattr(record, "retired_at_utc", None)
+            expires_at = getattr(record, "expires_at_utc", None)
+            return bool(
+                (retired_at is not None and retired_at.timestamp() <= cutoff)
+                or (expires_at is not None and expires_at.timestamp() <= cutoff)
+            )
+
+        with self._lock:
+            removed = 0
+            for collection in (
+                self._roots,
+                self._bootstraps,
+                self._sessions,
+                self._recoveries,
+                self._step_ups,
+            ):
+                doomed = [handle for handle, record in collection.items() if retired(record)]
+                for handle in doomed:
+                    del collection[handle]
+                removed += len(doomed)
+            return removed
+
+    def record_counts(self) -> dict[str, int]:
+        """Test-only bounded-retention observation without authority material."""
+        with self._lock:
+            return {
+                "roots": len(self._roots),
+                "bootstraps": len(self._bootstraps),
+                "sessions": len(self._sessions),
+                "recoveries": len(self._recoveries),
+                "step_ups": len(self._step_ups),
+            }

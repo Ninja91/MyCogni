@@ -19,6 +19,10 @@ AUTH_SECRET_CATEGORY = "auth_secret"
 MIN_SECRET_BYTES = 32
 SHA256_BYTES = 32
 MAX_OPERATOR_CODE_CHARS = 128
+DAY_SECONDS = 86_400
+RECOVERY_MIN_SECONDS = 30 * DAY_SECONDS
+RECOVERY_MAX_SECONDS = 730 * DAY_SECONDS
+DEFAULT_RECOVERY_SECONDS = 365 * DAY_SECONDS
 
 
 def require_utc(value: datetime, field_name: str) -> None:
@@ -38,6 +42,7 @@ class AuthPurpose(StrEnum):
     KEY_RECOVERY_CHANGE = "key_recovery_change"
     PROFILE_DELETION = "profile_deletion"
     DESTRUCTIVE_RESTORE = "destructive_restore"
+    ALL_SESSION_REVOKE = "all_session_revoke"
 
 
 class AuthScope(StrEnum):
@@ -49,6 +54,7 @@ class AuthScope(StrEnum):
     CHANGE_KEY_RECOVERY = "change_key_recovery"
     DELETE_PROFILE = "delete_profile"
     RESTORE_DESTRUCTIVELY = "restore_destructively"
+    REVOKE_ALL_SESSIONS = "revoke_all_sessions"
 
 
 PURPOSE_SCOPE: Mapping[AuthPurpose, AuthScope] = MappingProxyType(
@@ -59,6 +65,7 @@ PURPOSE_SCOPE: Mapping[AuthPurpose, AuthScope] = MappingProxyType(
         AuthPurpose.KEY_RECOVERY_CHANGE: AuthScope.CHANGE_KEY_RECOVERY,
         AuthPurpose.PROFILE_DELETION: AuthScope.DELETE_PROFILE,
         AuthPurpose.DESTRUCTIVE_RESTORE: AuthScope.RESTORE_DESTRUCTIVELY,
+        AuthPurpose.ALL_SESSION_REVOKE: AuthScope.REVOKE_ALL_SESSIONS,
     }
 )
 
@@ -77,11 +84,22 @@ class AuthDenial(StrEnum):
     REVOKED = "revoked"
     WRONG_ACTOR = "wrong_actor"
     WRONG_PROFILE = "wrong_profile"
+    WRONG_INSTALLATION = "wrong_installation"
     WRONG_SESSION = "wrong_session"
     WRONG_PURPOSE = "wrong_purpose"
     SCOPE_WIDENING = "scope_widening"
     STALE_EPOCH = "stale_epoch"
     MALFORMED_CREDENTIAL = "malformed_credential"
+    OPERATOR_DECLINED = "operator_declined"
+    OUTPUT_INTERRUPTED = "output_interrupted"
+
+
+class RootPurpose(StrEnum):
+    """Exact one-use powers issued only by trusted local composition."""
+
+    INITIAL_BOOTSTRAP = "initial_bootstrap"
+    EMERGENCY_REVOKE = "emergency_revoke"
+    REPROVISION = "reprovision"
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -155,20 +173,20 @@ class AuthPolicy:
     bootstrap_ttl_seconds: int = 300
     session_ttl_seconds: int = 1_800
     step_up_ttl_seconds: int = 120
-    recovery_ttl_seconds: int = 86_400
+    recovery_ttl_seconds: int = DEFAULT_RECOVERY_SECONDS
     activation_delay_seconds: int = 0
     max_attempts: int = 5
 
     def __post_init__(self) -> None:
-        for field_name in (
-            "bootstrap_ttl_seconds",
-            "session_ttl_seconds",
-            "step_up_ttl_seconds",
-            "recovery_ttl_seconds",
-        ):
+        for field_name in ("bootstrap_ttl_seconds", "session_ttl_seconds", "step_up_ttl_seconds"):
             value = getattr(self, field_name)
             if type(value) is not int or not 1 <= value <= 604_800:
                 raise ValueError(f"{field_name} must be an integer from 1 through 604800")
+        if (
+            type(self.recovery_ttl_seconds) is not int
+            or not RECOVERY_MIN_SECONDS <= self.recovery_ttl_seconds <= RECOVERY_MAX_SECONDS
+        ):
+            raise ValueError("recovery_ttl_seconds must be an integer from 30 through 730 days")
         if (
             type(self.activation_delay_seconds) is not int
             or not 0 <= self.activation_delay_seconds <= 60
@@ -222,6 +240,61 @@ class BootstrapExchange:
             raise ValueError("bootstrap exchange epoch must be positive")
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class RootCapability:
+    """Installation/actor/profile/purpose-bound composition authority."""
+
+    credential: OpaqueCredential
+    installation_id: OpaqueId
+    actor_id: OpaqueId
+    represented_profile_id: OpaqueId
+    purpose: RootPurpose
+
+    def __post_init__(self) -> None:
+        if type(self.credential) is not OpaqueCredential:
+            raise TypeError("root capability requires an opaque credential")
+        if any(
+            type(value) is not OpaqueId
+            for value in (self.installation_id, self.actor_id, self.represented_profile_id)
+        ):
+            raise TypeError("root capability bindings must use opaque IDs")
+        if type(self.purpose) is not RootPurpose:
+            raise TypeError("root capability purpose must be a RootPurpose")
+
+    def __repr__(self) -> str:
+        return (
+            "RootCapability(credential=[REDACTED], "
+            f"installation_id={self.installation_id}, actor_id={self.actor_id}, "
+            f"represented_profile_id={self.represented_profile_id}, purpose={self.purpose!r})"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RootAuthorityBundle:
+    """Three separate one-use powers provisioned at trusted local setup."""
+
+    initial_bootstrap: RootCapability
+    emergency_revoke: RootCapability
+    reprovision: RootCapability
+
+    def __post_init__(self) -> None:
+        capabilities = (self.initial_bootstrap, self.emergency_revoke, self.reprovision)
+        if any(type(capability) is not RootCapability for capability in capabilities):
+            raise TypeError("root authority bundle requires root capabilities")
+        if tuple(capability.purpose for capability in capabilities) != tuple(RootPurpose):
+            raise ValueError("root authority bundle purposes are not canonical")
+        bindings = {
+            (
+                capability.installation_id,
+                capability.actor_id,
+                capability.represented_profile_id,
+            )
+            for capability in capabilities
+        }
+        if len(bindings) != 1:
+            raise ValueError("root authority bundle capabilities must share exact bindings")
+
+
 @dataclass(frozen=True, slots=True)
 class AuthorityGrant:
     """Actor/profile/evidence/scope/time/epoch-bound authority decision."""
@@ -267,6 +340,7 @@ class ActorRecord:
     represented_profile_id: OpaqueId
     epoch: int
     last_observed_utc: datetime
+    initialized: bool = False
 
     def __post_init__(self) -> None:
         if type(self.actor_id) is not OpaqueId or type(self.represented_profile_id) is not OpaqueId:
@@ -274,6 +348,44 @@ class ActorRecord:
         if type(self.epoch) is not int or self.epoch < 1:
             raise ValueError("actor epoch must be positive")
         require_utc(self.last_observed_utc, "actor last_observed_utc")
+        if type(self.initialized) is not bool:
+            raise TypeError("actor initialized state must be boolean")
+
+
+@dataclass(slots=True)
+class RootCapabilityRecord:
+    handle: OpaqueId
+    installation_id: OpaqueId
+    actor_id: OpaqueId
+    represented_profile_id: OpaqueId
+    purpose: RootPurpose
+    digest: SecretDigest
+    consumed: bool = False
+    retired_at_utc: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not OpaqueId
+            for value in (
+                self.handle,
+                self.installation_id,
+                self.actor_id,
+                self.represented_profile_id,
+            )
+        ):
+            raise TypeError("root records require opaque bindings")
+        if type(self.purpose) is not RootPurpose:
+            raise TypeError("root record purpose must be a RootPurpose")
+        if type(self.digest) is not SecretDigest:
+            raise TypeError("root record digest must be a SecretDigest")
+        _validate_mutable_state(self.consumed, self.retired_at_utc, "root")
+
+
+def _validate_mutable_state(flag: bool, retired_at_utc: datetime | None, record_name: str) -> None:
+    if type(flag) is not bool:
+        raise TypeError(f"{record_name} state flag must be boolean")
+    if retired_at_utc is not None:
+        require_utc(retired_at_utc, f"{record_name} retired_at_utc")
 
 
 def _validate_record(
@@ -309,7 +421,10 @@ class BootstrapRecord:
     not_before_utc: datetime
     expires_at_utc: datetime
     attempts_remaining: int
+    root_capability_id: OpaqueId | None = None
+    root_purpose: RootPurpose | None = None
     consumed: bool = False
+    retired_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:
         _validate_record(
@@ -321,6 +436,13 @@ class BootstrapRecord:
             expires_at_utc=self.expires_at_utc,
         )
         _validate_attempts(self.attempts_remaining)
+        if (self.root_capability_id is None) != (self.root_purpose is None):
+            raise ValueError("bootstrap root ID and purpose must appear together")
+        if self.root_capability_id is not None and type(self.root_capability_id) is not OpaqueId:
+            raise TypeError("bootstrap root capability ID must be opaque")
+        if self.root_purpose is not None and type(self.root_purpose) is not RootPurpose:
+            raise TypeError("bootstrap root purpose must be a RootPurpose")
+        _validate_mutable_state(self.consumed, self.retired_at_utc, "bootstrap")
 
 
 @dataclass(slots=True)
@@ -333,6 +455,7 @@ class SessionRecord:
     not_before_utc: datetime
     expires_at_utc: datetime
     revoked: bool = False
+    retired_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:
         _validate_record(
@@ -345,6 +468,25 @@ class SessionRecord:
         )
         if type(self.epoch) is not int or self.epoch < 1:
             raise ValueError("session epoch must be positive")
+        _validate_mutable_state(self.revoked, self.retired_at_utc, "session")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionIssue:
+    """Unbound session material; the store supplies canonical authority bindings."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+    not_before_utc: datetime
+    expires_at_utc: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.handle) is not OpaqueId or type(self.digest) is not SecretDigest:
+            raise TypeError("session issue requires an opaque handle and digest")
+        require_utc(self.not_before_utc, "session issue not_before_utc")
+        require_utc(self.expires_at_utc, "session issue expires_at_utc")
+        if self.expires_at_utc <= self.not_before_utc:
+            raise ValueError("session issue expiry must follow not-before")
 
 
 @dataclass(slots=True)
@@ -358,6 +500,7 @@ class RecoveryRecord:
     expires_at_utc: datetime
     attempts_remaining: int
     consumed: bool = False
+    retired_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:
         _validate_record(
@@ -371,6 +514,27 @@ class RecoveryRecord:
         if type(self.epoch) is not int or self.epoch < 1:
             raise ValueError("recovery epoch must be positive")
         _validate_attempts(self.attempts_remaining)
+        _validate_mutable_state(self.consumed, self.retired_at_utc, "recovery")
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryIssue:
+    """Unbound recovery material; the store supplies canonical actor/profile/epoch."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+    not_before_utc: datetime
+    expires_at_utc: datetime
+    attempts: int
+
+    def __post_init__(self) -> None:
+        if type(self.handle) is not OpaqueId or type(self.digest) is not SecretDigest:
+            raise TypeError("recovery issue requires an opaque handle and digest")
+        require_utc(self.not_before_utc, "recovery issue not_before_utc")
+        require_utc(self.expires_at_utc, "recovery issue expires_at_utc")
+        if self.expires_at_utc <= self.not_before_utc:
+            raise ValueError("recovery issue expiry must follow not-before")
+        _validate_attempts(self.attempts)
 
 
 @dataclass(slots=True)
@@ -387,6 +551,7 @@ class StepUpRecord:
     expires_at_utc: datetime
     attempts_remaining: int
     consumed: bool = False
+    retired_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:
         _validate_record(
@@ -408,3 +573,4 @@ class StepUpRecord:
         if self.scopes != frozenset({PURPOSE_SCOPE[self.purpose]}):
             raise ValueError("step-up scope must exactly match purpose")
         _validate_attempts(self.attempts_remaining)
+        _validate_mutable_state(self.consumed, self.retired_at_utc, "step-up")

@@ -1,172 +1,182 @@
 # SPIKE-AUTH — volatile local root-of-trust decision
 
-Status: implementation evidence produced; independent security/recovery review pending. This document does
-not promote `SPIKE-AUTH`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `THR-AUTH-001` or `VFY-AUTH-001`.
+Status: remediation evidence produced after security/recovery review rejection; re-review pending. This
+document does not promote `SPIKE-AUTH`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `THR-AUTH-001` or
+`VFY-AUTH-001`.
 
 ## Decision and ADR disposition
 
-The spike supports ADR-0010's local authentication direction: an explicit interactive terminal ceremony can
-bootstrap a short-lived one-use exchange, an opaque server-side session, purpose-specific step-up authority
-and recovery that invalidates stale authority. ADR-0010 is already the unambiguous accepted architecture
-record, so this spike does not reserve or invent another ADR number.
+The spike resolves a narrow design question under ADR-0010: a trusted local installation can issue
+installation/actor/profile/purpose-bound root capabilities, exchange an explicitly displayed one-use code for
+opaque authority, require purpose-specific step-up, and recover after months of inactivity without accepting
+caller-supplied identity bindings. ADR-0010 remains the architecture record; this spike does not create or
+reserve another ADR.
 
-The production decision remains conditional. The pure policy and volatile state model are suitable inputs to
-`AUTH-001`, but durable crash/restart semantics, browser transport controls and recovery accessibility need
-separate evidence. The spike cannot be used as production authentication.
+The model is not production authentication. Its volatile adapter does not prove restart durability,
+multi-process transactions, browser controls, secure root storage, or a real terminal driver. An independent
+review rejected the previous evidence; this revision addresses those findings but remains pending re-review.
 
-## Implemented synthetic boundary
+## Authority boundary
 
 ```text
-interactive operator TTY
+trusted local composition (one installation, before application startup)
         |
-        | one-use bootstrap code (never URL or argv)
+        +-- initial-bootstrap root: installation + actor + profile + exact purpose
+        +-- emergency-revoke root: same bindings, separate one-use secret
+        +-- reprovision root: same bindings, separate one-use secret
+        v
+private interactive operator channel -- warning + confirmation + all-or-nothing display
+        |
         v
 AuthService -- Clock / TokenSource / AuthDecisionStore ports
         |
-        +-- exact actor + represented profile
-        +-- opaque session digest + actor epoch + validity window
-        +-- one-use step-up digest + session + purpose + exact scope
-        +-- rotating one-use recovery digest
+        +-- opaque digest-only session + actor epoch + validity window
+        +-- one-use step-up + session + purpose + exact scope
+        +-- opaque digest-only long-lived recovery indexed by its own handle
         v
-VolatileAuthDecisionStore (RLock, process memory, digest-only records)
+VolatileAuthDecisionStore (RLock, process memory, bounded garbage collection)
 ```
 
-The domain is standard-library-only. Application orchestration imports no concrete adapter. Tests inject a
-deterministic synthetic token source and mutable clock; the spike adapter uses `secrets.token_bytes`, which is
-backed by the operating-system random source. Every issued secret has at least 256 bits. Only its SHA-256
-digest is retained, and proof comparison uses `hmac.compare_digest`.
+`TrustedLocalAuthSetup` is the only composition surface that mints roots. It provisions exactly one capability
+for each `RootPurpose` and registers their digests with a single empty volatile store. Merely knowing or
+choosing actor/profile UUIDs cannot bootstrap, reprovision, or revoke authority. Root verification compares the
+secret digest and exact installation, actor, represented profile, and purpose. A forged, cross-bound, wrong-
+purpose, stale, or replayed capability is denied.
 
-`OpaqueCredential` requires an opaque UUIDv4 handle plus typed sensitive bytes. Ordinary `str` and `repr`
-render only a redaction marker. Its operator-code method is an explicit disclosure boundary for a dedicated
-TTY. The entrypoint accepts no secret command argument, builds no URL and refuses a non-TTY before issuance or
-recovery. A future browser exchange must accept the code in a manually submitted POST body; putting it in a
-query string, fragment, referrer-bearing navigation or shell history is prohibited.
+The initial root is valid only before the actor's first successful bootstrap exchange. Later bootstraps require
+a current session and an exact `setup_authority_change` step-up grant. The reprovision root is valid only after
+initialization. Root authority is consumed at successful exchange, not before display, so an all-or-nothing
+bootstrap display failure can burn the undisclosed bootstrap record and retry with the same root.
 
-## Ceremony semantics
+Every secret contains at least 256 bits from the injected token source. The spike adapter uses
+`secrets.token_bytes`; state stores only fixed SHA-256 `SecretDigest` values and compares them with
+`hmac.compare_digest`. Adapter ingress and return values are copied so a caller cannot mutate retained records.
+A structural regression traverses nested adapter state and rejects any `OpaqueCredential`, `Sensitive`, or raw
+issued secret. `OpaqueCredential` renders only a redaction marker outside its explicit operator-code boundary.
 
-Default spike policy is deliberately bounded:
+## Bounded policy and sporadic lifecycle
 
-| Item | Default | Decision |
+| Item | Default | Reviewed bounds and behavior |
 | --- | ---: | --- |
-| bootstrap | 5 minutes, 5 attempts | one-use; replay, early use, expiry and exhaustion deny |
-| server-side session | 30 minutes | opaque digest; rotation revokes its predecessor |
-| step-up | 2 minutes, 5 attempts | one-use and exact actor/profile/session/epoch/purpose/scope |
-| recovery | 24 hours, 5 attempts | one-use; success rotates recovery and actor epoch |
-| activation delay | 0 seconds | configurable to exercise not-yet-valid behavior |
+| bootstrap | 5 minutes, 5 attempts | 1 second–7 days; one-use; early use, expiry, replay and exhaustion deny |
+| server-side session | 30 minutes | 1 second–7 days; opaque; rotation revokes predecessor |
+| step-up | 2 minutes, 5 attempts | 1 second–7 days; exact binding and one-use |
+| recovery | 365 days, 5 attempts | 30–730 days; one-use; rotates all sibling recovery and actor epoch |
+| activation delay | 0 seconds | 0–60 seconds, used to test not-yet-valid behavior |
+| retired record GC | caller-selected | 0–24 hours; expired/burned volatile records are bounded |
 
-The finite step-up purposes are setup-authority change, external-action resume, exception submission,
-key/recovery change, profile deletion and destructive restore. Each maps to exactly one finite scope. The
-service rejects caller-selected unions, a different purpose, actor, represented profile or session, a stale
-epoch, expired authority and replay. A grant binds:
+Recovery is deliberately separate from short interactive authority. A device may sleep for months and use an
+unexpired recovery code without a live browser session. While a session is current, an exact
+`key_recovery_change` step-up rotates every existing recovery code and issues a new one with a fresh long-lived
+window. Expiry is final for that code.
 
-- actor and represented profile;
-- opaque server-side session;
-- one-use challenge as authority evidence;
-- exact purpose and scope;
-- not-before and expiry instants; and
-- actor revocation epoch.
+Recovery input supplies only the opaque code. Its handle locates the stored installation-local record; the
+store canonically constructs the new session and recovery from that record's actor, profile, and current epoch.
+The application cannot submit replacement actor/profile/epoch fields. On success, while holding the decision
+lock, the store consumes every recovery record for that actor, increments the epoch, revokes all sessions and
+step-ups, and issues exactly one new session/recovery pair. The two-bootstrap sibling regression proves that
+using either sibling makes the other unusable.
 
-Session rotation revokes the old session and its outstanding challenges. One-session revocation denies that
-session. All-session revocation increments the actor epoch and invalidates every session and step-up. Lost
-browser state is not required for recovery: the separate recovery credential creates a new session and
-recovery credential, increments the epoch, and revokes all older sessions/challenges. Recovery remains a
-separate operator-held authority after an all-session revoke; changing that policy requires recovery design
-review.
+If recovery expires and no current session remains, the offline reprovision root may establish fresh auth
+authority for the already-bound installation/actor/profile. It does **not** recover encrypted profile data,
+keys, broker history, or any other lost state. Losing every session, recovery code, and reprovision root is
+total authority loss in this model. No recovery claim is made for that condition.
 
-Every policy read uses the injected aware-UTC `Clock`. A time before a credential's not-before instant denies
-as `not_yet_valid`; a forward jump beyond expiry denies as `expired`; a time earlier than the actor's last
-observed instant denies as `clock_rollback`. This detects rollback within one volatile process. It is not a
-trusted monotonic clock across reboot or host compromise.
+## Step-up and incident revocation
 
-## Consume and crash model
+Finite purposes map one-to-one to finite scopes: setup-authority change, external-action resume, exception
+submission, key/recovery change, profile deletion, destructive restore, and all-session revoke. The service
+checks exact enum types before mapping lookup, so malformed purpose/scope values produce typed denials instead
+of `KeyError`. A grant binds actor, represented profile, current session, one-use evidence, purpose, exact
+scope, not-before, expiry, and actor epoch.
 
-The volatile adapter serializes decisions with a process-local reentrant lock. Concurrent bootstrap or
-step-up consumption yields exactly one success; the loser sees replay. Attempt exhaustion burns the one-use
-record. Synthetic checkpoints inject a crash after the consumed bit is set but before session, grant or
-recovery replacement is issued. Within the still-running adapter, retry cannot reuse the credential and no
-partial authority appears.
+There are two deliberately separate incident paths:
 
-This evidence is intentionally narrow. The adapter has no transaction log and loses both consumed state and
-all authority on restart. It does not prove database compare-and-swap, commit ordering, multi-process safety,
-crash durability or restart recovery. `AUTH-001` needs a persistent adapter whose transaction makes the
-consume/issue state machine explicit and whose crash matrix is verified at every commit boundary. A recovery
-crash in this spike fails closed by revoking old authority and burning the recovery credential; operator
-re-bootstrap is then required.
+- Authenticated all-session revoke requires a current session plus an exact `all_session_revoke` step-up. It
+  increments the epoch, retires every session/challenge/recovery, and returns one replacement recovery code.
+- Offline emergency revoke requires the exact installation-bound `emergency_revoke` root. It is one-use,
+  increments the epoch, and retires every session/challenge/recovery without issuing replacement authority.
+  Recovery then requires the separate reprovision root.
 
-## Negative evidence
+Recovery itself follows the stricter all-session policy: every prior session and recovery is invalidated.
 
-Focused tests exercise:
+## Operator and headless ceremony
 
-- bootstrap replay, expiry, not-yet-valid use, guessing/exhaustion and constant-time digest comparison;
-- session fixation, opaque server-side state, rotation, individual revoke, all-session revoke and expiry;
-- wrong actor, represented profile, session, purpose and scope; step-up reuse, widening, expiry and stale epoch;
-- concurrent bootstrap and step-up consumption and post-consume bootstrap/step-up/recovery crashes;
-- clock rollback and forward jumps, lost browser state, recovery replay and recovery-secret rotation;
-- non-TTY bootstrap/recovery refusal and headless recovery over a pseudo-TTY;
-- generic malformed-input errors, redacted `repr`/`str`/traceback, no ordinary stdout/stderr disclosure, no
-  secret-capable typed diagnostic field, and no URL/query/argv entrypoint path; and
-- domain standard-library and repository import contracts.
+Before any secret display, the narrow `OperatorTty` port requires an interactive channel, prints a prominent
+warning to disable recording, saved scrollback, copy synchronization, and session logging, then requires an
+explicit confirmation. It reports finite expiry, attempt, retry, and denial guidance. The port contract's
+`write_secret_block` must display the entire block or raise without retaining a partial block. This is a tested
+contract for a synthetic channel, not a claim about a production terminal implementation.
 
-These are spike tests, not the canonical `VFY-AUTH-001`. That verification ID remains `PLANNED` and has no
-implementation reference until governance acceptance and independent security/recovery review authorize an
-exact criterion/evidence mapping.
+Input uses the port's `read_secret_no_echo`; there is no command-line argument, URL, query string, or ordinary
+stdout/stderr secret path. The test proves only that the injected channel does not echo. A production adapter
+must separately prove OS-specific terminal mode restoration, signal handling, accessibility, and no-echo.
 
-## Redacted pseudo-TTY review transcript
+For a NAS, SSH host, or container, the operator attaches a private interactive terminal to the same MyCogni
+installation and enters the opaque recovery code. They do not look up or type actor/profile IDs: the opaque
+handle indexes the local record and all bindings come from state. Secrets must not be passed through `docker
+exec` arguments, environment variables, shell history, remote logging, or a recording session. A non-TTY is
+refused before issuance or recovery.
 
-The raw test channel contains a one-use code only at the explicit operator disclosure boundary. Review
-artifacts apply exact credential replacement before retention:
+If bootstrap output is interrupted, the undisclosed bootstrap is burned and the same unconsumed root can retry.
+If output fails after recovery has atomically consumed old authority, the caller temporarily holds the already-
+issued result and may retry its all-or-nothing display without replaying recovery. This is process-memory-only
+behavior; a crash at that point loses the replacement and fails closed. Successful recovery explicitly tells
+the operator that old sessions and old recovery codes were revoked.
 
-```text
-bootstrap-code (one-use, short-lived): [REDACTED:auth_secret]
-bootstrap-exchange: allowed; opaque session issued; recovery issued
-step-up(profile_deletion as destructive_restore): denied wrong_purpose
-step-up(profile_deletion): allowed; evidence and exact scope bound
-step-up(profile_deletion replay): denied replayed
-recovery-code: [REDACTED:auth_secret]
-new-session-code: [REDACTED:auth_secret]
-new-recovery-code: [REDACTED:auth_secret]
-old-session-after-recovery: denied stale_epoch
-bootstrap over non-TTY: denied non_interactive
-recovery over non-TTY: denied non_interactive
-```
+The committed [redacted transcript](./SPIKE-AUTH-TRANSCRIPT.txt) is generated by an executable test using the
+real entrypoint helpers. The harness covers warning/confirmation, bootstrap display and exchange, wrong/correct/
+replayed step-up, no-echo recovery, replacement display, old-session invalidation, non-TTY refusal, exact
+credential redaction, and empty actual stdout/stderr. It contains no retained deterministic credential value.
 
-No real person, account, identifier, endpoint or credential is used. Deterministic test material is generated
-at runtime rather than retained as a fixture or transcript value.
+## Consume, crash, clock, and collection model
 
-## Requirement and threat disposition
+The volatile adapter serializes decisions with a process-local `RLock`. Concurrent consumption yields exactly
+one success. Attempt exhaustion and expiry retire one-use records. Synthetic crash points after bootstrap,
+step-up, and recovery consumption prove retry cannot reuse burned authority within the same process.
 
-| Boundary | Spike evidence | Still required for production |
-| --- | --- | --- |
-| AU-01 | explicit bootstrap, authenticated opaque sessions, private location grants nothing | composed local control plane and persistent actor store |
-| AU-02 | session rotation/revoke policy only | Host/Origin, CSRF, cookie, clickjacking and framework middleware evidence |
-| AU-04 | six finite step-up purposes | wiring at every privileged application action and accessible reauthentication |
-| AU-05 | actor/profile/evidence/scope/time/epoch-bound grant | durable audit/storage and end-to-end authorization consumers |
-| THR-AUTH-001 | synthetic takeover/replay/stale-authority negative suite | exact `VFY-AUTH-001`, independent review and M1 implementation evidence |
+Every policy read uses an injected aware-UTC clock. Early use, forward expiry, and time earlier than the
+actor's last observed instant deny as `not_yet_valid`, `expired`, and `clock_rollback`. This is not a trusted
+monotonic clock across reboot or host compromise. Garbage collection accepts only a 0–86,400 second retention
+window and removes expired or explicitly retired volatile roots, bootstraps, sessions, recoveries, and step-ups.
 
-## Accessibility and operator handoff
+The adapter has no transaction log and loses authority and consume history on restart. Production `AUTH-001`
+needs persistent compare-and-swap/transaction evidence at every crash boundary, key protection, backup/restore
+epoch rules, and multi-process tests.
 
-TTY-only display is a security experiment, not the final accessible ceremony. The production UI/CLI must
-provide keyboard-only completion, non-color errors, high-contrast and zoom-safe presentation, screen-reader
-labels, focus restoration, advance timeout warning and an accessible timeout-extension/restart path. It must
-not echo recovery input. Recovery procedures must explain that success invalidates every prior session.
+## Adversarial evidence
 
-## Explicit exclusions and residual risk
+Focused regressions cover:
+
+- forged/wrong-installation/wrong-actor/wrong-profile/wrong-purpose/stale root capabilities;
+- first bootstrap, authenticated rebootstrap, bounded attempts/expiry, concurrency, and crash consumption;
+- exact typed step-up binding, wrong-purpose denial, replay, session rotation, and malformed enum inputs;
+- two sibling bootstraps followed by atomic all-recovery consumption and all-session invalidation;
+- six-month recovery, authenticated renewal, 365-day expiry, reprovision, and explicit non-recovery claims;
+- authenticated versus emergency all-session revocation and their distinct replacement policies;
+- canonical store-side recovery binding, immutable adapter boundaries, structural digest-only state, constant-
+  time comparison, and exact mutable-state validation;
+- confirmation refusal, non-TTY refusal, interrupted bootstrap, interrupted recovery redisplay, bounded GC,
+  redacted traceback/rendering, no URL/argv path, typed diagnostics, and the executable transcript.
+
+These tests are spike evidence, not canonical `VFY-AUTH-001`. That verification remains `PLANNED` until
+governance acceptance and independent review authorize an exact criterion/evidence mapping.
+
+## Accessibility, exclusions, and residual risk
+
+TTY-only display is an experiment, not the final accessible ceremony. Production must support keyboard-only
+completion, non-color errors, high contrast/zoom, screen-reader labels, focus restoration, advance timeout
+warning, and accessible restart/extension paths without weakening secret handling.
 
 This spike adds no database migration, cookie, CSRF, Host/Origin or clickjacking middleware, WebAuthn, OIDC,
-password, email, SMS, network service, real user/PII, external I/O, dependency or lockfile change. It does not
-claim `AUTH-001`, `AUTH-002` or `AUTH-003` completion.
+password, email, SMS, network service, real person/PII, external I/O, dependency, or lockfile change. It does
+not claim completion of `AUTH-001`, `AUTH-002`, or `AUTH-003`.
 
-Residual limits are material:
+Residual risks remain material: restart destroys volatile state; a compromised host can capture live material,
+the private channel, clock, or decision code; UUID handles route but do not prove authority; whole-flow timing
+is uncharacterized; secure root storage and total-loss procedures are unresolved; durable/distributed/backup
+behavior is absent; and browser/cloud protections are outside scope.
 
-- restart destroys volatile authority and consume history, so persistence and restart behavior are unproven;
-- a compromised process or host can read live credentials before hashing, capture the TTY, alter the clock or
-  decision code, and bypass all same-host policy;
-- UUID handles are opaque routing identifiers, not proof; only the secret comparison authenticates;
-- denial timing beyond the fixed-size digest comparison and whole-flow side channels is not characterized;
-- multi-process, distributed, database and backup/restore epoch behavior is unimplemented;
-- browser transport and cloud identity protections remain outside this spike; and
-- operator loss of both session and recovery material requires a separately designed re-bootstrap procedure.
-
-Rollback removes `domain/auth.py`, `application/auth.py`, the volatile auth adapter, spike entrypoint and their
-tests. Because the adapter is process-local, stopping the process discards every synthetic credential and
-record. This convenient cleanup is also why it provides no durability assurance.
+Rollback removes the auth domain/application modules, volatile adapter, trusted setup, spike entrypoint,
+evidence tests, and transcript. Stopping the process discards every synthetic credential and record; that is a
+limitation, not a security property.
