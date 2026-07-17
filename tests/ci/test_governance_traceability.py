@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,11 @@ def _documents() -> dict[str, dict[str, Any]]:
 
 def _errors(documents: dict[str, dict[str, Any]]) -> list[str]:
     return governance_guard.validate_governance(documents, governance_guard.ROOT)[0]
+
+
+def _blob_digest(blob: bytes | None) -> str:
+    assert blob is not None
+    return hashlib.sha256(blob).hexdigest()
 
 
 def test_machine_governance_and_report_are_current() -> None:
@@ -156,16 +163,50 @@ def test_new_attestation_and_reviewer_are_not_self_authorized_by_version_bump() 
 
 def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> None:
     documents = _documents()
-    head = governance_guard.subprocess.run(
+    head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=governance_guard.ROOT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
+    review_path = "governance/README.md"
+    evidence = documents["acceptance"]["evidence"][0]
+    evidence_path = str(evidence["ref"]).split("::", 1)[0]
+    head_blobs = {
+        path: governance_guard._git_file_bytes(governance_guard.ROOT, head, path)
+        for path in (review_path, evidence_path)
+    }
+    assert all(blob is not None for blob in head_blobs.values())
+
+    history = subprocess.run(
+        ["git", "rev-list", "HEAD"],
+        cwd=governance_guard.ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    reviewed_commit = next(
+        commit
+        for commit in history
+        if commit != head
+        and all(
+            (blob := governance_guard._git_file_bytes(governance_guard.ROOT, commit, path))
+            is not None
+            and blob != head_blobs[path]
+            for path in (review_path, evidence_path)
+        )
+    )
+    reviewed_blobs = {
+        path: governance_guard._git_file_bytes(governance_guard.ROOT, reviewed_commit, path)
+        for path in (review_path, evidence_path)
+    }
+    assert all(blob is not None for blob in reviewed_blobs.values())
+
     record = documents["manifest"]["records"][0]
     record["state"] = "INDEPENDENTLY_ACCEPTED"
     record["attestation_id"] = "ATT-CT-FORGED"
+    evidence["content_sha256"] = _blob_digest(reviewed_blobs[evidence_path])
     documents["attestations"]["attestations"] = [
         {
             "id": "ATT-CT-FORGED",
@@ -175,10 +216,10 @@ def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> 
                 "id": "self-asserted",
                 "role": "INDEPENDENT_ADVERSARIAL_REVIEWER",
             },
-            "reviewed_commit": head,
+            "reviewed_commit": reviewed_commit,
             "review_record": {
-                "path": "governance/README.md",
-                "sha256": governance_guard._sha256(governance_guard.ROOT / "governance/README.md"),
+                "path": review_path,
+                "sha256": _blob_digest(reviewed_blobs[review_path]),
             },
             "acceptance_criteria": ["ACC-CT-001"],
             "evidence_ids": ["EVD-CT-001"],
@@ -186,6 +227,16 @@ def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> 
             "residuals": ["not authenticated"],
         }
     ]
+    reviewed_tree_errors = _errors(documents)
+    assert not any("review record digest mismatch" in error for error in reviewed_tree_errors)
+    assert not any(
+        "evidence digest is not bound to reviewed commit" in error for error in reviewed_tree_errors
+    )
+
+    documents["attestations"]["attestations"][0]["review_record"]["sha256"] = _blob_digest(
+        head_blobs[review_path]
+    )
+    evidence["content_sha256"] = _blob_digest(head_blobs[evidence_path])
     errors = _errors(documents)
     assert any("review record digest mismatch" in error for error in errors)
     assert any("evidence digest is not bound to reviewed commit" in error for error in errors)
