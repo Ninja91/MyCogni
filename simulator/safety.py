@@ -219,12 +219,23 @@ def assert_deterministic_source(path: Path) -> None:
 
 
 def assert_simulator_tree(root: Path, *, package: str = "simulator") -> None:
-    paths = sorted(root.rglob("*.py"))
+    if root.is_symlink():
+        raise AssertionError(f"{root.name}: simulator source symlink denied")
+    pending = [root]
+    paths: list[Path] = []
+    while pending:
+        directory = pending.pop()
+        for path in sorted(directory.iterdir(), key=lambda item: item.name, reverse=True):
+            if path.is_symlink():
+                raise AssertionError(f"{path.name}: simulator source symlink denied")
+            if path.is_dir():
+                pending.append(path)
+            elif path.is_file() and path.suffix == ".py":
+                paths.append(path)
+    paths.sort()
     if not paths:
         raise AssertionError("simulator source tree is empty")
     for path in paths:
-        if path.is_symlink():
-            raise AssertionError(f"{path.name}: simulator source symlink denied")
         assert_structural_import_boundary(path, root=root, package=package)
         assert_no_outbound_network_source(path)
         assert_deterministic_source(path)

@@ -26,6 +26,7 @@ from simulator.protocol import (
     ScenarioName,
     ScenarioState,
     ScenarioStep,
+    UnknownDeliveryError,
     UnknownTransitionError,
 )
 from simulator.safety import (
@@ -82,19 +83,38 @@ def test_typed_web_boundary_commits_scenario_and_mail_after_local_write() -> Non
     assert len(mail.messages) == 1
 
 
-def test_write_failure_rolls_back_engine_and_mail_then_retry_succeeds() -> None:
+@pytest.mark.parametrize("consumption", ["before", "partial", "complete"])
+def test_write_failure_is_typed_unknown_and_never_rolls_back_or_retries(
+    consumption: str,
+) -> None:
     fixture, mail, engine = _fixture()
+    calls = 0
+    consumed = bytearray()
 
     def fail_write(data: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if consumption == "partial":
+            consumed.extend(data[: len(data) // 2])
+        elif consumption == "complete":
+            consumed.extend(data)
         raise OSError("injected write failure")
 
-    with pytest.raises(OSError, match="injected write failure"):
+    with pytest.raises(UnknownDeliveryError, match="delivery is unknowable") as raised:
         fixture.deliver(_request(), fail_write)
-    with pytest.raises(UnknownTransitionError):
-        engine.state("web-happy")
-    assert mail.messages == ()
+    assert raised.value.code == "UNKNOWN_DELIVERY"
+    assert isinstance(raised.value.__cause__, OSError)
+    assert calls == 1
+    assert bool(consumed) is (consumption != "before")
+    assert engine.state("web-happy") is ScenarioState.CANDIDATE
+    assert len(mail.messages) == 1
 
-    fixture.deliver(_request(), lambda _: None)
+    retry_wire: list[bytes] = []
+    retry = fixture.deliver(_request(), retry_wire.append)
+    assert retry.status_code == 409
+    assert len(retry_wire) == 1
+    assert b'"error":"fixture_transition_denied"' in retry_wire[0]
+    assert calls == 1
     assert engine.state("web-happy") is ScenarioState.CANDIDATE
     assert len(mail.messages) == 1
 
@@ -496,6 +516,20 @@ def test_recursive_from_import_reaches_nested_escape_mutation(tmp_path: Path) ->
     (nested / "__init__.py").write_text("from . import escape\n", encoding="utf-8")
     (nested / "escape.py").write_text("import subprocess\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="process/network escape import denied"):
+        assert_simulator_tree(root, package="fixture")
+
+
+def test_recursive_tree_rejects_nested_symlink_directory(tmp_path: Path) -> None:
+    root = tmp_path / "fixture"
+    nested = root / "nested"
+    target = tmp_path / "escaped"
+    nested.mkdir(parents=True)
+    target.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    (target / "escape.py").write_text("import subprocess\n", encoding="utf-8")
+    (nested / "linked").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(AssertionError, match="simulator source symlink denied"):
         assert_simulator_tree(root, package="fixture")
 
 

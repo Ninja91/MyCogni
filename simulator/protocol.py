@@ -53,6 +53,12 @@ class ReservationError(SimulatorProtocolError):
     """A transition or local mail reservation is stale or already finalized."""
 
 
+class UnknownDeliveryError(SimulatorProtocolError):
+    """The writer was invoked, so the number of response bytes delivered is unknowable."""
+
+    code = "UNKNOWN_DELIVERY"
+
+
 class ScenarioName(StrEnum):
     HAPPY = "happy"
     NOT_FOUND = "not_found"

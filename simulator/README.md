@@ -25,11 +25,14 @@ database, vault, policy, authorization, or execution authority.
 - source guards plus golden, property, negative, and mutation tests.
 
 The engine uses synchronized per-session transition reservations. The one-shot web delivery API
-validates and renders the bounded response, reserves mail capacity, then holds both engine and
-mail locks while it validates, snapshots, applies, finalizes and invokes the local writer. No
-writer call occurs unless both state changes are guaranteed; any validation, commit-edge or
-writer failure restores both snapshots so an identical request can be retried safely. There is
-no public prepared-response object that can retain an abandoned reservation.
+validates and renders the bounded response, reserves mail capacity, and atomically commits the
+engine transition plus local mail capture before it invokes the writer. Pre-writer validation,
+reservation, rendering, or internal commit failure emits zero bytes, restores both local
+snapshots, and permits a retry. Once the writer is invoked, local state and mail are final and
+are never rolled back: any writer exception raises typed `UNKNOWN_DELIVERY`, because zero, some,
+or all response bytes may already have been delivered. That outcome rejects blind retry and does
+not claim atomic wire delivery. There is no public prepared-response object that can retain an
+abandoned reservation.
 
 The protocol fails closed on undeclared scenarios, sessions, states, transitions, methods,
 routes, path traversal, authority-form paths, invalid/missing/duplicate Host, Origin or content

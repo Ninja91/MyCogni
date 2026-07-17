@@ -13,6 +13,7 @@ from simulator.protocol import (
     ScenarioResult,
     ScenarioState,
     SimulatorProtocolError,
+    UnknownDeliveryError,
 )
 from simulator.web import (
     LocalWebSimulator,
@@ -33,6 +34,7 @@ __all__ = [
     "ScenarioState",
     "SimulatorProtocolError",
     "SyntheticCorpus",
+    "UnknownDeliveryError",
     "WebRequest",
     "WebResponse",
     "build_corpus",

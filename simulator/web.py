@@ -23,6 +23,7 @@ from simulator.protocol import (
     ScenarioName,
     ScenarioState,
     SimulatorProtocolError,
+    UnknownDeliveryError,
 )
 
 LOOPBACK_ADDRESS = "127.0.0.1"
@@ -182,12 +183,10 @@ class LocalWebSimulator:
             if engine_plan is not None:
                 self._engine.rollback(engine_plan)
 
-    def _atomic_deliver(
+    def _commit_internal(
         self,
         engine_plan: EnginePlan,
         mail_reservation: MailReservation | None,
-        wire: bytes,
-        writer: Callable[[bytes], Any],
     ) -> None:
         engine_snapshot = None
         engine_snapshot_taken = False
@@ -216,13 +215,6 @@ class LocalWebSimulator:
                 if mail_reservation is not None:
                     self._mail.cancel_reservation_locked(mail_reservation)
                 raise
-            try:
-                writer(wire)
-            except BaseException:
-                self._engine.restore_snapshot_locked(engine_plan, engine_snapshot)
-                if mail_snapshot is not None:
-                    self._mail.restore_snapshot_locked(mail_snapshot)
-                raise
 
     def deliver(
         self,
@@ -240,10 +232,14 @@ class LocalWebSimulator:
         except BaseException:
             self._cancel(engine_plan, mail_reservation)
             raise
-        if engine_plan is None:
+        if engine_plan is not None:
+            self._commit_internal(engine_plan, mail_reservation)
+        try:
             writer(wire)
-        else:
-            self._atomic_deliver(engine_plan, mail_reservation, wire, writer)
+        except BaseException as error:
+            raise UnknownDeliveryError(
+                "writer was invoked; response byte delivery is unknowable"
+            ) from error
         return response
 
     def handle(
