@@ -15,9 +15,9 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 
 ## Current program state
 
-- **Program state:** planning and architecture; runtime implementation not started.
-- **Current milestone:** M0 — executable foundation; plan verification is complete and package readiness/implementation is next.
-- **Current public claim:** architecture only.
+- **Program state:** M0 implementation is active; executable foundations and a deterministic reserved-domain simulator exist, but there is no working remover.
+- **Current milestone:** M0 — executable foundation; SIM-001 and GOV-001 have code-level independent acceptance, NET-001 is in remediation re-review, and SPIKE-AUTH is the active core package. Formal machine promotion remains fail-closed without authenticated external attestations.
+- **Current public claim:** architecture plus synthetic developer-foundation evidence only; no accepted Docker image, live connector, real-broker submission, verified removal, or supported deployment.
 - **Planning envelope for a release candidate:** week 32 with three experienced implementation lanes, subject to M0 velocity and reviewer/canary latency.
 - **Earliest stable V1 eligibility:** week 40 or later, after at least twelve weeks and a mature day-90 denominator for the automatic cohort.
 - **Supported V1 deployment:** local-lite, one consenting U.S. adult, one core worker/scheduler, 2–5 separately reviewed automatic connector capabilities.
