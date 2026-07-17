@@ -34,9 +34,13 @@ variables and explicit HTTPX/urllib proxies. It checks each HTTPX send and each
 urllib opener invocation, so a redirect is validated again. Denial tests spy on
 the underlying DNS/socket/async/client primitive and prove it is not invoked.
 
-`NetworkDenied` contains only a finite category, finite reason, and SHA-256-derived
-opaque test ID. It never retains or renders the attempted host, URL, query,
-header, body, proxy, SNI, exception, or traceback.
+The emitted `NetworkDenied` diagnostic payload and its `str`/`repr` rendering
+contain only a finite category, finite reason, and SHA-256-derived opaque test
+ID. They never retain or render the attempted host, URL, query, header, body,
+proxy, SNI, or lower-level exception. Like every raised Python exception, a
+caught instance can carry an interpreter-managed in-memory traceback; the guard
+does not serialize, log, or export it. NET-001 therefore claims input-free guard
+diagnostics, not elimination of Python traceback objects from process memory.
 
 `scripts/ci/network_source_guard.py` pins the plugin and marker provenance,
 rejects unreviewed runtime network/process imports, and preserves the simulator's
