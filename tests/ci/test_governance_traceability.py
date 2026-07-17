@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from scripts.ci import governance_guard
+from scripts.ci import threat_catalog_guard as threat_guard
 
 
 def _documents() -> dict[str, dict[str, Any]]:
@@ -58,7 +59,17 @@ def test_exact_acceptance_nodes_execute_runtime_criterion_witnesses() -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["assert_true", "assigned_true", "nested_uncalled", "tautological_len"]
+    "name",
+    [
+        "annotated_true",
+        "assert_true",
+        "assigned_true",
+        "computed_true",
+        "lambda_true",
+        "nested_uncalled",
+        "tautological_len",
+        "unpacked_true",
+    ],
 )
 def test_constant_or_uncalled_nested_assert_is_not_acceptance(name: str) -> None:
     relative = f"tests/ci/fixtures/governance_runtime/{name}.py"
@@ -188,7 +199,7 @@ def test_new_attestation_and_reviewer_are_not_self_authorized_by_version_bump() 
     current["attestations"]["attestations"].append(forged)
     current["attestations"]["registry_version"] = "99.0.0"
     errors = governance_guard.validate_against_base(current, baseline, {})
-    assert "new attestation lacks allowlisted protected approval: ATT-FORGED-001" in errors
+    assert "new attestation lacks external trust-root approval: ATT-FORGED-001" in errors
 
 
 def test_protected_approval_binds_content_and_explicit_semantic_adequacy() -> None:
@@ -351,7 +362,7 @@ def test_version_bump_cannot_shrink_or_rebind_governance_scope() -> None:
     )
 
 
-def test_coordinated_markdown_scope_deletion_and_protected_approval_loss_fail() -> None:
+def test_coordinated_markdown_scope_deletion_fails() -> None:
     documents = _documents()
     current_scope = {
         "work package": {"CT-001": "row"},
@@ -361,18 +372,51 @@ def test_coordinated_markdown_scope_deletion_and_protected_approval_loss_fail() 
         "work package": {"CT-001": "row", "SIM-001": "row2"},
         "completion matrix": {"CT-001": "IN_PROGRESS", "SIM-001": "IN_PROGRESS"},
     }
-    approvals = {"ATT-CT-001": {"subject_id": "ATT-CT-001"}}
     errors = governance_guard.validate_against_base(
         documents,
         documents,
-        approvals,
+        {},
         current_scope=current_scope,
         baseline_scope=baseline_scope,
-        current_protected_approvals={},
     )
     assert "trusted work package disappeared: SIM-001" in errors
     assert "trusted completion matrix disappeared: SIM-001" in errors
-    assert "trusted protected approval disappeared: ATT-CT-001" in errors
+
+
+def test_branch_local_protected_approval_is_never_a_trust_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    governance = tmp_path / "governance"
+    governance.mkdir()
+    (governance / "protected-approvals.v1.json").write_text(
+        '{"schema_version":2,"approvals":[]}', encoding="utf-8"
+    )
+    monkeypatch.delenv(governance_guard.TRUST_ROOT_SHA_ENV, raising=False)
+    with pytest.raises(ValueError, match="branch-local protected approvals are forbidden"):
+        governance_guard._load_external_protected_approvals(tmp_path)
+
+
+def test_unconfigured_external_trust_root_cannot_authorize_later_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(governance_guard.TRUST_ROOT_SHA_ENV, raising=False)
+    approvals = governance_guard._load_external_protected_approvals(governance_guard.ROOT)
+    assert approvals == {}
+    baseline = _documents()
+    current = copy.deepcopy(baseline)
+    current["attestations"]["registry_version"] = "3.0.0"
+    current["attestations"]["attestations"] = [
+        {
+            "id": "ATT-BRANCH-LOCAL",
+            "reviewer": {"id": "branch-reviewer"},
+            "acceptance_criteria": ["ACC-CT-001"],
+            "evidence_ids": ["EVD-CT-001"],
+        }
+    ]
+    assert (
+        "new attestation lacks external trust-root approval: ATT-BRANCH-LOCAL"
+        in governance_guard.validate_against_base(current, baseline, approvals)
+    )
 
 
 def test_complete_to_verified_requires_protected_milestone_authorization() -> None:
@@ -392,7 +436,7 @@ def test_complete_to_verified_requires_protected_milestone_authorization() -> No
     errors = governance_guard.validate_against_base(
         current, baseline, {"ATT-CT-001": {"subject_id": "ATT-CT-001"}}
     )
-    assert "CT-001: VERIFIED promotion lacks protected milestone authorization" in errors
+    assert "CT-001: VERIFIED promotion lacks external milestone authorization" in errors
 
 
 def test_untrusted_mode_rejects_any_attestation_or_promotion() -> None:
@@ -415,25 +459,100 @@ def test_ci_missing_or_implicit_zero_base_fails_closed(
 ) -> None:
     monkeypatch.setenv("MYCOGNI_GOVERNANCE_CI", "1")
     monkeypatch.delenv("THREAT_CATALOG_BASE_REF", raising=False)
-    monkeypatch.delenv("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", raising=False)
+    monkeypatch.delenv(threat_guard.GENESIS_SHA_ENV, raising=False)
+    monkeypatch.delenv(threat_guard.RECOVERY_BASE_SHA_ENV, raising=False)
     assert governance_guard.main([]) == 1
     assert "CI requires an immutable trusted base revision" in capsys.readouterr().out
 
     monkeypatch.setenv("THREAT_CATALOG_BASE_REF", governance_guard.ZERO_GIT_OBJECT)
     assert governance_guard.main([]) == 1
     assert (
-        "zero trusted base is allowed only for explicit first bootstrap" in capsys.readouterr().out
+        "zero event base requires an external immutable genesis or recovery anchor"
+        in capsys.readouterr().out
     )
 
 
-def test_explicit_first_bootstrap_still_runs_untrusted_promotion_gate(
+def test_zero_base_accepts_only_exact_genesis_or_external_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("genesis\n", encoding="utf-8")
+    subprocess.run(["git", "add", "marker.txt"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Governance Test",
+            "-c",
+            "user.email=governance@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "genesis",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    genesis = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv(threat_guard.GENESIS_SHA_ENV, genesis)
+    monkeypatch.delenv(threat_guard.RECOVERY_BASE_SHA_ENV, raising=False)
+    assert threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT) == (
+        None,
+        "GENESIS_BOOTSTRAP",
+    )
+
+    marker.write_text("later\n", encoding="utf-8")
+    subprocess.run(["git", "add", "marker.txt"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Governance Test",
+            "-c",
+            "user.email=governance@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "later",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    with pytest.raises(ValueError, match="ref recreation requires an external recovery base"):
+        threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT)
+
+    monkeypatch.delenv(threat_guard.GENESIS_SHA_ENV)
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, genesis)
+    assert threat_guard.resolve_trusted_baseline(tmp_path, governance_guard.ZERO_GIT_OBJECT) == (
+        genesis,
+        "EXTERNAL_RECOVERY",
+    )
+
+
+def test_zero_ref_recreation_runs_full_external_recovery_comparison(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    recovery = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=governance_guard.ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     monkeypatch.setenv("MYCOGNI_GOVERNANCE_CI", "1")
     monkeypatch.setenv("THREAT_CATALOG_BASE_REF", governance_guard.ZERO_GIT_OBJECT)
-    monkeypatch.setenv("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "1")
+    monkeypatch.delenv(threat_guard.GENESIS_SHA_ENV, raising=False)
+    monkeypatch.setenv(threat_guard.RECOVERY_BASE_SHA_ENV, recovery)
+    monkeypatch.delenv(governance_guard.TRUST_ROOT_SHA_ENV, raising=False)
     assert governance_guard.main([]) == 0
-    assert "trusted-base state: BOOTSTRAP" in capsys.readouterr().out
+    assert "trusted-base state: VERIFIED (EXTERNAL_RECOVERY)" in capsys.readouterr().out
 
 
 def test_unused_criteria_evidence_and_attestation_fail() -> None:

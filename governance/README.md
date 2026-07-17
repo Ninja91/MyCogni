@@ -9,9 +9,10 @@ These exact-schema registries, not Markdown prose, own the scoped GOV-001 truth:
 
 `COMPLETE` requires dependency closure, nonempty package-specific criteria, a structural runtime criterion
 witness, a real `PASSED` result, and an exact `ACCEPT` attestation. The AST/runtime checks only reject known
-no-ops; they do not establish that a criterion or test is semantically adequate. That judgment belongs to a
-protected reviewer approval which explicitly says `semantic_adequacy=APPROVED` and binds the exact criterion,
-evidence, attestation, reviewer and reviewed-tree digests. Without that approval, promotion is impossible.
+no-ops; they do not establish that a criterion or test is semantically adequate. That judgment belongs to an
+externally rooted reviewer approval which explicitly says `semantic_adequacy=APPROVED` and binds the exact
+criterion, evidence, attestation, reviewer and reviewed-tree digests. Without that approval, promotion is
+impossible.
 Acceptance schema v2 hashes the exact decorated pytest function source rather than its whole containing file.
 The v1-to-v2 transition permits only that evidence-hash representation migration; after a v2 trusted base,
 an evidence ID cannot be rebound. Criteria are immutable across both versions.
@@ -25,17 +26,22 @@ files, short commit names, planned VFY/threat IDs, skipped/xfail/no-op tests and
 promote status.
 
 Pull-request CI uses the protected Git base SHA; push CI uses the exact pre-push SHA. Both fetch full history
-and fail closed if the event base is missing. The all-zero Git SHA is accepted only through the explicit
-first-ref bootstrap flag, and bootstrap still forbids attestations and promotions. Content changes require a
-monotonic registry version. Work-package/matrix IDs, status IDs, trace records, criteria, evidence, milestone
-definitions, attestations and protected approvals cannot disappear or be rebound behind a version bump. A
-new attestation or any promotion to `COMPLETE`/`VERIFIED` is rejected unless the
-protected base already contains an exact `governance/protected-approvals.v1.json` allowlist entry binding
-its subject and content digests, reviewer identity and explicit semantic-adequacy decision. That file is
-intentionally not installed yet: authenticated external reviewer keys and a protected approval workflow
-remain prerequisites, and this repository does not pretend an in-branch identity is authentication. A base
-with only some governance documents is a hard failure; only the explicit all-zero first-ref bootstrap path
-may have no prior documents, and it still allows no attestations or promotions.
+and tags and fail closed if the event base is missing. An all-zero event predecessor is never sufficient
+bootstrap evidence. It is accepted only when the repository-admin `MYCOGNI_GOVERNANCE_GENESIS_SHA` equals
+`HEAD` and that commit has no parent. A later ref recreation must provide an externally configured immutable
+`MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA`; the guard then performs the normal full baseline comparison against
+that commit. Missing, ambiguous or unavailable anchors fail closed, and genesis bootstrap still forbids
+attestations and promotions.
+
+Content changes require a monotonic registry version. Work-package/matrix IDs, status IDs, trace records,
+criteria, evidence, milestone definitions and attestations cannot disappear or be rebound behind a version
+bump. Review authority never comes from the PR/push base or any later branch commit. A branch-local
+`governance/protected-approvals.v1.json` is a hard error. New attestations and all promotions to `COMPLETE` or
+`VERIFIED` consult only the exact full commit in the repository-admin
+`MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA` variable. That out-of-branch commit must contain the strict approval
+registry binding subject/content digests, reviewer identity and explicit semantic adequacy. Empty means no
+approval authority; malformed, unavailable or missing trust-root state fails closed. The variable is not
+configured yet, so authenticated external reviewer keys and workflow remain prerequisites.
 
 The current GOV implementation is intentionally `IN_PROGRESS`. Three records are `IMPLEMENTED`, no review
 attestation is authenticated, and canonical package completion is empty. The deterministic report lists

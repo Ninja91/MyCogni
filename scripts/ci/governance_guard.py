@@ -49,6 +49,7 @@ ADR_STATUSES = {
 ACCEPTING_ADR_STATUSES = {"Accepted", "Accepted for initial build"}
 SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 ZERO_GIT_OBJECT = "0" * 40
+TRUST_ROOT_SHA_ENV = "MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA"
 PROTECTED_APPROVAL_FIELDS = {
     "id",
     "subject_type",
@@ -278,13 +279,32 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
         if not all(known for known, _ in items):
             return False, None
         values = [value for _, value in items]
-        return True, tuple(values) if isinstance(node, ast.Tuple) else values
+        if isinstance(node, ast.Tuple):
+            return True, tuple(values)
+        if isinstance(node, ast.Set):
+            try:
+                return True, set(values)
+            except TypeError:
+                return False, None
+        return True, values
     if isinstance(node, ast.Dict):
         keys = [_static_value(item, names) for item in node.keys if item is not None]
         values = [_static_value(item, names) for item in node.values]
         if len(keys) != len(node.keys) or not all(known for known, _ in (*keys, *values)):
             return False, None
         return True, {key: value for (_, key), (_, value) in zip(keys, values, strict=True)}
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Lambda)
+        and not node.args
+        and not node.keywords
+        and not node.func.args.args
+        and not node.func.args.posonlyargs
+        and not node.func.args.kwonlyargs
+        and node.func.args.vararg is None
+        and node.func.args.kwarg is None
+    ):
+        return _static_value(node.func.body, names)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
         safe_calls: dict[str, Callable[..., Any]] = {
             "all": all,
@@ -304,6 +324,43 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
         known, value = _static_value(node.operand, names)
         if known and isinstance(node.op, ast.Not):
             return True, not value
+        if known and isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(node.op, ast.UAdd):
+                return True, +value
+            if isinstance(node.op, ast.USub):
+                return True, -value
+    if isinstance(node, ast.BinOp):
+        left_known, left = _static_value(node.left, names)
+        right_known, right = _static_value(node.right, names)
+        if left_known and right_known:
+            try:
+                if isinstance(node.op, ast.Add):
+                    value = left + right
+                elif isinstance(node.op, ast.Sub):
+                    value = left - right
+                elif isinstance(node.op, ast.Mult):
+                    value = left * right
+                elif isinstance(node.op, ast.FloorDiv):
+                    value = left // right
+                elif isinstance(node.op, ast.Mod):
+                    value = left % right
+                else:
+                    return False, None
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                return False, None
+            if isinstance(value, int) and value.bit_length() > 4096:
+                return False, None
+            if isinstance(value, (str, bytes, list, tuple)) and len(value) > 4096:
+                return False, None
+            return True, value
+    if isinstance(node, ast.BoolOp):
+        values = [_static_value(item, names) for item in node.values]
+        if all(known for known, _ in values):
+            resolved = [value for _, value in values]
+            if isinstance(node.op, ast.And):
+                return True, all(resolved)
+            if isinstance(node.op, ast.Or):
+                return True, any(resolved)
     if isinstance(node, ast.Compare):
         values = [_static_value(item, names) for item in (node.left, *node.comparators)]
         if all(known for known, _ in values):
@@ -328,21 +385,47 @@ def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
     return False, None
 
 
+def _bind_static_target(target: ast.expr, value: Any, names: dict[str, Any]) -> bool:
+    if isinstance(target, ast.Name):
+        names[target.id] = value
+        return True
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (tuple, list)):
+        if len(target.elts) != len(value):
+            return False
+        return all(
+            _bind_static_target(item, item_value, names)
+            for item, item_value in zip(target.elts, value, strict=True)
+        )
+    return False
+
+
+def _forget_target(target: ast.expr, names: dict[str, Any]) -> None:
+    if isinstance(target, ast.Name):
+        names.pop(target.id, None)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for item in target.elts:
+            _forget_target(item, names)
+
+
 def _structural_runtime_witness(function: ast.FunctionDef) -> bool:
     """Reject obvious no-ops while making no claim about semantic adequacy."""
 
     literal_names: dict[str, Any] = {}
     for statement in function.body:
-        if (
-            isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-        ):
+        if isinstance(statement, ast.Assign):
             known, value = _static_value(statement.value, literal_names)
-            if known:
-                literal_names[statement.targets[0].id] = value
-            else:
-                literal_names.pop(statement.targets[0].id, None)
+            for target in statement.targets:
+                if not known or not _bind_static_target(target, value, literal_names):
+                    _forget_target(target, literal_names)
+            continue
+        if isinstance(statement, ast.AnnAssign):
+            known, value = (
+                _static_value(statement.value, literal_names)
+                if statement.value is not None
+                else (False, None)
+            )
+            if not known or not _bind_static_target(statement.target, value, literal_names):
+                _forget_target(statement.target, literal_names)
             continue
         if not isinstance(statement, ast.Assert):
             continue
@@ -547,10 +630,21 @@ def _validate_threat_catalog(root: Path, *, execute: bool) -> list[str]:
     ):
         errors.extend(threat_guard.validate_published_schema(document, schemas[name], name))
     base = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
-    if base and base != ZERO_GIT_OBJECT:
-        baseline = threat_guard.load_history_from_git_base(root, base)
-        if baseline is not None:
-            errors.extend(threat_guard.validate_history_against_baseline(history, baseline))
+    if base:
+        try:
+            effective_base, base_kind = threat_guard.resolve_trusted_baseline(root, base)
+            baseline = (
+                threat_guard.load_history_from_git_base(root, effective_base)
+                if effective_base is not None
+                else None
+            )
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            if base_kind != "GENESIS_BOOTSTRAP" and baseline is None:
+                errors.append("trusted baseline commit lacks the threat identity ledger")
+            elif baseline is not None:
+                errors.extend(threat_guard.validate_history_against_baseline(history, baseline))
     if execute and not errors:
         errors.extend(threat_guard._execute_pytest_nodes(registry, root))
     return errors
@@ -1013,7 +1107,6 @@ def validate_against_base(
     *,
     current_scope: Mapping[str, Mapping[str, Any]] | None = None,
     baseline_scope: Mapping[str, Mapping[str, Any]] | None = None,
-    current_protected_approvals: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     for name in DOCUMENTS:
@@ -1094,12 +1187,6 @@ def validate_against_base(
                     if scope_before[item_id] != scope_after[item_id]:
                         errors.append(f"trusted work package rebound: {item_id}")
 
-    if current_protected_approvals is not None:
-        reject_disappearance("protected approval", protected_approvals, current_protected_approvals)
-        for approval_id in sorted(set(protected_approvals) & set(current_protected_approvals)):
-            if protected_approvals[approval_id] != current_protected_approvals[approval_id]:
-                errors.append(f"trusted protected approval rebound: {approval_id}")
-
     before = {item["id"]: item for item in baseline["attestations"].get("attestations", [])}
     after = {item["id"]: item for item in current["attestations"].get("attestations", [])}
     for attestation_id in sorted(set(before) - set(after)):
@@ -1122,7 +1209,7 @@ def validate_against_base(
             ),
             evidence_sha256=_selected_content_hash(evidence, attestation.get("evidence_ids", [])),
         ):
-            errors.append(f"new attestation lacks allowlisted protected approval: {attestation_id}")
+            errors.append(f"new attestation lacks external trust-root approval: {attestation_id}")
 
     before_milestones = indexed(baseline["status"], "milestone_attestations")
     after_milestones = indexed(current["status"], "milestone_attestations")
@@ -1151,7 +1238,7 @@ def validate_against_base(
             evidence_sha256=_selected_content_hash(current_evidence, gate_evidence_ids),
         ):
             errors.append(
-                f"new milestone attestation lacks allowlisted protected approval: {milestone_id}"
+                f"new milestone attestation lacks external trust-root approval: {milestone_id}"
             )
 
     before_status = {item_id: item.get("status") for item_id, item in before_status_items.items()}
@@ -1168,14 +1255,14 @@ def validate_against_base(
             continue
         attestation_id = records_by_package.get(package_id, {}).get("attestation_id")
         if not attestation_id or attestation_id not in protected_approvals:
-            errors.append(f"{package_id}: promotion lacks protected-base authorization")
+            errors.append(f"{package_id}: promotion lacks external trust-root authorization")
         if status == "VERIFIED":
             covering = [
                 item for item in after_milestones.values() if package_id in item.get("packages", [])
             ]
             if len(covering) != 1 or covering[0].get("id") not in protected_approvals:
                 errors.append(
-                    f"{package_id}: VERIFIED promotion lacks protected milestone authorization"
+                    f"{package_id}: VERIFIED promotion lacks external milestone authorization"
                 )
     return errors
 
@@ -1277,20 +1364,27 @@ def _parse_protected_approvals(document: Mapping[str, Any]) -> dict[str, Mapping
     return result
 
 
-def _load_protected_approvals(
-    root: Path, revision: str | None = None
-) -> dict[str, Mapping[str, Any]]:
-    if revision is None:
-        if not PROTECTED_APPROVALS_PATH.is_file():
-            return {}
-        document = _load(PROTECTED_APPROVALS_PATH)
-    else:
-        relative = PROTECTED_APPROVALS_PATH.relative_to(root).as_posix()
-        text = _git_text(root, revision, relative)
-        if text is None:
-            return {}
-        document = threat_guard._load_json_text(text, "protected governance approvals")
+def _load_protected_approvals(root: Path, revision: str) -> dict[str, Mapping[str, Any]]:
+    relative = PROTECTED_APPROVALS_PATH.relative_to(ROOT).as_posix()
+    text = _git_text(root, revision, relative)
+    if text is None:
+        raise ValueError("external governance trust root lacks protected approvals")
+    document = threat_guard._load_json_text(text, "protected governance approvals")
     return _parse_protected_approvals(document)
+
+
+def _load_external_protected_approvals(root: Path) -> dict[str, Mapping[str, Any]]:
+    local_path = root / PROTECTED_APPROVALS_PATH.relative_to(ROOT)
+    if local_path.is_file():
+        raise ValueError(
+            "branch-local protected approvals are forbidden; configure an external trust root"
+        )
+    trust_root = os.environ.get(TRUST_ROOT_SHA_ENV, "").strip()
+    if not trust_root:
+        return {}
+    if not threat_guard._commit_exists(root, trust_root):
+        raise ValueError("external governance trust root is not an available full commit SHA")
+    return _load_protected_approvals(root, trust_root)
 
 
 def _untrusted_promotions(documents: Mapping[str, Mapping[str, Any]]) -> list[str]:
@@ -1339,7 +1433,7 @@ def render_report(data: Mapping[str, Any]) -> str:
             "",
             "## Claim boundary",
             "",
-            "Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires protected-base authorization that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; canonical status remains below COMPLETE until every promotion rule passes.",
+            "Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires an externally configured immutable trust-root approval that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; branch history cannot authorize promotion, and canonical status remains below COMPLETE until every promotion rule passes.",
             "No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.",
             "GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.",
             "",
@@ -1361,41 +1455,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     errors.extend(governance_errors)
     base_ref = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
     ci_mode = os.environ.get("MYCOGNI_GOVERNANCE_CI", "") == "1"
-    first_bootstrap = os.environ.get("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "") == "1"
     base_state = "NOT CHECKED"
-    if base_ref == ZERO_GIT_OBJECT:
-        if not first_bootstrap:
-            errors.append("zero trusted base is allowed only for explicit first bootstrap")
-        errors.extend(_untrusted_promotions(documents))
-        base_state = "BOOTSTRAP"
-    elif base_ref:
+    try:
+        approvals = _load_external_protected_approvals(ROOT)
+    except ValueError as error:
+        errors.append(str(error))
+        approvals = {}
+    if base_ref:
         try:
-            baseline = _load_base_documents(ROOT, base_ref)
-            approvals = _load_protected_approvals(ROOT, base_ref)
-            current_approvals = _load_protected_approvals(ROOT)
+            effective_base, base_kind = threat_guard.resolve_trusted_baseline(ROOT, base_ref)
         except ValueError as error:
             errors.append(str(error))
         else:
-            if not baseline:
-                errors.append("nonzero trusted base cannot omit all governance documents")
+            if effective_base is None:
+                errors.extend(_untrusted_promotions(documents))
+                base_state = "GENESIS BOOTSTRAP"
             else:
                 try:
-                    baseline_scope = _load_base_scope(ROOT, base_ref)
+                    baseline = _load_base_documents(ROOT, effective_base)
+                    baseline_scope = _load_base_scope(ROOT, effective_base)
                     current_scope = _current_scope(ROOT)
                 except ValueError as error:
                     errors.append(str(error))
                 else:
-                    errors.extend(
-                        validate_against_base(
-                            documents,
-                            baseline,
-                            approvals,
-                            current_scope=current_scope,
-                            baseline_scope=baseline_scope,
-                            current_protected_approvals=current_approvals,
+                    if not baseline:
+                        errors.append(
+                            "trusted base cannot omit all governance documents; "
+                            "configure an external recovery state"
                         )
-                    )
-                    base_state = "VERIFIED"
+                    else:
+                        errors.extend(
+                            validate_against_base(
+                                documents,
+                                baseline,
+                                approvals,
+                                current_scope=current_scope,
+                                baseline_scope=baseline_scope,
+                            )
+                        )
+                        base_state = f"VERIFIED ({base_kind})"
     else:
         if ci_mode:
             errors.append("CI requires an immutable trusted base revision")

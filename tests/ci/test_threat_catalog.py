@@ -287,8 +287,18 @@ def test_pr_and_push_ci_use_immutable_base_sha_and_fetch_full_history() -> None:
         "github.event.pull_request.base.sha || github.event.before }}" in workflow
     )
     assert 'MYCOGNI_GOVERNANCE_CI: "1"' in workflow
-    assert "github.event.before == '0000000000000000000000000000000000000000'" in workflow
+    assert "MYCOGNI_GOVERNANCE_GENESIS_SHA: ${{ vars.MYCOGNI_GOVERNANCE_GENESIS_SHA }}" in workflow
+    assert (
+        "MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA: "
+        "${{ vars.MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA }}" in workflow
+    )
+    assert (
+        "MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA: "
+        "${{ vars.MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA }}" in workflow
+    )
+    assert "MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP" not in workflow
     assert workflow.count("fetch-depth: 0") == 2
+    assert workflow.count("fetch-tags: true") == 2
     assert "THREAT_CATALOG_BASE_REF: ${{ github.sha }}" not in workflow
 
 

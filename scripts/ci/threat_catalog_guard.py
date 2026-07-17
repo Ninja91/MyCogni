@@ -27,6 +27,8 @@ THREAT_ID = re.compile(r"^THR-[A-Z0-9]+-[0-9]{3}$")
 TEST_ID = re.compile(r"^VFY-[A-Z0-9]+-[0-9]{3}$")
 SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 ZERO_GIT_OBJECT = "0" * 40
+GENESIS_SHA_ENV = "MYCOGNI_GOVERNANCE_GENESIS_SHA"
+RECOVERY_BASE_SHA_ENV = "MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA"
 SOURCE_ANCHOR = re.compile(
     r"^(?P<path>[^#]+)#(?P<kind>threat|requirement|work-package):(?P<value>[^#]+)$"
 )
@@ -502,6 +504,64 @@ def load_history_from_git_base(root: Path, revision: str) -> dict[str, Any] | No
     return _load_json_text(result.stdout, f"Git baseline {revision}")
 
 
+def _commit_exists(root: Path, revision: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        return False
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode == 0
+
+
+def resolve_trusted_baseline(root: Path, event_base: str) -> tuple[str | None, str]:
+    """Resolve an event base without treating all-zero as branch creation authority."""
+
+    if event_base != ZERO_GIT_OBJECT:
+        if not _commit_exists(root, event_base):
+            raise ValueError(f"trusted baseline Git revision is unavailable: {event_base}")
+        return event_base, "EVENT_BASE"
+
+    genesis = os.environ.get(GENESIS_SHA_ENV, "").strip()
+    recovery = os.environ.get(RECOVERY_BASE_SHA_ENV, "").strip()
+    if genesis and recovery:
+        raise ValueError("zero event base has ambiguous genesis and recovery anchors")
+    if recovery:
+        if not _commit_exists(root, recovery):
+            raise ValueError("external recovery base is not an available full commit SHA")
+        return recovery, "EXTERNAL_RECOVERY"
+    if not genesis or not _commit_exists(root, genesis):
+        raise ValueError(
+            "zero event base requires an external immutable genesis or recovery anchor"
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", genesis],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.split()
+    if head != genesis or parents != [genesis]:
+        raise ValueError(
+            "zero event base is not the immutable single-commit repository genesis; "
+            "ref recreation requires an external recovery base"
+        )
+    return None, "GENESIS_BOOTSTRAP"
+
+
 def validate_catalog(
     catalog: Mapping[str, Any],
     registry: Mapping[str, Any],
@@ -798,19 +858,21 @@ def main() -> int:
     baseline_revision = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
     baseline_checked = False
     baseline_bootstrap = False
-    if baseline_revision == ZERO_GIT_OBJECT:
-        if os.environ.get("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "") != "1":
-            errors.append("zero trusted baseline is allowed only for explicit first bootstrap")
-        else:
-            baseline_bootstrap = True
-    elif baseline_revision:
+    if baseline_revision:
         try:
-            baseline = load_history_from_git_base(REPOSITORY_ROOT, baseline_revision)
+            effective_base, base_kind = resolve_trusted_baseline(REPOSITORY_ROOT, baseline_revision)
+            baseline = (
+                load_history_from_git_base(REPOSITORY_ROOT, effective_base)
+                if effective_base is not None
+                else None
+            )
         except ValueError as error:
             errors.append(str(error))
         else:
-            if baseline is None:
+            if base_kind == "GENESIS_BOOTSTRAP":
                 baseline_bootstrap = True
+            elif baseline is None:
+                errors.append("trusted baseline commit lacks the threat identity ledger")
             else:
                 errors.extend(validate_history_against_baseline(history, baseline))
                 baseline_checked = True

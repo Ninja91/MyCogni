@@ -21,6 +21,6 @@ Deterministic machine-registry report. No Markdown statement promotes package st
 
 ## Claim boundary
 
-Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires protected-base authorization that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; canonical status remains below COMPLETE until every promotion rule passes.
+Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires an externally configured immutable trust-root approval that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; branch history cannot authorize promotion, and canonical status remains below COMPLETE until every promotion rule passes.
 No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.
 GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.
