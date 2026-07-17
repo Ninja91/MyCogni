@@ -278,10 +278,24 @@ def test_runtime_evidence_gate_requires_real_passed_outcome(tmp_path: Path) -> N
     ]
 
 
-def test_pr_ci_uses_event_base_sha_and_fetches_immutable_history() -> None:
+def test_pr_and_push_ci_use_immutable_base_sha_and_fetch_full_history() -> None:
     workflow = (threat_catalog_guard.REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "THREAT_CATALOG_BASE_REF: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert (
+        "THREAT_CATALOG_BASE_REF: ${{ github.event_name == 'pull_request' && "
+        "github.event.pull_request.base.sha || github.event.before }}" in workflow
+    )
+    assert 'MYCOGNI_GOVERNANCE_CI: "1"' in workflow
+    assert "github.event.before == '0000000000000000000000000000000000000000'" in workflow
     assert workflow.count("fetch-depth: 0") == 2
     assert "THREAT_CATALOG_BASE_REF: ${{ github.sha }}" not in workflow
+
+
+def test_threat_registry_semver_rejects_leading_zeroes() -> None:
+    catalog, registry, history = _documents()
+    catalog["catalog_version"] = "01.0.0"
+    errors = threat_catalog_guard.validate_catalog(
+        catalog, registry, history, threat_catalog_guard.REPOSITORY_ROOT
+    )
+    assert "catalog: catalog_version must be semantic x.y.z" in errors

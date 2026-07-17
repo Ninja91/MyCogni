@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +34,10 @@ SCHEMAS = {
     "attestations": GOVERNANCE / "review-attestations.schema.json",
 }
 SCHEMA_HASHES = {
-    "manifest": "a6e1b479f24c89109980643c147c756480af0d93ce1b87cac8f0e6614013cfbd",
-    "status": "f414f057b8bbf1166e1b72c0edd01e859fed139b75e5f419840f53edee3e4ded",
-    "acceptance": "37ab391d8d4f6c5d3877f8af7d7d2de108b57102b75f63905bbb0abd150670c2",
-    "attestations": "18125f4f61814f6a5c748f093491e70bb2f782766a958e57d2578124b6249700",
+    "manifest": "dd7de835d04c2d19bca255c1a6ca793c3cde7b6806e3bd20d71f65551216e8df",
+    "status": "23037e575f5eee9249e446efa2c37c012bef3861bb98ba505159efa39addde69",
+    "acceptance": "dd6175abeaee7db10a8aa01e4181af78397c088096d5d066a02a44e9c1b2316b",
+    "attestations": "e523ebca733d7ad86928efd4e6a2f41c3662e98adbb83ff59493a5492fcb5e70",
 }
 STATUSES = {"NOT_STARTED", "IN_PROGRESS", "BLOCKED", "COMPLETE", "VERIFIED"}
 STATUS_RANK = {"NOT_STARTED": 0, "BLOCKED": 1, "IN_PROGRESS": 1, "COMPLETE": 2, "VERIFIED": 3}
@@ -47,19 +47,17 @@ ADR_STATUSES = {
     "Accepted as a boundary; runtime deferred until post-v1 evidence",
 }
 ACCEPTING_ADR_STATUSES = {"Accepted", "Accepted for initial build"}
-SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-MILESTONE_GATES = {
-    "M0": {
-        "M0_ALL_PACKAGES_COMPLETE",
-        "M0_ALL_SPIKES_DISPOSITIONED",
-        "M0_SIMULATOR_ONLY_EXTERNAL_IO",
-    },
-    "M1": {"M1_CONFORMANCE", "M1_FAILURE_INJECTION", "M1_SYNTHETIC_E2E"},
-    "M2": {"M2_DISCLOSURE", "M2_OBSERVATION_AUTHORITY", "M2_SYNTHETIC_E2E"},
-    "M3": {"LG-2", "LG-3", "M3_GUIDED_E2E"},
-    "M4": {"M4_AUTOMATION_AUTHORITY", "M4_CANARY", "M4_RECOVERY"},
-    "M5": {"M5_CONFORMANCE", "M5_RESOURCE_BUDGET", "M5_SECURITY_RELEASE"},
-    "M6": {"M6_DAY90_EVIDENCE", "M6_STABLE_CLAIMS", "M6_ZERO_ENABLED_P0_P1"},
+SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+ZERO_GIT_OBJECT = "0" * 40
+PROTECTED_APPROVAL_FIELDS = {
+    "id",
+    "subject_type",
+    "subject_id",
+    "reviewer_id",
+    "subject_sha256",
+    "criteria_sha256",
+    "evidence_sha256",
+    "semantic_adequacy",
 }
 
 
@@ -69,6 +67,39 @@ def _load(path: Path) -> dict[str, Any]:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_content_hash(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _function_source_bytes(source: bytes, function_name: str) -> bytes | None:
+    try:
+        text = source.decode("utf-8")
+        module = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError):
+        return None
+    function = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        ),
+        None,
+    )
+    if function is None or function.end_lineno is None:
+        return None
+    start = min([function.lineno, *(item.lineno for item in function.decorator_list)])
+    lines = text.splitlines(keepends=True)
+    return "".join(lines[start - 1 : function.end_lineno]).encode("utf-8")
+
+
+def _function_sha256(path: Path, function_name: str) -> str | None:
+    source = _function_source_bytes(path.read_bytes(), function_name)
+    return hashlib.sha256(source).hexdigest() if source is not None else None
 
 
 def _duplicates(values: Sequence[str]) -> set[str]:
@@ -92,9 +123,9 @@ def parse_requirements(root: Path) -> tuple[set[str], list[str]]:
     return set(ids), errors
 
 
-def parse_work_packages(root: Path) -> tuple[dict[str, set[str]], list[str]]:
-    text = (root / "docs/v1/WORK_PACKAGES.md").read_text(encoding="utf-8")
+def parse_work_packages_text(text: str) -> tuple[dict[str, set[str]], dict[str, str], list[str]]:
     packages: dict[str, set[str]] = {}
+    canonical_rows: dict[str, str] = {}
     errors: list[str] = []
     in_table = False
     for number, line in enumerate(text.splitlines(), 1):
@@ -119,6 +150,7 @@ def parse_work_packages(root: Path) -> tuple[dict[str, set[str]], list[str]]:
         packages[package_id] = (
             set() if cells[3] == "—" else {value.strip() for value in cells[3].split(",")}
         )
+        canonical_rows[package_id] = "| " + " | ".join(cells) + " |"
     for package_id, dependencies in packages.items():
         for missing in sorted(dependencies - set(packages)):
             errors.append(f"{package_id}: unknown dependency {missing}")
@@ -139,7 +171,13 @@ def parse_work_packages(root: Path) -> tuple[dict[str, set[str]], list[str]]:
 
     for package_id in sorted(packages):
         visit(package_id, ())
-    return packages, sorted(set(errors))
+    return packages, canonical_rows, sorted(set(errors))
+
+
+def parse_work_packages(root: Path) -> tuple[dict[str, set[str]], list[str]]:
+    text = (root / "docs/v1/WORK_PACKAGES.md").read_text(encoding="utf-8")
+    packages, _, errors = parse_work_packages_text(text)
+    return packages, errors
 
 
 def parse_adrs(root: Path) -> tuple[dict[str, str], list[str]]:
@@ -177,8 +215,7 @@ def parse_adrs(root: Path) -> tuple[dict[str, str], list[str]]:
     return adrs, sorted(set(errors))
 
 
-def parse_completion(root: Path) -> tuple[dict[str, str], list[str]]:
-    text = (root / "docs/v1/COMPLETION_MATRIX.md").read_text(encoding="utf-8")
+def parse_completion_text(text: str) -> tuple[dict[str, str], list[str]]:
     rows: dict[str, str] = {}
     errors: list[str] = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -198,6 +235,11 @@ def parse_completion(root: Path) -> tuple[dict[str, str], list[str]]:
             errors.append(f"duplicate completion-matrix package row {package}")
         rows[package] = status_match.group(1)
     return rows, errors
+
+
+def parse_completion(root: Path) -> tuple[dict[str, str], list[str]]:
+    text = (root / "docs/v1/COMPLETION_MATRIX.md").read_text(encoding="utf-8")
+    return parse_completion_text(text)
 
 
 def _git_commit_is_ancestor(root: Path, commit: str) -> bool:
@@ -224,17 +266,90 @@ def _git_commit_is_ancestor(root: Path, commit: str) -> bool:
     return ancestor.returncode == 0
 
 
-def _meaningful_assertion(function: ast.FunctionDef) -> bool:
-    """Require a direct, data-dependent assertion in the executed test body."""
+def _static_value(node: ast.expr, names: Mapping[str, Any]) -> tuple[bool, Any]:
+    """Evaluate a deliberately small set of literal/tautological expressions."""
 
-    dynamic = (ast.Call, ast.Name, ast.Attribute, ast.Subscript)
+    if isinstance(node, ast.Constant):
+        return True, node.value
+    if isinstance(node, ast.Name) and node.id in names:
+        return True, names[node.id]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        items = [_static_value(item, names) for item in node.elts]
+        if not all(known for known, _ in items):
+            return False, None
+        values = [value for _, value in items]
+        return True, tuple(values) if isinstance(node, ast.Tuple) else values
+    if isinstance(node, ast.Dict):
+        keys = [_static_value(item, names) for item in node.keys if item is not None]
+        values = [_static_value(item, names) for item in node.values]
+        if len(keys) != len(node.keys) or not all(known for known, _ in (*keys, *values)):
+            return False, None
+        return True, {key: value for (_, key), (_, value) in zip(keys, values, strict=True)}
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+        safe_calls: dict[str, Callable[..., Any]] = {
+            "all": all,
+            "any": any,
+            "bool": bool,
+            "len": len,
+            "sorted": sorted,
+        }
+        function = safe_calls.get(node.func.id)
+        arguments = [_static_value(item, names) for item in node.args]
+        if function is not None and all(known for known, _ in arguments):
+            try:
+                return True, function(*(value for _, value in arguments))
+            except (TypeError, ValueError):
+                return False, None
+    if isinstance(node, ast.UnaryOp):
+        known, value = _static_value(node.operand, names)
+        if known and isinstance(node.op, ast.Not):
+            return True, not value
+    if isinstance(node, ast.Compare):
+        values = [_static_value(item, names) for item in (node.left, *node.comparators)]
+        if all(known for known, _ in values):
+            resolved = [value for _, value in values]
+            comparisons = []
+            for operator, left, right in zip(node.ops, resolved[:-1], resolved[1:], strict=True):
+                if isinstance(operator, ast.Eq):
+                    comparisons.append(left == right)
+                elif isinstance(operator, ast.NotEq):
+                    comparisons.append(left != right)
+                elif isinstance(operator, ast.In):
+                    comparisons.append(left in right)
+                elif isinstance(operator, ast.NotIn):
+                    comparisons.append(left not in right)
+                elif isinstance(operator, ast.Is):
+                    comparisons.append(left is right)
+                elif isinstance(operator, ast.IsNot):
+                    comparisons.append(left is not right)
+                else:
+                    return False, None
+            return True, all(comparisons)
+    return False, None
+
+
+def _structural_runtime_witness(function: ast.FunctionDef) -> bool:
+    """Reject obvious no-ops while making no claim about semantic adequacy."""
+
+    literal_names: dict[str, Any] = {}
     for statement in function.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            known, value = _static_value(statement.value, literal_names)
+            if known:
+                literal_names[statement.targets[0].id] = value
+            else:
+                literal_names.pop(statement.targets[0].id, None)
+            continue
         if not isinstance(statement, ast.Assert):
             continue
-        if isinstance(statement.test, ast.Constant):
+        known, _ = _static_value(statement.test, literal_names)
+        if known:
             continue
-        if any(isinstance(node, dynamic) for node in ast.walk(statement.test)):
-            return True
+        return True
     return False
 
 
@@ -244,7 +359,7 @@ def _acceptance_node(root: Path, evidence: Mapping[str, Any], criterion_ids: Seq
         return False
     path_text, function_name = reference.split("::")
     path = threat_guard._canonical_repo_file(root, path_text)
-    if path is None or _sha256(path) != evidence.get("content_sha256"):
+    if path is None:
         return False
     module = ast.parse(path.read_text(encoding="utf-8"))
     function = next(
@@ -256,6 +371,9 @@ def _acceptance_node(root: Path, evidence: Mapping[str, Any], criterion_ids: Seq
         None,
     )
     if function is None:
+        return False
+    source = _function_source_bytes(path.read_bytes(), function_name)
+    if source is None or hashlib.sha256(source).hexdigest() != evidence.get("content_sha256"):
         return False
     decorators = {ast.unparse(item) for item in function.decorator_list}
     if "pytest.mark.governance_acceptance" not in decorators:
@@ -278,7 +396,7 @@ def _acceptance_node(root: Path, evidence: Mapping[str, Any], criterion_ids: Seq
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)
     ]
-    return sorted(invoked) == sorted(criterion_ids) and _meaningful_assertion(function)
+    return sorted(invoked) == sorted(criterion_ids) and _structural_runtime_witness(function)
 
 
 def _execute_node(root: Path, reference: str, criterion_ids: Sequence[str]) -> bool:
@@ -329,6 +447,77 @@ def _git_file_bytes(root: Path, commit: str, path: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _selected_content_hash(
+    registry: Mapping[str, Mapping[str, Any]], identifiers: Sequence[str]
+) -> str | None:
+    if len(set(identifiers)) != len(identifiers) or any(
+        item not in registry for item in identifiers
+    ):
+        return None
+    selected = [registry[item] for item in sorted(identifiers)]
+    return _canonical_content_hash(selected)
+
+
+def _protected_approval_authorizes(
+    approval: Mapping[str, Any] | None,
+    *,
+    subject_type: str,
+    subject: Mapping[str, Any],
+    reviewer_id: Any,
+    criteria_sha256: str | None,
+    evidence_sha256: str | None,
+) -> bool:
+    return bool(
+        approval is not None
+        and approval.get("subject_type") == subject_type
+        and approval.get("subject_id") == subject.get("id")
+        and approval.get("reviewer_id") == reviewer_id
+        and approval.get("subject_sha256") == threat_guard._canonical_json_hash(subject)
+        and approval.get("criteria_sha256") == criteria_sha256
+        and approval.get("evidence_sha256") == evidence_sha256
+        and approval.get("semantic_adequacy") == "APPROVED"
+    )
+
+
+def _reviewed_artifacts_valid(
+    root: Path,
+    subject: Mapping[str, Any],
+    evidence_items: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    subject_id = subject.get("id")
+    commit = subject.get("reviewed_commit")
+    if not isinstance(commit, str) or not _git_commit_is_ancestor(root, commit):
+        errors.append(f"{subject_id}: reviewed commit is not an ancestor")
+        return errors
+    review = subject.get("review_record", {})
+    review_bytes = (
+        _git_file_bytes(root, commit, review.get("path", "")) if isinstance(review, dict) else None
+    )
+    if review_bytes is None or hashlib.sha256(review_bytes).hexdigest() != review.get("sha256"):
+        errors.append(f"{subject_id}: review record digest mismatch")
+    for evidence_item in evidence_items:
+        reference = str(evidence_item.get("ref", ""))
+        if reference.count("::") != 1:
+            errors.append(f"{subject_id}: malformed evidence reference ({evidence_item.get('id')})")
+            continue
+        source_path, function_name = reference.split("::")
+        source_bytes = _git_file_bytes(root, commit, source_path)
+        node_bytes = (
+            _function_source_bytes(source_bytes, function_name)
+            if source_bytes is not None
+            else None
+        )
+        if node_bytes is None or hashlib.sha256(node_bytes).hexdigest() != evidence_item.get(
+            "content_sha256"
+        ):
+            errors.append(
+                f"{subject_id}: evidence digest is not bound to reviewed commit "
+                f"({evidence_item.get('id')})"
+            )
+    return errors
+
+
 def _validate_schemas(documents: Mapping[str, Mapping[str, Any]]) -> list[str]:
     errors: list[str] = []
     for name, document in documents.items():
@@ -358,7 +547,7 @@ def _validate_threat_catalog(root: Path, *, execute: bool) -> list[str]:
     ):
         errors.extend(threat_guard.validate_published_schema(document, schemas[name], name))
     base = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
-    if base:
+    if base and base != ZERO_GIT_OBJECT:
         baseline = threat_guard.load_history_from_git_base(root, base)
         if baseline is not None:
             errors.extend(threat_guard.validate_history_against_baseline(history, baseline))
@@ -466,9 +655,9 @@ def validate_governance(
             errors.append(f"{record.get('id')}: package mappings must be nonempty")
         else:
             for mapping in mappings:
-                if not isinstance(mapping, dict) or mapping.get("id") not in mapping_ids.get(
-                    mapping.get("kind"), set()
-                ):
+                kind = mapping.get("kind") if isinstance(mapping, dict) else None
+                allowed_ids = mapping_ids.get(kind, set()) if isinstance(kind, str) else set()
+                if not isinstance(mapping, dict) or mapping.get("id") not in allowed_ids:
                     errors.append(f"{record.get('id')}: dangling mapping {mapping}")
                 if (
                     mapping.get("kind") == "ADR"
@@ -524,6 +713,12 @@ def validate_governance(
         criterion_ids = record.get("acceptance_criteria", [])
         evidence_ids = record.get("evidence_ids", [])
         attestation = attestations.get(record.get("attestation_id"))
+        record_state = record.get("state")
+        package_status = status_by_id.get(package_id, {}).get("status")
+        if record_state == "MILESTONE_VERIFIED" and package_status != "VERIFIED":
+            errors.append(
+                f"{record.get('id')}: MILESTONE_VERIFIED requires canonical VERIFIED status"
+            )
         if not criterion_ids or not evidence_ids:
             errors.append(f"{record.get('id')}: criteria and evidence must be nonempty")
         for criterion_id in criterion_ids:
@@ -548,7 +743,7 @@ def validate_governance(
                 )
             elif execute and not _execute_node(root, item["ref"], criterion_ids):
                 errors.append(f"{record.get('id')}: acceptance evidence did not PASS {evidence_id}")
-        if record.get("state") == "INDEPENDENTLY_ACCEPTED":
+        if record.get("state") in {"INDEPENDENTLY_ACCEPTED", "MILESTONE_VERIFIED"}:
             if (
                 attestation is None
                 or attestation.get("package") != package_id
@@ -561,33 +756,8 @@ def validate_governance(
                     or attestation.get("evidence_ids") != evidence_ids
                 ):
                     errors.append(f"{record.get('id')}: attestation scope does not equal record")
-                commit = attestation.get("reviewed_commit")
-                if not isinstance(commit, str) or not _git_commit_is_ancestor(root, commit):
-                    errors.append(f"{record.get('id')}: reviewed commit is not an ancestor")
-                review = attestation.get("review_record", {})
-                review_bytes = (
-                    _git_file_bytes(root, commit, review.get("path", ""))
-                    if isinstance(commit, str) and isinstance(review, dict)
-                    else None
-                )
-                if review_bytes is None or hashlib.sha256(review_bytes).hexdigest() != review.get(
-                    "sha256"
-                ):
-                    errors.append(f"{record.get('id')}: review record digest mismatch")
-                for evidence_id in evidence_ids:
-                    evidence_item = evidence.get(evidence_id, {})
-                    source_path = str(evidence_item.get("ref", "")).split("::", 1)[0]
-                    source_bytes = (
-                        _git_file_bytes(root, commit, source_path)
-                        if isinstance(commit, str)
-                        else None
-                    )
-                    if source_bytes is None or hashlib.sha256(
-                        source_bytes
-                    ).hexdigest() != evidence_item.get("content_sha256"):
-                        errors.append(
-                            f"{record.get('id')}: evidence digest is not bound to reviewed commit"
-                        )
+                selected_evidence = [evidence[item] for item in evidence_ids if item in evidence]
+                errors.extend(_reviewed_artifacts_valid(root, attestation, selected_evidence))
                 if not attestation.get("residuals"):
                     errors.append(f"{record.get('id')}: attestation residuals must be explicit")
     evidence_by_package: dict[str, set[str]] = {package_id: set() for package_id in packages}
@@ -607,6 +777,15 @@ def validate_governance(
             ]
             if len(matching) != 1:
                 errors.append(f"{package_id}: completion lacks exactly one accepted trace record")
+            elif (
+                row.get("status") == "VERIFIED" and matching[0].get("state") != "MILESTONE_VERIFIED"
+            ):
+                errors.append(f"{package_id}: VERIFIED requires MILESTONE_VERIFIED trace state")
+            elif (
+                row.get("status") == "COMPLETE"
+                and matching[0].get("state") != "INDEPENDENTLY_ACCEPTED"
+            ):
+                errors.append(f"{package_id}: COMPLETE requires INDEPENDENTLY_ACCEPTED trace state")
     used_criteria = {
         value
         for record in (records if isinstance(records, list) else [])
@@ -630,73 +809,167 @@ def validate_governance(
         errors.append("evidence registry contains missing or unused entries")
     if used_attestations != set(attestations):
         errors.append("attestation registry contains missing or unused entries")
+    definitions = status_doc.get("milestone_definitions", [])
+    definition_ids = [
+        item["id"]
+        for item in definitions
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    if definition_ids != sorted(definition_ids):
+        errors.append("milestone definitions must be sorted by canonical ID")
+    for duplicate in sorted(_duplicates(definition_ids)):
+        errors.append(f"duplicate milestone definition ID {duplicate}")
+    milestone_names = [
+        item["milestone"]
+        for item in definitions
+        if isinstance(item, dict) and isinstance(item.get("milestone"), str)
+    ]
+    for duplicate in sorted(_duplicates(milestone_names)):
+        errors.append(f"duplicate milestone definition name {duplicate}")
+    definitions_by_id = {
+        item["id"]: item
+        for item in definitions
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    for definition_id, definition in definitions_by_id.items():
+        defined_packages = definition.get("packages", [])
+        if defined_packages != sorted(defined_packages) or len(set(defined_packages)) != len(
+            defined_packages
+        ):
+            errors.append(f"{definition_id}: packages must be sorted and unique")
+        if not defined_packages or not set(defined_packages) <= set(packages):
+            errors.append(f"{definition_id}: canonical package set is empty or unknown")
+        for package_id in defined_packages:
+            missing_dependencies = packages.get(package_id, set()) - set(defined_packages)
+            if missing_dependencies:
+                errors.append(
+                    f"{definition_id}: canonical package set omits dependency closure "
+                    f"{sorted(missing_dependencies)}"
+                )
+        gates = definition.get("gates", [])
+        gate_ids = [
+            item["id"]
+            for item in gates
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        if gate_ids != sorted(gate_ids) or len(set(gate_ids)) != len(gate_ids) or not gate_ids:
+            errors.append(f"{definition_id}: gates must be nonempty, sorted and unique")
+        for gate in gates:
+            if not isinstance(gate, dict):
+                continue
+            gate_evidence = gate.get("evidence_ids", [])
+            if (
+                gate_evidence != sorted(gate_evidence)
+                or len(set(gate_evidence)) != len(gate_evidence)
+                or not gate_evidence
+            ):
+                errors.append(
+                    f"{definition_id}/{gate.get('id')}: gate evidence must be named, sorted and unique"
+                )
+
     milestones = status_doc.get("milestone_attestations", [])
     milestone_ids = [
-        item.get("id") for item in milestones if isinstance(item, dict) and item.get("id")
+        item["id"]
+        for item in milestones
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
     ]
     if milestone_ids != sorted(milestone_ids):
         errors.append("milestone attestations must be sorted by canonical ID")
     for duplicate in sorted(_duplicates(milestone_ids)):
         errors.append(f"duplicate milestone attestation ID {duplicate}")
+    milestones_by_id = {
+        item["id"]: item
+        for item in milestones
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
     verified_ids = {
         package_id for package_id, row in status_by_id.items() if row.get("status") == "VERIFIED"
     }
+    records_by_package = {item.get("package"): item for item in records if isinstance(item, dict)}
     for milestone in milestones:
-        if isinstance(milestone, dict) and not (set(milestone.get("packages", [])) & verified_ids):
+        if not isinstance(milestone, dict):
+            continue
+        if not (set(milestone.get("packages", [])) & verified_ids):
             errors.append(f"unused milestone attestation {milestone.get('id')}")
-    for package_id, row in status_by_id.items():
-        if row.get("status") == "VERIFIED":
-            covering = [
-                item
-                for item in milestones
-                if isinstance(item, dict)
-                and package_id in item.get("packages", [])
-                and item.get("disposition") == "ACCEPT"
-            ]
-            if len(covering) != 1:
-                errors.append(f"{package_id}: VERIFIED lacks one structured milestone attestation")
-                continue
-            milestone = covering[0]
-            dependency_closure: set[str] = set()
-
-            def add_dependencies(item: str, closure: set[str]) -> None:
-                for dependency in packages.get(item, set()):
-                    if dependency not in closure:
-                        closure.add(dependency)
-                        add_dependencies(dependency, closure)
-
-            for covered_package in milestone.get("packages", []):
-                add_dependencies(covered_package, dependency_closure)
-            if set(milestone.get("dependency_packages", [])) != dependency_closure:
-                errors.append(
-                    f"{package_id}: milestone attestation has partial dependency coverage"
-                )
-            expected_gates = MILESTONE_GATES.get(milestone.get("milestone"))
-            if expected_gates is None or set(milestone.get("gates", [])) != expected_gates:
-                errors.append(f"{package_id}: milestone attestation has partial gate coverage")
-            milestone_commit = milestone.get("reviewed_commit")
-            if not isinstance(milestone_commit, str) or not _git_commit_is_ancestor(
-                root, milestone_commit
-            ):
-                errors.append(f"{package_id}: milestone reviewed commit is not an ancestor")
-            milestone_review = milestone.get("review_record", {})
-            milestone_bytes = (
-                _git_file_bytes(root, milestone_commit, milestone_review.get("path", ""))
-                if isinstance(milestone_commit, str) and isinstance(milestone_review, dict)
-                else None
+        definition_id = milestone.get("definition_id")
+        milestone_definition = (
+            definitions_by_id.get(definition_id) if isinstance(definition_id, str) else None
+        )
+        if milestone_definition is None:
+            errors.append(f"{milestone.get('id')}: unknown milestone definition")
+            continue
+        if milestone.get("packages") != milestone_definition.get("packages"):
+            errors.append(f"{milestone.get('id')}: package set does not equal canonical definition")
+        if milestone.get("gates") != milestone_definition.get("gates"):
+            errors.append(f"{milestone.get('id')}: gates do not equal canonical gate evidence")
+        package_set = set(milestone_definition.get("packages", []))
+        exact_attestation_ids = {
+            records_by_package.get(package_id, {}).get("attestation_id")
+            for package_id in package_set
+        }
+        if None in exact_attestation_ids or set(milestone.get("package_attestation_ids", [])) != (
+            exact_attestation_ids - {None}
+        ):
+            errors.append(
+                f"{milestone.get('id')}: package attestations do not equal canonical package closure"
             )
-            if milestone_bytes is None or hashlib.sha256(
-                milestone_bytes
-            ).hexdigest() != milestone_review.get("sha256"):
-                errors.append(f"{package_id}: milestone review digest mismatch")
-            gate_evidence = set(milestone.get("gate_evidence_ids", []))
-            expected_evidence = {
-                item
-                for covered_package in milestone.get("packages", [])
-                for item in evidence_by_package.get(covered_package, set())
-            }
-            if gate_evidence != expected_evidence:
-                errors.append(f"{package_id}: milestone gate evidence is partial or nonexistent")
+        for package_id in package_set:
+            record = records_by_package.get(package_id)
+            package_attestation = (
+                attestations.get(record.get("attestation_id")) if isinstance(record, dict) else None
+            )
+            if (
+                status_by_id.get(package_id, {}).get("status") != "VERIFIED"
+                or record is None
+                or record.get("state") != "MILESTONE_VERIFIED"
+                or package_attestation is None
+                or package_attestation.get("disposition") != "ACCEPT"
+            ):
+                errors.append(
+                    f"{milestone.get('id')}: all canonical packages require valid accepted attestations"
+                )
+        gate_evidence_ids = {
+            evidence_id
+            for gate in milestone_definition.get("gates", [])
+            if isinstance(gate, dict)
+            for evidence_id in gate.get("evidence_ids", [])
+        }
+        selected_gate_evidence = [
+            evidence[evidence_id]
+            for evidence_id in sorted(gate_evidence_ids)
+            if evidence_id in evidence
+        ]
+        if len(selected_gate_evidence) != len(gate_evidence_ids):
+            errors.append(f"{milestone.get('id')}: canonical gate evidence is missing")
+        for evidence_id in gate_evidence_ids:
+            item = evidence.get(evidence_id)
+            package_id = item.get("package") if isinstance(item, dict) else None
+            record = records_by_package.get(package_id)
+            package_attestation = (
+                attestations.get(record.get("attestation_id")) if isinstance(record, dict) else None
+            )
+            if (
+                package_id not in package_set
+                or record is None
+                or evidence_id not in record.get("evidence_ids", [])
+                or package_attestation is None
+                or evidence_id not in package_attestation.get("evidence_ids", [])
+            ):
+                errors.append(
+                    f"{milestone.get('id')}: gate evidence {evidence_id} lacks package attestation path"
+                )
+        errors.extend(_reviewed_artifacts_valid(root, milestone, selected_gate_evidence))
+
+    for package_id, row in status_by_id.items():
+        if row.get("status") != "VERIFIED":
+            continue
+        covering = [
+            item
+            for item in milestones_by_id.values()
+            if package_id in item.get("packages", []) and item.get("disposition") == "ACCEPT"
+        ]
+        if len(covering) != 1:
+            errors.append(f"{package_id}: VERIFIED lacks one authenticated milestone attestation")
     errors.extend(_validate_schemas(documents))
     counts = {
         "requirements": sorted(requirements),
@@ -706,10 +979,12 @@ def validate_governance(
         "threats": sorted(threats_by_id),
         "verification_tests": sorted(tests_by_id),
         "registry_packages": sorted(status_by_id),
+        "milestone_definitions": sorted(definitions_by_id),
         "accepted_packages": sorted(
             record["package"]
             for record in records
-            if isinstance(record, dict) and record.get("state") == "INDEPENDENTLY_ACCEPTED"
+            if isinstance(record, dict)
+            and record.get("state") in {"INDEPENDENTLY_ACCEPTED", "MILESTONE_VERIFIED"}
         ),
         "complete_packages": sorted(
             package_id
@@ -735,6 +1010,10 @@ def validate_against_base(
     current: Mapping[str, Mapping[str, Any]],
     baseline: Mapping[str, Mapping[str, Any]],
     protected_approvals: Mapping[str, Mapping[str, Any]],
+    *,
+    current_scope: Mapping[str, Mapping[str, Any]] | None = None,
+    baseline_scope: Mapping[str, Mapping[str, Any]] | None = None,
+    current_protected_approvals: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     for name in DOCUMENTS:
@@ -752,6 +1031,75 @@ def validate_against_base(
             errors.append(f"{name}: version regressed across trusted base")
         if current[name] != baseline[name] and current_version == baseline_version:
             errors.append(f"{name}: content changed without version increment")
+
+    def indexed(document: Mapping[str, Any], key: str) -> dict[str, Mapping[str, Any]]:
+        return {
+            item["id"]: item
+            for item in document.get(key, [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+
+    def reject_disappearance(
+        label: str,
+        before_items: Mapping[str, Any],
+        after_items: Mapping[str, Any],
+    ) -> None:
+        for item_id in sorted(set(before_items) - set(after_items)):
+            errors.append(f"trusted {label} disappeared: {item_id}")
+
+    before_status_items = indexed(baseline["status"], "packages")
+    after_status_items = indexed(current["status"], "packages")
+    reject_disappearance("package status", before_status_items, after_status_items)
+
+    before_records = indexed(baseline["manifest"], "records")
+    after_records = indexed(current["manifest"], "records")
+    reject_disappearance("trace record", before_records, after_records)
+    immutable_record_fields = {
+        "package",
+        "mappings",
+        "acceptance_criteria",
+        "evidence_ids",
+    }
+    for record_id in sorted(set(before_records) & set(after_records)):
+        if any(
+            before_records[record_id].get(field) != after_records[record_id].get(field)
+            for field in immutable_record_fields
+        ):
+            errors.append(f"trusted trace record rebound: {record_id}")
+
+    for label, key in (("criterion", "criteria"), ("evidence", "evidence")):
+        before_items = indexed(baseline["acceptance"], key)
+        after_items = indexed(current["acceptance"], key)
+        reject_disappearance(label, before_items, after_items)
+        for item_id in sorted(set(before_items) & set(after_items)):
+            if before_items[item_id] != after_items[item_id] and (
+                label != "evidence" or baseline["acceptance"].get("schema_version") == 2
+            ):
+                errors.append(f"trusted {label} rebound: {item_id}")
+
+    before_definitions = indexed(baseline["status"], "milestone_definitions")
+    after_definitions = indexed(current["status"], "milestone_definitions")
+    reject_disappearance("milestone definition", before_definitions, after_definitions)
+    for definition_id in sorted(set(before_definitions) & set(after_definitions)):
+        if before_definitions[definition_id] != after_definitions[definition_id]:
+            errors.append(f"trusted milestone definition rebound: {definition_id}")
+
+    if baseline_scope is not None and current_scope is not None:
+        for label in ("work package", "completion matrix"):
+            scope_before = baseline_scope.get(label, {})
+            scope_after = current_scope.get(label, {})
+            reject_disappearance(label, scope_before, scope_after)
+            if label == "work package":
+                for item_id in sorted(set(scope_before) & set(scope_after)):
+                    if scope_before[item_id] != scope_after[item_id]:
+                        errors.append(f"trusted work package rebound: {item_id}")
+
+    if current_protected_approvals is not None:
+        reject_disappearance("protected approval", protected_approvals, current_protected_approvals)
+        for approval_id in sorted(set(protected_approvals) & set(current_protected_approvals)):
+            if protected_approvals[approval_id] != current_protected_approvals[approval_id]:
+                errors.append(f"trusted protected approval rebound: {approval_id}")
+
     before = {item["id"]: item for item in baseline["attestations"].get("attestations", [])}
     after = {item["id"]: item for item in current["attestations"].get("attestations", [])}
     for attestation_id in sorted(set(before) - set(after)):
@@ -762,28 +1110,73 @@ def validate_against_base(
     for attestation_id in sorted(set(after) - set(before)):
         attestation = after[attestation_id]
         approval = protected_approvals.get(attestation_id)
-        if (
-            approval is None
-            or approval.get("reviewer_id") != attestation.get("reviewer", {}).get("id")
-            or approval.get("attestation_sha256") != threat_guard._canonical_json_hash(attestation)
+        criteria = indexed(current["acceptance"], "criteria")
+        evidence = indexed(current["acceptance"], "evidence")
+        if not _protected_approval_authorizes(
+            approval,
+            subject_type="PACKAGE_ATTESTATION",
+            subject=attestation,
+            reviewer_id=attestation.get("reviewer", {}).get("id"),
+            criteria_sha256=_selected_content_hash(
+                criteria, attestation.get("acceptance_criteria", [])
+            ),
+            evidence_sha256=_selected_content_hash(evidence, attestation.get("evidence_ids", [])),
         ):
             errors.append(f"new attestation lacks allowlisted protected approval: {attestation_id}")
-    before_status = {
-        item["id"]: item.get("status") for item in baseline["status"].get("packages", [])
-    }
-    after_status = {
-        item["id"]: item.get("status") for item in current["status"].get("packages", [])
-    }
+
+    before_milestones = indexed(baseline["status"], "milestone_attestations")
+    after_milestones = indexed(current["status"], "milestone_attestations")
+    reject_disappearance("milestone attestation", before_milestones, after_milestones)
+    for milestone_id in sorted(set(before_milestones) & set(after_milestones)):
+        if before_milestones[milestone_id] != after_milestones[milestone_id]:
+            errors.append(f"trusted milestone attestation mutated: {milestone_id}")
+    current_evidence = indexed(current["acceptance"], "evidence")
+    current_definitions = indexed(current["status"], "milestone_definitions")
+    for milestone_id in sorted(set(after_milestones) - set(before_milestones)):
+        milestone = after_milestones[milestone_id]
+        definition = current_definitions.get(str(milestone.get("definition_id")), {})
+        gate_evidence_ids = [
+            evidence_id
+            for gate in definition.get("gates", [])
+            if isinstance(gate, dict)
+            for evidence_id in gate.get("evidence_ids", [])
+        ]
+        approval = protected_approvals.get(milestone_id)
+        if not _protected_approval_authorizes(
+            approval,
+            subject_type="MILESTONE_ATTESTATION",
+            subject=milestone,
+            reviewer_id=milestone.get("reviewer", {}).get("id"),
+            criteria_sha256=(threat_guard._canonical_json_hash(definition) if definition else None),
+            evidence_sha256=_selected_content_hash(current_evidence, gate_evidence_ids),
+        ):
+            errors.append(
+                f"new milestone attestation lacks allowlisted protected approval: {milestone_id}"
+            )
+
+    before_status = {item_id: item.get("status") for item_id, item in before_status_items.items()}
+    after_status = {item_id: item.get("status") for item_id, item in after_status_items.items()}
     records_by_package = {
         item.get("package"): item for item in current["manifest"].get("records", [])
     }
     for package_id, status in after_status.items():
-        prior = before_status.get(package_id, "NOT_STARTED")
-        if STATUS_RANK.get(status, -1) < 2 or STATUS_RANK.get(prior, -1) >= 2:
+        prior_value = before_status.get(package_id, "NOT_STARTED")
+        prior = prior_value if isinstance(prior_value, str) else "NOT_STARTED"
+        if status not in {"COMPLETE", "VERIFIED"} or STATUS_RANK.get(status, -1) <= STATUS_RANK.get(
+            prior, -1
+        ):
             continue
         attestation_id = records_by_package.get(package_id, {}).get("attestation_id")
         if not attestation_id or attestation_id not in protected_approvals:
             errors.append(f"{package_id}: promotion lacks protected-base authorization")
+        if status == "VERIFIED":
+            covering = [
+                item for item in after_milestones.values() if package_id in item.get("packages", [])
+            ]
+            if len(covering) != 1 or covering[0].get("id") not in protected_approvals:
+                errors.append(
+                    f"{package_id}: VERIFIED promotion lacks protected milestone authorization"
+                )
     return errors
 
 
@@ -820,8 +1213,7 @@ def _load_base_documents(root: Path, revision: str) -> dict[str, dict[str, Any]]
     return result
 
 
-def _load_protected_approvals(root: Path, revision: str) -> dict[str, Mapping[str, Any]]:
-    relative = PROTECTED_APPROVALS_PATH.relative_to(root).as_posix()
+def _git_text(root: Path, revision: str, relative: str) -> str | None:
     shown = subprocess.run(
         ["git", "show", f"{revision}:{relative}"],
         cwd=root,
@@ -830,27 +1222,75 @@ def _load_protected_approvals(root: Path, revision: str) -> dict[str, Mapping[st
         text=True,
         timeout=20,
     )
-    if shown.returncode != 0:
-        return {}
-    document = threat_guard._load_json_text(shown.stdout, "protected governance approvals")
-    if set(document) != {"schema_version", "approvals"} or document.get("schema_version") != 1:
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _load_base_scope(root: Path, revision: str) -> dict[str, Mapping[str, Any]]:
+    work_text = _git_text(root, revision, "docs/v1/WORK_PACKAGES.md")
+    matrix_text = _git_text(root, revision, "docs/v1/COMPLETION_MATRIX.md")
+    if work_text is None or matrix_text is None:
+        raise ValueError("trusted base lacks canonical work-package or completion-matrix scope")
+    _, work_rows, work_errors = parse_work_packages_text(work_text)
+    matrix, matrix_errors = parse_completion_text(matrix_text)
+    if work_errors or matrix_errors:
+        raise ValueError("trusted base canonical Markdown scope is malformed")
+    return {"work package": work_rows, "completion matrix": matrix}
+
+
+def _current_scope(root: Path) -> dict[str, Mapping[str, Any]]:
+    work_text = (root / "docs/v1/WORK_PACKAGES.md").read_text(encoding="utf-8")
+    matrix_text = (root / "docs/v1/COMPLETION_MATRIX.md").read_text(encoding="utf-8")
+    _, work_rows, work_errors = parse_work_packages_text(work_text)
+    matrix, matrix_errors = parse_completion_text(matrix_text)
+    if work_errors or matrix_errors:
+        raise ValueError("current canonical Markdown scope is malformed")
+    return {"work package": work_rows, "completion matrix": matrix}
+
+
+def _parse_protected_approvals(document: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    if set(document) != {"schema_version", "approvals"} or document.get("schema_version") != 2:
         raise ValueError("protected approval registry is malformed")
     approvals = document.get("approvals")
     if not isinstance(approvals, list):
         raise ValueError("protected approval registry approvals must be an array")
     result: dict[str, Mapping[str, Any]] = {}
+    approval_ids: set[str] = set()
     for item in approvals:
         if (
             not isinstance(item, dict)
-            or set(item) != {"attestation_id", "reviewer_id", "attestation_sha256"}
-            or not isinstance(item.get("attestation_id"), str)
+            or set(item) != PROTECTED_APPROVAL_FIELDS
+            or re.fullmatch(r"PAPP-[A-Z0-9-]+", str(item.get("id"))) is None
+            or item.get("subject_type") not in {"PACKAGE_ATTESTATION", "MILESTONE_ATTESTATION"}
+            or not isinstance(item.get("subject_id"), str)
             or not isinstance(item.get("reviewer_id"), str)
-            or re.fullmatch(r"[0-9a-f]{64}", str(item.get("attestation_sha256"))) is None
-            or item["attestation_id"] in result
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", str(item.get(field))) is None
+                for field in ("subject_sha256", "criteria_sha256", "evidence_sha256")
+            )
+            or item.get("semantic_adequacy") != "APPROVED"
+            or item.get("id") in approval_ids
+            or item["subject_id"] in result
         ):
             raise ValueError("protected approval registry entry is malformed or duplicated")
-        result[item["attestation_id"]] = item
+        result[item["subject_id"]] = item
+        approval_ids.add(item["id"])
     return result
+
+
+def _load_protected_approvals(
+    root: Path, revision: str | None = None
+) -> dict[str, Mapping[str, Any]]:
+    if revision is None:
+        if not PROTECTED_APPROVALS_PATH.is_file():
+            return {}
+        document = _load(PROTECTED_APPROVALS_PATH)
+    else:
+        relative = PROTECTED_APPROVALS_PATH.relative_to(root).as_posix()
+        text = _git_text(root, revision, relative)
+        if text is None:
+            return {}
+        document = threat_guard._load_json_text(text, "protected governance approvals")
+    return _parse_protected_approvals(document)
 
 
 def _untrusted_promotions(documents: Mapping[str, Mapping[str, Any]]) -> list[str]:
@@ -895,10 +1335,11 @@ def render_report(data: Mapping[str, Any]) -> str:
             f"- Threats ({len(data['threats'])}): {listed(data['threats'])}",
             f"- Verification tests ({len(data['verification_tests'])}): {listed(data['verification_tests'])}",
             f"- Canonical package-status scope ({len(data['registry_packages'])}): {listed(data['registry_packages'])}",
+            f"- Canonical milestone definitions ({len(data['milestone_definitions'])}): {listed(data['milestone_definitions'])}",
             "",
             "## Claim boundary",
             "",
-            "Implemented records are not acceptance. An ACCEPT attestation requires protected-base authorization and exact reviewed-commit evidence/review digests; canonical status remains below COMPLETE until every promotion rule passes.",
+            "Implemented records and structural runtime witnesses are not semantic acceptance. An ACCEPT attestation requires protected-base authorization that explicitly owns semantic adequacy and binds the exact criterion/evidence content digests, subject digest, reviewer and reviewed commit; canonical status remains below COMPLETE until every promotion rule passes.",
             "No milestone is verified. Planned threat controls remain planned, and the threat guard is invoked fail-closed by GOV.",
             "GOV-001 itself remains IN_PROGRESS pending independent review of these registries and guards.",
             "",
@@ -906,10 +1347,10 @@ def render_report(data: Mapping[str, Any]) -> str:
     )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write-report", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         documents = {name: _load(path) for name, path in DOCUMENTS.items()}
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -919,21 +1360,45 @@ def main() -> int:
     governance_errors, report_data = validate_governance(documents, ROOT, execute=True)
     errors.extend(governance_errors)
     base_ref = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
+    ci_mode = os.environ.get("MYCOGNI_GOVERNANCE_CI", "") == "1"
+    first_bootstrap = os.environ.get("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "") == "1"
     base_state = "NOT CHECKED"
-    if base_ref:
+    if base_ref == ZERO_GIT_OBJECT:
+        if not first_bootstrap:
+            errors.append("zero trusted base is allowed only for explicit first bootstrap")
+        errors.extend(_untrusted_promotions(documents))
+        base_state = "BOOTSTRAP"
+    elif base_ref:
         try:
             baseline = _load_base_documents(ROOT, base_ref)
             approvals = _load_protected_approvals(ROOT, base_ref)
+            current_approvals = _load_protected_approvals(ROOT)
         except ValueError as error:
             errors.append(str(error))
         else:
             if not baseline:
-                errors.extend(_untrusted_promotions(documents))
-                base_state = "BOOTSTRAP"
+                errors.append("nonzero trusted base cannot omit all governance documents")
             else:
-                errors.extend(validate_against_base(documents, baseline, approvals))
-                base_state = "VERIFIED"
+                try:
+                    baseline_scope = _load_base_scope(ROOT, base_ref)
+                    current_scope = _current_scope(ROOT)
+                except ValueError as error:
+                    errors.append(str(error))
+                else:
+                    errors.extend(
+                        validate_against_base(
+                            documents,
+                            baseline,
+                            approvals,
+                            current_scope=current_scope,
+                            baseline_scope=baseline_scope,
+                            current_protected_approvals=current_approvals,
+                        )
+                    )
+                    base_state = "VERIFIED"
     else:
+        if ci_mode:
+            errors.append("CI requires an immutable trusted base revision")
         errors.extend(_untrusted_promotions(documents))
     if errors:
         print("\n".join(sorted(set(errors))))

@@ -9,8 +9,11 @@ permissions:
   contents: read
 
 env:
-  # Empty on push. PRs verify ID history against the immutable event base object.
-  THREAT_CATALOG_BASE_REF: ${{ github.event.pull_request.base.sha }}
+  # PRs use the protected base tree; pushes use the exact pre-push tree.
+  THREAT_CATALOG_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+  MYCOGNI_GOVERNANCE_CI: "1"
+  # GitHub uses the all-zero before SHA only for creation of the first ref.
+  MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP: ${{ github.event_name == 'push' && github.event.before == '0000000000000000000000000000000000000000' && '1' || '0' }}
 
 concurrency:
   group: ci-${{ github.ref }}

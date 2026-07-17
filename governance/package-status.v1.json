@@ -1,6 +1,48 @@
 {
-  "schema_version": 1,
-  "registry_version": "1.1.0",
+  "schema_version": 2,
+  "registry_version": "2.0.0",
+  "milestone_definitions": [
+    {
+      "id": "MDEF-M0",
+      "milestone": "M0",
+      "packages": [
+        "CI-001",
+        "CT-001",
+        "DB-001",
+        "GOV-001",
+        "NET-001",
+        "PF-001",
+        "PF-002",
+        "PF-BOUNDARY",
+        "PF-CORE",
+        "SIM-001",
+        "SPIKE-AUTH",
+        "SPIKE-BACKUP",
+        "SPIKE-BROWSER",
+        "SPIKE-EGRESS",
+        "SPIKE-KEY",
+        "SPIKE-RUNNER",
+        "SQLITE-DUR-001",
+        "TEL-001",
+        "THREAT-CATALOG-001",
+        "UX-001"
+      ],
+      "gates": [
+        {
+          "id": "M0-ALL-PACKAGES-COMPLETE",
+          "evidence_ids": ["EVD-M0-GATE-ALL-PACKAGES-COMPLETE"]
+        },
+        {
+          "id": "M0-ALL-SPIKES-DISPOSITIONED",
+          "evidence_ids": ["EVD-M0-GATE-ALL-SPIKES-DISPOSITIONED"]
+        },
+        {
+          "id": "M0-SIMULATOR-ONLY-EXTERNAL-IO",
+          "evidence_ids": ["EVD-M0-GATE-SIMULATOR-ONLY-EXTERNAL-IO"]
+        }
+      ]
+    }
+  ],
   "milestone_attestations": [],
   "packages": [
     {

@@ -24,6 +24,13 @@ def _blob_digest(blob: bytes | None) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _node_digest(blob: bytes | None, function_name: str) -> str:
+    assert blob is not None
+    source = governance_guard._function_source_bytes(blob, function_name)
+    assert source is not None
+    return hashlib.sha256(source).hexdigest()
+
+
 def test_machine_governance_and_report_are_current() -> None:
     documents = _documents()
     errors, report = governance_guard.validate_governance(documents, governance_guard.ROOT)
@@ -50,12 +57,16 @@ def test_exact_acceptance_nodes_execute_runtime_criterion_witnesses() -> None:
         )
 
 
-@pytest.mark.parametrize("name", ["assert_true", "nested_uncalled"])
+@pytest.mark.parametrize(
+    "name", ["assert_true", "assigned_true", "nested_uncalled", "tautological_len"]
+)
 def test_constant_or_uncalled_nested_assert_is_not_acceptance(name: str) -> None:
     relative = f"tests/ci/fixtures/governance_runtime/{name}.py"
     evidence = {
         "ref": f"{relative}::probe",
-        "content_sha256": governance_guard._sha256(governance_guard.ROOT / relative),
+        "content_sha256": governance_guard._function_sha256(
+            governance_guard.ROOT / relative, "probe"
+        ),
     }
     assert not governance_guard._acceptance_node(governance_guard.ROOT, evidence, ["ACC-PROBE-001"])
 
@@ -119,32 +130,51 @@ def test_planned_threat_and_vfy_cannot_enter_accepted_trace() -> None:
     assert any("planned VFY cannot count as accepted" in error for error in errors)
 
 
-def test_verified_rejects_nonexistent_and_partial_milestone_attestation() -> None:
+def test_verified_rejects_nonexistent_and_caller_selected_milestone_scope() -> None:
     documents = _documents()
     next(item for item in documents["status"]["packages"] if item["id"] == "CT-001")["status"] = (
         "VERIFIED"
     )
     assert any(
-        "VERIFIED lacks one structured milestone attestation" in error
+        "VERIFIED lacks one authenticated milestone attestation" in error
         for error in _errors(documents)
     )
     documents["status"]["milestone_attestations"] = [
         {
             "id": "MATT-M0-001",
-            "milestone": "M0",
+            "definition_id": "MDEF-M0",
             "packages": ["CT-001"],
-            "dependency_packages": [],
-            "gates": ["M0_ALL_PACKAGES_COMPLETE"],
-            "gate_evidence_ids": ["EVD-NONEXISTENT"],
+            "package_attestation_ids": ["ATT-CT-FORGED"],
+            "gates": [
+                {
+                    "id": "M0-ALL-PACKAGES-COMPLETE",
+                    "evidence_ids": ["EVD-NONEXISTENT"],
+                }
+            ],
+            "reviewer": {
+                "id": "self-asserted",
+                "role": "INDEPENDENT_ADVERSARIAL_REVIEWER",
+            },
             "reviewed_commit": "0" * 40,
             "review_record": {"path": "missing", "sha256": "0" * 64},
             "disposition": "ACCEPT",
+            "findings": [],
+            "residuals": ["not authenticated"],
         }
     ]
     errors = _errors(documents)
-    assert any("partial dependency coverage" in error for error in errors)
-    assert any("partial gate coverage" in error for error in errors)
-    assert any("partial or nonexistent" in error for error in errors)
+    assert any("package set does not equal canonical definition" in error for error in errors)
+    assert any("gates do not equal canonical gate evidence" in error for error in errors)
+    assert any("canonical gate evidence is missing" in error for error in errors)
+
+
+def test_milestone_verified_trace_cannot_bypass_package_and_status_path() -> None:
+    documents = _documents()
+    record = documents["manifest"]["records"][0]
+    record["state"] = "MILESTONE_VERIFIED"
+    errors = _errors(documents)
+    assert any("MILESTONE_VERIFIED requires canonical VERIFIED status" in error for error in errors)
+    assert any("missing exact ACCEPT attestation" in error for error in errors)
 
 
 def test_new_attestation_and_reviewer_are_not_self_authorized_by_version_bump() -> None:
@@ -161,6 +191,48 @@ def test_new_attestation_and_reviewer_are_not_self_authorized_by_version_bump() 
     assert "new attestation lacks allowlisted protected approval: ATT-FORGED-001" in errors
 
 
+def test_protected_approval_binds_content_and_explicit_semantic_adequacy() -> None:
+    documents = _documents()
+    subject = {
+        "id": "ATT-CT-001",
+        "reviewer": {"id": "reviewer-1"},
+        "acceptance_criteria": ["ACC-CT-001"],
+        "evidence_ids": ["EVD-CT-001"],
+    }
+    criteria = {item["id"]: item for item in documents["acceptance"]["criteria"]}
+    evidence = {item["id"]: item for item in documents["acceptance"]["evidence"]}
+    approval = {
+        "subject_type": "PACKAGE_ATTESTATION",
+        "subject_id": subject["id"],
+        "reviewer_id": "reviewer-1",
+        "subject_sha256": governance_guard.threat_guard._canonical_json_hash(subject),
+        "criteria_sha256": governance_guard._selected_content_hash(
+            criteria, subject["acceptance_criteria"]
+        ),
+        "evidence_sha256": governance_guard._selected_content_hash(
+            evidence, subject["evidence_ids"]
+        ),
+        "semantic_adequacy": "APPROVED",
+    }
+    assert governance_guard._protected_approval_authorizes(
+        approval,
+        subject_type="PACKAGE_ATTESTATION",
+        subject=subject,
+        reviewer_id="reviewer-1",
+        criteria_sha256=approval["criteria_sha256"],
+        evidence_sha256=approval["evidence_sha256"],
+    )
+    approval["semantic_adequacy"] = "STRUCTURAL_ONLY"
+    assert not governance_guard._protected_approval_authorizes(
+        approval,
+        subject_type="PACKAGE_ATTESTATION",
+        subject=subject,
+        reviewer_id="reviewer-1",
+        criteria_sha256=approval["criteria_sha256"],
+        evidence_sha256=approval["evidence_sha256"],
+    )
+
+
 def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> None:
     documents = _documents()
     head = subprocess.run(
@@ -173,6 +245,7 @@ def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> 
     review_path = "governance/README.md"
     evidence = documents["acceptance"]["evidence"][0]
     evidence_path = str(evidence["ref"]).split("::", 1)[0]
+    evidence_function = str(evidence["ref"]).split("::", 1)[1]
     head_blobs = {
         path: governance_guard._git_file_bytes(governance_guard.ROOT, head, path)
         for path in (review_path, evidence_path)
@@ -206,7 +279,7 @@ def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> 
     record = documents["manifest"]["records"][0]
     record["state"] = "INDEPENDENTLY_ACCEPTED"
     record["attestation_id"] = "ATT-CT-FORGED"
-    evidence["content_sha256"] = _blob_digest(reviewed_blobs[evidence_path])
+    evidence["content_sha256"] = _node_digest(reviewed_blobs[evidence_path], evidence_function)
     documents["attestations"]["attestations"] = [
         {
             "id": "ATT-CT-FORGED",
@@ -236,7 +309,7 @@ def test_accept_attestation_digests_are_read_from_reviewed_commit_not_head() -> 
     documents["attestations"]["attestations"][0]["review_record"]["sha256"] = _blob_digest(
         head_blobs[review_path]
     )
-    evidence["content_sha256"] = _blob_digest(head_blobs[evidence_path])
+    evidence["content_sha256"] = _node_digest(head_blobs[evidence_path], evidence_function)
     errors = _errors(documents)
     assert any("review record digest mismatch" in error for error in errors)
     assert any("evidence digest is not bound to reviewed commit" in error for error in errors)
@@ -252,6 +325,76 @@ def test_same_version_mutation_and_version_regression_fail_base() -> None:
     assert "manifest: version regressed across trusted base" in errors
 
 
+def test_version_bump_cannot_shrink_or_rebind_governance_scope() -> None:
+    baseline = _documents()
+    current = copy.deepcopy(baseline)
+    current["status"]["registry_version"] = "3.0.0"
+    current["manifest"]["manifest_version"] = "3.0.0"
+    current["acceptance"]["registry_version"] = "3.0.0"
+    current["status"]["packages"] = [
+        item for item in current["status"]["packages"] if item["id"] != "SIM-001"
+    ]
+    current["manifest"]["records"] = current["manifest"]["records"][1:]
+    current["acceptance"]["criteria"] = current["acceptance"]["criteria"][1:]
+    current["acceptance"]["evidence"] = current["acceptance"]["evidence"][1:]
+    errors = governance_guard.validate_against_base(current, baseline, {})
+    assert "trusted package status disappeared: SIM-001" in errors
+    assert "trusted trace record disappeared: TRC-CT-001" in errors
+    assert "trusted criterion disappeared: ACC-CT-001" in errors
+    assert "trusted evidence disappeared: EVD-CT-001" in errors
+
+    current = copy.deepcopy(baseline)
+    current["manifest"]["manifest_version"] = "3.0.0"
+    current["manifest"]["records"][0]["package"] = "TEL-001"
+    assert "trusted trace record rebound: TRC-CT-001" in governance_guard.validate_against_base(
+        current, baseline, {}
+    )
+
+
+def test_coordinated_markdown_scope_deletion_and_protected_approval_loss_fail() -> None:
+    documents = _documents()
+    current_scope = {
+        "work package": {"CT-001": "row"},
+        "completion matrix": {"CT-001": "IN_PROGRESS"},
+    }
+    baseline_scope = {
+        "work package": {"CT-001": "row", "SIM-001": "row2"},
+        "completion matrix": {"CT-001": "IN_PROGRESS", "SIM-001": "IN_PROGRESS"},
+    }
+    approvals = {"ATT-CT-001": {"subject_id": "ATT-CT-001"}}
+    errors = governance_guard.validate_against_base(
+        documents,
+        documents,
+        approvals,
+        current_scope=current_scope,
+        baseline_scope=baseline_scope,
+        current_protected_approvals={},
+    )
+    assert "trusted work package disappeared: SIM-001" in errors
+    assert "trusted completion matrix disappeared: SIM-001" in errors
+    assert "trusted protected approval disappeared: ATT-CT-001" in errors
+
+
+def test_complete_to_verified_requires_protected_milestone_authorization() -> None:
+    baseline = _documents()
+    current = copy.deepcopy(baseline)
+    next(item for item in baseline["status"]["packages"] if item["id"] == "CT-001")["status"] = (
+        "COMPLETE"
+    )
+    next(item for item in current["status"]["packages"] if item["id"] == "CT-001")["status"] = (
+        "VERIFIED"
+    )
+    current["status"]["registry_version"] = "3.0.0"
+    current["manifest"]["records"][0]["attestation_id"] = "ATT-CT-001"
+    current["status"]["milestone_attestations"] = [
+        {"id": "MATT-M0-001", "packages": ["CT-001"], "definition_id": "MDEF-M0"}
+    ]
+    errors = governance_guard.validate_against_base(
+        current, baseline, {"ATT-CT-001": {"subject_id": "ATT-CT-001"}}
+    )
+    assert "CT-001: VERIFIED promotion lacks protected milestone authorization" in errors
+
+
 def test_untrusted_mode_rejects_any_attestation_or_promotion() -> None:
     documents = _documents()
     documents["attestations"]["attestations"].append({"id": "ATT-FORGED"})
@@ -265,6 +408,32 @@ def test_untrusted_mode_rejects_any_attestation_or_promotion() -> None:
         "trusted base is required for package promotion"
         in governance_guard._untrusted_promotions(documents)
     )
+
+
+def test_ci_missing_or_implicit_zero_base_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("MYCOGNI_GOVERNANCE_CI", "1")
+    monkeypatch.delenv("THREAT_CATALOG_BASE_REF", raising=False)
+    monkeypatch.delenv("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", raising=False)
+    assert governance_guard.main([]) == 1
+    assert "CI requires an immutable trusted base revision" in capsys.readouterr().out
+
+    monkeypatch.setenv("THREAT_CATALOG_BASE_REF", governance_guard.ZERO_GIT_OBJECT)
+    assert governance_guard.main([]) == 1
+    assert (
+        "zero trusted base is allowed only for explicit first bootstrap" in capsys.readouterr().out
+    )
+
+
+def test_explicit_first_bootstrap_still_runs_untrusted_promotion_gate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("MYCOGNI_GOVERNANCE_CI", "1")
+    monkeypatch.setenv("THREAT_CATALOG_BASE_REF", governance_guard.ZERO_GIT_OBJECT)
+    monkeypatch.setenv("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "1")
+    assert governance_guard.main([]) == 0
+    assert "trusted-base state: BOOTSTRAP" in capsys.readouterr().out
 
 
 def test_unused_criteria_evidence_and_attestation_fail() -> None:
@@ -285,6 +454,9 @@ def test_unused_criteria_evidence_and_attestation_fail() -> None:
 def test_registry_semver_is_unconditional() -> None:
     documents = _documents()
     documents["acceptance"]["registry_version"] = "latest"
+    assert any("registry version must be semantic" in error for error in _errors(documents))
+    documents = _documents()
+    documents["acceptance"]["registry_version"] = "01.2.3"
     assert any("registry version must be semantic" in error for error in _errors(documents))
 
 

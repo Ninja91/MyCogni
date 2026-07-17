@@ -25,7 +25,8 @@ REPORT_PATH = REPOSITORY_ROOT / "docs" / "v1" / "THREAT_CATALOG_REPORT.md"
 
 THREAT_ID = re.compile(r"^THR-[A-Z0-9]+-[0-9]{3}$")
 TEST_ID = re.compile(r"^VFY-[A-Z0-9]+-[0-9]{3}$")
-SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+ZERO_GIT_OBJECT = "0" * 40
 SOURCE_ANCHOR = re.compile(
     r"^(?P<path>[^#]+)#(?P<kind>threat|requirement|work-package):(?P<value>[^#]+)$"
 )
@@ -76,9 +77,9 @@ TEST_KEYS = {"id", "purpose", "implementation", "status", "threats"}
 ALLOCATION_KEYS = {"id", "kind", "identity", "state", "introduced_in"}
 EVIDENCE_KEYS = {"type", "ref"}
 SCHEMA_HASHES = {
-    "threat-catalog.schema.json": "7290e715730f1750a85fdc68f0ca15aa4b819e5c2c467b475651ac22d182471c",
-    "verification-tests.schema.json": "48ba84af58b20bd3a4fc5d9de8e7fd4594fedaee24728386f4d41723a164059e",
-    "id-history.schema.json": "102a864b58a6e3feae92b8fa0f193cf9449737bc07ea2ff7786ef0449c6010cd",
+    "threat-catalog.schema.json": "bd924c048f1ab1c74ff1918f56f8783c5075403c866a7b304495a936cbb6ebc7",
+    "verification-tests.schema.json": "ee4b031120ffbd637c0a6c7c51ff8a37d1181b4c48f4484679708347a28c4e78",
+    "id-history.schema.json": "b80fb9d42bdc0b239c6f776537f209e13a1dae8c5db0f7e968f9892a435e5ee7",
 }
 
 
@@ -450,12 +451,12 @@ def validate_history_against_baseline(
     ):
         return ["baseline: trusted ledger does not have exact v1 allocation rows"]
     current_rows = {
-        item.get("id"): item
+        item["id"]: item
         for item in current.get("allocations", [])
         if isinstance(item, dict) and isinstance(item.get("id"), str)
     }
     baseline_rows = {
-        item.get("id"): item
+        item["id"]: item
         for item in baseline_allocations
         if isinstance(item, dict) and isinstance(item.get("id"), str)
     }
@@ -797,7 +798,12 @@ def main() -> int:
     baseline_revision = os.environ.get("THREAT_CATALOG_BASE_REF", "").strip()
     baseline_checked = False
     baseline_bootstrap = False
-    if baseline_revision:
+    if baseline_revision == ZERO_GIT_OBJECT:
+        if os.environ.get("MYCOGNI_GOVERNANCE_FIRST_BOOTSTRAP", "") != "1":
+            errors.append("zero trusted baseline is allowed only for explicit first bootstrap")
+        else:
+            baseline_bootstrap = True
+    elif baseline_revision:
         try:
             baseline = load_history_from_git_base(REPOSITORY_ROOT, baseline_revision)
         except ValueError as error:
@@ -808,6 +814,8 @@ def main() -> int:
             else:
                 errors.extend(validate_history_against_baseline(history, baseline))
                 baseline_checked = True
+    elif os.environ.get("MYCOGNI_GOVERNANCE_CI", "") == "1":
+        errors.append("CI requires an immutable trusted baseline revision")
     if not errors:
         errors.extend(_execute_pytest_nodes(registry, REPOSITORY_ROOT))
     if errors:
