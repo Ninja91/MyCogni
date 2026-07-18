@@ -132,6 +132,7 @@ These do not block M0 foundation work, but they block their named milestones:
 | Email credential/draft policy | M3/M4 mail path | maintainer + security reviewer | draft-only default until decided |
 | First 2–5 broker capabilities | M3 selection/M4 beta | maintainer + product/policy team | must be sourced; no invented list |
 | Qualified crypto/connector/U.S. policy reviewers | M4/M5 | maintainer/orchestrator | availability not yet confirmed |
+| External review access | v0.x to v1 | maintainer/orchestrator | no model-provider trusted-access enrollment required; pre-review public artifacts remain synthetic-only and qualified human gates still precede live canary/v1 |
 | MyCogni name/trademark/confusion disposition | stable V1 | maintainer + qualified counsel if needed | unresolved |
 
 ## Next executable slice

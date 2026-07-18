@@ -13,6 +13,22 @@ The maintainer requested Luna implementation agents and Sol adversarial reviewer
 
 This limitation does not weaken the requirement for qualified human review. Agent reviews are design input, never legal approval, security certification or the second reviewer required by `GOV-01`.
 
+### Reviewer-access boundary
+
+No contributor or maintainer is required to enroll in a model-provider trusted-access
+program. If an automated review prompt is filtered or unavailable, the result is
+recorded as **no verdict**; it is never treated as acceptance, rejection or a reason to
+weaken the work package. The orchestrator may continue with independent backend,
+product, architecture and defensive-correctness reviews plus deterministic local
+evidence.
+
+Public `v0.x` artifacts produced before qualified external review remain visibly
+developer-preview and synthetic-only: no live broker observation, submission or
+automatic-action claim. The `v0.x` to `v1` transition requires the qualified human
+review gates already defined by the implementation plan. Capability-specific
+policy/legal and connector review still occurs before any live canary; model access
+or an AI disposition cannot substitute for either human gate.
+
 ## Maximum-three-worktree layout
 
 | Worktree | Primary lane | Owns | Must not own |

@@ -17,6 +17,22 @@ Stable V1 also requires:
 
 Cloud-small is not part of stable V1. A shared domain contract does not establish cloud deployment support.
 
+### Release-channel boundary
+
+- `v0.x` may publish reproducible architecture, simulator, synthetic UI, local
+  contracts and explicitly non-production spikes without any model-provider
+  trusted-access enrollment.
+- Until qualified external review is complete, those artifacts remain
+  developer-preview and synthetic-only; they do not observe or submit to a live
+  broker and make no security-certification claim.
+- The `v0.x` to `v1` transition requires the shared auth/key/backup/runner/gateway/
+  journal human review and every capability-specific policy/legal and second
+  connector review named below. AI review availability does not satisfy or block
+  those human gates.
+- A filtered automated review is a recorded non-verdict. Implementation may continue
+  behind the same fail-closed release boundary using deterministic tests and other
+  independent review hats.
+
 ## 2. Honest schedule correction
 
 The previous roadmap placed controlled automation in weeks 11–14 and stable V1 in weeks 15–18 while also requiring a twelve-week recurring beta. Those statements cannot both be true. Preview evidence cannot validate automatic disclosure, unknown outcomes, verification or resurfacing that does not yet exist.
