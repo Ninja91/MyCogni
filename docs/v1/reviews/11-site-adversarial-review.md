@@ -64,3 +64,12 @@ Commit `86c7f17` corrected the rendered status, added a fail-closed regression a
 reproduced nine site-guard tests on Python 3.12 and 3.13. This closes the previously
 open browser-backed keyboard/responsive inspection item, but not screen-reader,
 complete WCAG, remote-link or published-Pages evidence.
+
+## Publication follow-up
+
+GitHub reports Pages as public, HTTPS-enforced and workflow-built at
+`https://ninja91.github.io/MyCogni/`. Workflow run `29456011480` completed
+successfully for the initial walkthrough on `main`, and a direct HTTPS request returned
+HTTP/2 200. Publication therefore exists, but the current implementation branch and
+its later truth corrections have not yet been merged to `main` or redeployed. External
+content-link availability and complete screen-reader/WCAG evidence remain open.
