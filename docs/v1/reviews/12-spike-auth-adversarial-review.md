@@ -1,15 +1,16 @@
 # SPIKE-AUTH adversarial review
 
 Initial target: integration commit `1931d20`.
+First remediation target: integration commit `ff428c1`.
 
-Current verdict: **REJECT** — zero P0, four P1 findings plus operator/accessibility
-P2s from the product/operator review. Security/recovery and backend/concurrency review
-remain required after remediation. SPIKE-AUTH stays `IN_PROGRESS` and does not promote
+Current verdict: **REJECT** — zero P0; three open P1 findings plus bounded P2 work
+after the first remediation. SPIKE-AUTH stays `IN_PROGRESS` and does not promote
 `AUTH-001`, `AUTH-002`, `AUTH-003` or `VFY-AUTH-001`.
 
-The security/recovery agent prompt was twice stopped by an automated content filter
-before returning a code verdict. That is neither acceptance nor a finding; the review
-must be rerun with an available independent lane.
+Multiple independent correctness/recovery review attempts were stopped by an automated
+content filter before returning a code verdict. That is neither acceptance nor a
+finding; this required hat must be rerun on the next remediation with an available
+independent lane.
 
 ## Initial findings
 
@@ -31,6 +32,31 @@ added these findings:
 | P2 | `issue_step_up` indexed the purpose map before validating public purpose/scope types, leaking `KeyError` for malformed input. | Validate public domain types first and return a deliberate validation/typed result. |
 | P2 | The digest-retention test projected only digest fields, so it would remain green if raw credentials were later retained elsewhere. | Structurally inspect the complete store graph or constrain storage representation and prove no raw credential/sensitive value is retained. |
 
+## First remediation disposition
+
+Commit `ff428c1` closed the initial sibling-recovery, short recovery lifetime,
+identifier-only authority, canonical recovery binding, mutable-alias, malformed-input
+and structural-retention findings. Forty integrated auth/domain tests passed on the
+locked Python 3.12 runtime; the implementation lane also reproduced 952 full tests and
+all repository guards on both locked runtimes. Those results establish implementation
+evidence, not independent acceptance.
+
+The independent product/operator and backend/concurrency re-reviews both rejected the
+remediation:
+
+| Severity | Finding | Required disposition |
+| --- | --- | --- |
+| P1 | Privileged methods accepted a caller-constructed `AuthorityGrant` whose random evidence ID had never been produced by a successful step-up. A valid session plus public bindings could renew recovery, rebootstrap or globally revoke. | Persist immutable provenance only after successful step-up consumption; require exact binding equality and one-use/concurrent use; reject random, unconsumed, expired, exhausted, revoked and crash-consumed evidence. |
+| P1 | Initial bootstrap exchange returned recovery only in process memory. The operator-channel transcript later recovered by reading `exchange.recovery` directly, so the demonstrated operator never received the credential needed for recovery. | Hand initial recovery through the reviewed all-or-nothing operator channel, support interrupted redisplay, and make the retained transcript feed recovery only from that completed handoff. |
+| P1 | The one reprovision root was consumed by the first recovery-expiry cycle and never rotated. A second long idle/expiry period had no supported recovery route. | Rotate and hand off a fresh reprovision capability, or define an equally explicit locally authorized re-enrollment contract; prove two consecutive expiry/reprovision cycles and warn before consuming the current offline route. |
+| P2 | Root setup used set equality and accepted an extra duplicate purpose/handle despite claiming exactly one root per purpose. | Require exactly three records with unique purposes and handles before mutating installation state. |
+| P2 | Used-grant replay identifiers accumulated forever and were absent from garbage collection/count evidence. | Replace the append-only set with expiry-bearing provenance/tombstone state and collect it only after its replay horizon. |
+| P2 | Garbage collection changed an expired recovery denial into unknown proof while operator guidance still suggested retrying. | Make unknown/retired-code guidance safe for both cases, or retain a bounded non-secret tombstone; expose remaining attempts only when genuinely known. |
+
+The backend reviewer independently reproduced the grant-provenance bypass on Python
+3.12 and 3.13. The product reviewer reproduced the missing initial handoff and repeated
+reprovision dead end. No P1 is dispositioned by the green implementation suite.
+
 ## Positive evidence retained
 
 The review found the redacted credential rendering, fixed-size digest comparison,
@@ -40,4 +66,6 @@ product-review checks passed on Python 3.12 and 3.13, but they did not make the 
 semantic failures safe.
 
 Every P1 must be fixed and independently re-reviewed by the required three hats before
-the spike can receive code-level acceptance.
+the spike can receive code-level acceptance. Durable restart, browser, real terminal,
+host-secret storage and multi-process behavior remain explicit nonclaims even after a
+future source-level acceptance.
