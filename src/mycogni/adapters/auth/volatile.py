@@ -18,6 +18,7 @@ from mycogni.domain.auth import (
     AuthPurpose,
     AuthScope,
     BootstrapDecision,
+    BootstrapIssue,
     BootstrapRecord,
     GrantProvenanceRecord,
     OpaqueCredential,
@@ -256,6 +257,45 @@ class VolatileAuthDecisionStore:
             self._bootstraps[stored.handle] = stored
             return AuthOutcome.allowed(replace(stored))
 
+    def create_reprovision_bootstrap(
+        self,
+        reprovision: OpaqueCredential,
+        reprovision_digest: SecretDigest,
+        issue: BootstrapIssue,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        """Resolve the canonical reprovision binding from credential proof alone."""
+        with self._lock:
+            root = self._roots.get(reprovision.handle)
+            if root is None or not self._matches(root.digest, reprovision_digest):
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if root.purpose is not RootPurpose.REPROVISION:
+                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+            if root.consumed:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            actor = self._actors.get(root.actor_id)
+            if actor is None:
+                return AuthOutcome.denied(AuthDenial.WRONG_ACTOR)
+            clock_denial = self._observe(actor.actor_id, now)
+            if clock_denial is not None:
+                return AuthOutcome.denied(clock_denial)
+            if not actor.initialized:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            self._invalidate_bootstraps(actor.actor_id, now)
+            stored = BootstrapRecord(
+                handle=issue.handle,
+                actor_id=root.actor_id,
+                represented_profile_id=root.represented_profile_id,
+                digest=issue.digest,
+                not_before_utc=issue.not_before_utc,
+                expires_at_utc=issue.expires_at_utc,
+                attempts_remaining=issue.attempts,
+                root_capability_id=root.handle,
+                root_purpose=RootPurpose.REPROVISION,
+            )
+            self._bootstraps[stored.handle] = stored
+            return AuthOutcome.allowed(replace(stored))
+
     def cancel_bootstrap(self, handle: OpaqueId, now: datetime) -> None:
         with self._lock:
             record = self._bootstraps.get(handle)
@@ -295,6 +335,7 @@ class VolatileAuthDecisionStore:
         session: SessionRecord,
         recovery: RecoveryRecord,
         replacement_reprovision: RootCapabilityIssue,
+        allowed_root_purposes: frozenset[RootPurpose | None],
     ) -> AuthOutcome[BootstrapDecision]:
         with self._lock:
             record = self._bootstraps.get(handle)
@@ -318,6 +359,8 @@ class VolatileAuthDecisionStore:
                 return AuthOutcome.denied(time_denial)
             if not self._matches(record.digest, presented_digest):
                 return AuthOutcome.denied(self._wrong_proof(record, now))
+            if record.root_purpose not in allowed_root_purposes:
+                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
             actor = self._actors[record.actor_id]
             replacement_root_record: RootCapabilityRecord | None = None
             if record.root_capability_id is not None:
@@ -733,11 +776,13 @@ class VolatileAuthDecisionStore:
 
     def validate_grant(
         self,
-        grant: AuthorityGrant,
+        grant: object,
         session: OpaqueCredential,
         session_digest: SecretDigest,
         now: datetime,
     ) -> AuthOutcome[AuthorityGrant]:
+        if type(grant) is not AuthorityGrant:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
         with self._lock:
             return self._authorize_grant_locked(
                 session,

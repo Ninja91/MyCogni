@@ -18,12 +18,14 @@ from mycogni.domain.auth import (
     AuthScope,
     BootstrapDecision,
     BootstrapExchange,
+    BootstrapIssue,
     BootstrapRecord,
     OpaqueCredential,
     RecoveryIssue,
     RecoveryRecord,
     RootCapability,
     RootCapabilityIssue,
+    RootPurpose,
     SecretDigest,
     SessionIssue,
     SessionRecord,
@@ -64,6 +66,14 @@ class AuthDecisionStore(Protocol):
         now: datetime,
     ) -> AuthOutcome[BootstrapRecord]: ...
 
+    def create_reprovision_bootstrap(
+        self,
+        reprovision: OpaqueCredential,
+        reprovision_digest: SecretDigest,
+        issue: BootstrapIssue,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]: ...
+
     def cancel_bootstrap(self, handle: OpaqueId, now: datetime) -> None: ...
 
     def exchange_bootstrap(
@@ -74,6 +84,7 @@ class AuthDecisionStore(Protocol):
         session: SessionRecord,
         recovery: RecoveryRecord,
         replacement_reprovision: RootCapabilityIssue,
+        allowed_root_purposes: frozenset[RootPurpose | None],
     ) -> AuthOutcome[BootstrapDecision]: ...
 
     def authenticate_session(
@@ -149,7 +160,7 @@ class AuthDecisionStore(Protocol):
 
     def validate_grant(
         self,
-        grant: AuthorityGrant,
+        grant: object,
         session: OpaqueCredential,
         session_digest: SecretDigest,
         now: datetime,
@@ -239,12 +250,56 @@ class AuthService:
             return AuthOutcome.denied(result.denial)
         return AuthOutcome.allowed(credential)
 
+    def begin_reprovision(self, reprovision: OpaqueCredential) -> AuthOutcome[OpaqueCredential]:
+        """Resolve a purpose-fixed reprovision code without caller authority bindings."""
+        if type(reprovision) is not OpaqueCredential:
+            return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
+        now = self._now()
+        credential, digest = self._credential()
+        not_before, expires = self._window(now, self._policy.bootstrap_ttl_seconds)
+        result = self._store.create_reprovision_bootstrap(
+            reprovision,
+            self._digest(reprovision),
+            BootstrapIssue(
+                handle=credential.handle,
+                digest=digest,
+                not_before_utc=not_before,
+                expires_at_utc=expires,
+                attempts=self._policy.max_attempts,
+            ),
+            now,
+        )
+        if result.denial is not None:
+            return AuthOutcome.denied(result.denial)
+        return AuthOutcome.allowed(credential)
+
     def cancel_bootstrap(self, handle: OpaqueId) -> None:
         """Burn an undisclosed/partially disclosed code while preserving root retry."""
         self._store.cancel_bootstrap(handle, self._now())
 
     def exchange_bootstrap(self, bootstrap: OpaqueCredential) -> AuthOutcome[BootstrapExchange]:
         """Consume bootstrap once and atomically issue opaque session/recovery state."""
+        return self._exchange_bootstrap(
+            bootstrap,
+            frozenset({None, RootPurpose.INITIAL_BOOTSTRAP, RootPurpose.REPROVISION}),
+        )
+
+    def exchange_operator_bootstrap(
+        self, bootstrap: OpaqueCredential, *, reprovision: bool
+    ) -> AuthOutcome[BootstrapExchange]:
+        """Consume only the route selected by the reviewed operator ceremony."""
+        allowed: frozenset[RootPurpose | None]
+        if reprovision:
+            allowed = frozenset({RootPurpose.REPROVISION})
+        else:
+            allowed = frozenset({None, RootPurpose.INITIAL_BOOTSTRAP})
+        return self._exchange_bootstrap(bootstrap, allowed)
+
+    def _exchange_bootstrap(
+        self,
+        bootstrap: OpaqueCredential,
+        allowed_root_purposes: frozenset[RootPurpose | None],
+    ) -> AuthOutcome[BootstrapExchange]:
         now = self._now()
         session, session_digest = self._credential()
         recovery, recovery_digest = self._credential()
@@ -279,6 +334,7 @@ class AuthService:
                 handle=replacement_root.handle,
                 digest=replacement_root_digest,
             ),
+            allowed_root_purposes,
         )
         if result.denial is not None:
             return AuthOutcome.denied(result.denial)
@@ -506,8 +562,10 @@ class AuthService:
         )
 
     def validate_grant(
-        self, grant: AuthorityGrant, session: OpaqueCredential
+        self, grant: object, session: OpaqueCredential
     ) -> AuthOutcome[AuthorityGrant]:
+        if type(grant) is not AuthorityGrant:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
         return self._store.validate_grant(grant, session, self._digest(session), self._now())
 
     def garbage_collect(self, retention_seconds: int) -> int:

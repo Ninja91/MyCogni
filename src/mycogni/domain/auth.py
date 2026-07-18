@@ -377,6 +377,26 @@ class RootCapabilityIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class BootstrapIssue:
+    """Unbound bootstrap material; the store supplies every authority binding."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+    not_before_utc: datetime
+    expires_at_utc: datetime
+    attempts: int
+
+    def __post_init__(self) -> None:
+        if type(self.handle) is not OpaqueId or type(self.digest) is not SecretDigest:
+            raise TypeError("bootstrap issue requires an opaque handle and digest")
+        require_utc(self.not_before_utc, "bootstrap issue not_before_utc")
+        require_utc(self.expires_at_utc, "bootstrap issue expires_at_utc")
+        if self.expires_at_utc <= self.not_before_utc:
+            raise ValueError("bootstrap issue expiry must follow not-before")
+        _validate_attempts(self.attempts)
+
+
+@dataclass(frozen=True, slots=True)
 class RootCapabilityBinding:
     """Non-secret canonical binding returned after replacement root registration."""
 

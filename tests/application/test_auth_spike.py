@@ -51,7 +51,10 @@ from mycogni.domain.auth import (
 )
 from mycogni.entrypoints.auth_spike import (
     begin_bootstrap_on_tty,
+    begin_reprovision_on_tty,
+    exchange_bootstrap_code,
     exchange_bootstrap_on_tty,
+    exchange_reprovision_on_tty,
     recover_headless_on_tty,
     redact_operator_transcript,
     redisplay_interrupted_bootstrap,
@@ -111,7 +114,7 @@ class PseudoTty:
         self.transcript.write(value)
 
     def confirm_secret_display(self, warning: str) -> bool:
-        assert warning.startswith("WARNING: SECRET DISPLAY")
+        assert warning.startswith(("WARNING: SECRET DISPLAY", "DESTRUCTIVE REPROVISION"))
         self.transcript.write(
             f"secret-display-confirmation: {'accepted' if self.confirmed else 'declined'}\n"
         )
@@ -657,54 +660,72 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
     clock.advance(service.policy.recovery_ttl_seconds)
     assert service.recover(recovery=renewed).denial is AuthDenial.EXPIRED
 
-    reprovision_tty = PseudoTty()
-    _allowed(begin_bootstrap_on_tty(service, root=roots.reprovision, operator_tty=reprovision_tty))
-    reprovision_code = _secret_code(reprovision_tty, "bootstrap-code (one-use, short-lived)")
+    reprovision_root_code = roots.reprovision.credential.operator_code()
+    del roots, exchange, recovered, renewed
+    reprovision_tty = PseudoTty(reprovision_root_code)
+    _allowed(begin_reprovision_on_tty(service, operator_tty=reprovision_tty))
+    reprovision_code = _secret_code(
+        reprovision_tty, "reprovision-bootstrap-code (one-use, short-lived)"
+    )
     declined = PseudoTty(confirmed=False)
     assert (
-        exchange_bootstrap_on_tty(
+        exchange_reprovision_on_tty(
             service, submitted_code=reprovision_code, operator_tty=declined
         ).denial
         is AuthDenial.OPERATOR_DECLINED
     )
+    assert "old session" in declined.getvalue()
+    assert "current offline reprovision route" in declined.getvalue()
+    assert "replacement route" in declined.getvalue()
+    assert "process loss" in declined.getvalue()
+    assert exchange_bootstrap_code(service, reprovision_code).denial is AuthDenial.WRONG_PURPOSE
     interrupted_handoff = PseudoTty(fail_secret_once=True)
     first_reprovision = _allowed(
-        exchange_bootstrap_on_tty(
+        exchange_reprovision_on_tty(
             service,
             submitted_code=reprovision_code,
             operator_tty=interrupted_handoff,
         )
     )
     assert first_reprovision.displayed is False
+    assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
+    assert first_reprovision.exchange.session.operator_code() not in interrupted_handoff.getvalue()
+    assert first_reprovision.exchange.recovery.operator_code() not in interrupted_handoff.getvalue()
+    assert first_reprovision.exchange.replacement_reprovision is not None
+    assert (
+        first_reprovision.exchange.replacement_reprovision.credential.operator_code()
+        not in interrupted_handoff.getvalue()
+    )
     handoff = PseudoTty()
     first_reprovision = redisplay_interrupted_bootstrap(first_reprovision, handoff)
     assert first_reprovision.displayed is True
-    replacement = first_reprovision.exchange
-    assert replacement.epoch == 3 and replacement.actor_id == actor
-    assert replacement.replacement_reprovision is not None
+    assert first_reprovision.exchange.epoch == 3
+    assert first_reprovision.exchange.actor_id == actor
+    assert first_reprovision.exchange.replacement_reprovision is not None
     replacement_root_code = _secret_code(handoff, "replacement-reprovision-code")
-    assert replacement_root_code == replacement.replacement_reprovision.credential.operator_code()
-    handed_off_reprovision = replace(
-        replacement.replacement_reprovision,
-        credential=OpaqueCredential.parse_operator_code(replacement_root_code),
+    replacement_recovery_code = _secret_code(handoff, "new-recovery-code")
+    assert first_reprovision.exchange.replacement_reprovision is not None
+    assert replacement_root_code == (
+        first_reprovision.exchange.replacement_reprovision.credential.operator_code()
     )
-    assert service.begin_bootstrap(roots.reprovision).denial is AuthDenial.STALE_EPOCH
+    del first_reprovision, handoff, reprovision_tty, interrupted_handoff
 
     clock.advance(service.policy.recovery_ttl_seconds)
-    assert service.recover(recovery=replacement.recovery).denial is AuthDenial.EXPIRED
-    next_tty = PseudoTty()
-    _allowed(
-        begin_bootstrap_on_tty(
-            service,
-            root=handed_off_reprovision,
-            operator_tty=next_tty,
-        )
+    assert (
+        service.recover(
+            recovery=OpaqueCredential.parse_operator_code(replacement_recovery_code)
+        ).denial
+        is AuthDenial.EXPIRED
     )
+    next_tty = PseudoTty(replacement_root_code)
+    _allowed(begin_reprovision_on_tty(service, operator_tty=next_tty))
     next_handoff = PseudoTty()
     second_reprovision = _allowed(
-        exchange_bootstrap_on_tty(
+        exchange_reprovision_on_tty(
             service,
-            submitted_code=_secret_code(next_tty, "bootstrap-code (one-use, short-lived)"),
+            submitted_code=_secret_code(
+                next_tty, "reprovision-bootstrap-code (one-use, short-lived)"
+            ),
             operator_tty=next_handoff,
         )
     ).exchange
@@ -715,7 +736,21 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
     )
     assert (
         second_reprovision.replacement_reprovision.credential.handle
-        != replacement.replacement_reprovision.credential.handle
+        != OpaqueCredential.parse_operator_code(replacement_root_code).handle
+    )
+
+
+@pytest.mark.parametrize("invalid_grant", [None, object(), "not-a-grant"])
+def test_validate_grant_rejects_untyped_inputs_without_dereference(invalid_grant: object) -> None:
+    service, clock, _source, store, setup = _service()
+    _actor, _profile, _roots, exchange = _exchange(service, setup)
+    assert (
+        service.validate_grant(invalid_grant, exchange.session).denial is AuthDenial.INVALID_PROOF
+    )
+    digest = SecretDigest(hashlib.sha256(exchange.session.secret.reveal()).digest())
+    assert (
+        store.validate_grant(invalid_grant, exchange.session, digest, clock.now()).denial
+        is AuthDenial.INVALID_PROOF
     )
 
 
@@ -947,6 +982,8 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
         ).denial
         is AuthDenial.OUTPUT_INTERRUPTED
     )
+    assert "bootstrap-restart" in interrupted.getvalue()
+    assert "never resubmit a consumed code" in interrupted.getvalue()
     healthy = PseudoTty()
     _allowed(begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=healthy))
     bootstrap_code = _secret_code(healthy, "bootstrap-code (one-use, short-lived)")
@@ -959,6 +996,8 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
         )
     )
     assert bootstrap_result.displayed is False
+    assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
+    assert "redisplay the in-process result" in interrupted_handoff.getvalue()
     handoff_tty = PseudoTty()
     bootstrap_result = redisplay_interrupted_bootstrap(bootstrap_result, handoff_tty)
     assert bootstrap_result.displayed is True
@@ -966,6 +1005,9 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     recovery_tty = PseudoTty(_secret_code(handoff_tty, "new-recovery-code"), fail_secret_once=True)
     recovery_result = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
     assert recovery_result.displayed is False
+    assert "do not resubmit the consumed code" in recovery_tty.getvalue()
+    assert recovery_result.exchange.session.operator_code() not in recovery_tty.getvalue()
+    assert recovery_result.exchange.recovery.operator_code() not in recovery_tty.getvalue()
     redisplay_tty = PseudoTty()
     redisplayed = redisplay_interrupted_recovery(recovery_result, redisplay_tty)
     assert redisplayed.displayed is True
@@ -973,7 +1015,7 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
 
 
 def test_executable_operator_review_harness_matches_retained_transcript() -> None:
-    service, _clock, _source, _store, setup = _service()
+    service, clock, _source, _store, setup = _service()
     actor, profile, roots = _provision(setup)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -1046,7 +1088,63 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         recover_headless_on_tty(service, operator_tty=non_tty)
         tty.write_public(non_tty.getvalue())
 
+        clock.advance(service.policy.recovery_ttl_seconds)
+        first_begin_tty = PseudoTty(roots.reprovision.credential.operator_code())
+        _allowed(begin_reprovision_on_tty(service, operator_tty=first_begin_tty))
+        tty.write_public(first_begin_tty.getvalue())
+        first_bootstrap_code = _secret_code(
+            first_begin_tty, "reprovision-bootstrap-code (one-use, short-lived)"
+        )
+        generic_tty = PseudoTty()
+        generic = exchange_bootstrap_on_tty(
+            service,
+            submitted_code=first_bootstrap_code,
+            operator_tty=generic_tty,
+        )
+        assert generic.denial is AuthDenial.WRONG_PURPOSE
+        tty.write_public(generic_tty.getvalue())
+        declined_tty = PseudoTty(confirmed=False)
+        declined = exchange_reprovision_on_tty(
+            service,
+            submitted_code=first_bootstrap_code,
+            operator_tty=declined_tty,
+        )
+        assert declined.denial is AuthDenial.OPERATOR_DECLINED
+        tty.write_public(declined_tty.getvalue())
+        first_handoff_tty = PseudoTty()
+        first_reprovision = _allowed(
+            exchange_reprovision_on_tty(
+                service,
+                submitted_code=first_bootstrap_code,
+                operator_tty=first_handoff_tty,
+            )
+        )
+        assert first_reprovision.displayed
+        tty.write_public(first_handoff_tty.getvalue())
+        first_reprovision_root_code = _secret_code(
+            first_handoff_tty, "replacement-reprovision-code"
+        )
+
+        clock.advance(service.policy.recovery_ttl_seconds)
+        second_begin_tty = PseudoTty(first_reprovision_root_code)
+        _allowed(begin_reprovision_on_tty(service, operator_tty=second_begin_tty))
+        tty.write_public(second_begin_tty.getvalue())
+        second_bootstrap_code = _secret_code(
+            second_begin_tty, "reprovision-bootstrap-code (one-use, short-lived)"
+        )
+        second_handoff_tty = PseudoTty()
+        second_reprovision = _allowed(
+            exchange_reprovision_on_tty(
+                service,
+                submitted_code=second_bootstrap_code,
+                operator_tty=second_handoff_tty,
+            )
+        )
+        assert second_reprovision.displayed
+        tty.write_public(second_handoff_tty.getvalue())
+
     assert stdout.getvalue() == "" and stderr.getvalue() == ""
+    assert second_reprovision.exchange.replacement_reprovision is not None
     credentials = (
         OpaqueCredential.parse_operator_code(bootstrap_code),
         session,
@@ -1054,8 +1152,18 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
         challenge,
         recovered.exchange.session,
         recovered.exchange.recovery,
+        roots.reprovision.credential,
+        OpaqueCredential.parse_operator_code(first_bootstrap_code),
+        first_reprovision.exchange.session,
+        first_reprovision.exchange.recovery,
+        OpaqueCredential.parse_operator_code(first_reprovision_root_code),
+        OpaqueCredential.parse_operator_code(second_bootstrap_code),
+        second_reprovision.exchange.session,
+        second_reprovision.exchange.recovery,
+        second_reprovision.exchange.replacement_reprovision.credential,
     )
     transcript = redact_operator_transcript(tty.getvalue(), credentials)
+    assert all(credential.operator_code() not in transcript for credential in credentials)
     retained = (REPO_ROOT / "docs/v1/spikes/SPIKE-AUTH-TRANSCRIPT.txt").read_text(encoding="utf-8")
     assert transcript == retained, transcript
 

@@ -18,11 +18,24 @@ from mycogni.domain.auth import (
     BootstrapExchange,
     OpaqueCredential,
     RootCapability,
+    RootPurpose,
 )
 
 SCROLLBACK_WARNING = (
     "WARNING: SECRET DISPLAY. Use a private terminal; disable recording, scrollback saving, "
     "copy synchronization and session logging before continuing."
+)
+
+REPROVISION_WARNING = (
+    "DESTRUCTIVE REPROVISION: continuing revokes every old session and recovery code, consumes "
+    "the current offline reprovision route, and requires you to save the replacement route. "
+    "Interruption or process loss after consume but before handoff can leave no authority route."
+)
+
+HANDOFF_INTERRUPTED = (
+    "authority-handoff-interrupted: replacement authority remains only in this process; do not "
+    "resubmit the consumed code; redisplay the in-process result now. Process loss before a "
+    "complete handoff can leave no authority route.\n"
 )
 
 DENIAL_GUIDANCE: dict[AuthDenial, str] = {
@@ -39,7 +52,10 @@ DENIAL_GUIDANCE: dict[AuthDenial, str] = {
     AuthDenial.NON_INTERACTIVE: "attach a private interactive operator terminal",
     AuthDenial.MALFORMED_CREDENTIAL: "re-enter the complete code through no-echo input",
     AuthDenial.OPERATOR_DECLINED: "no credential was issued or consumed",
-    AuthDenial.OUTPUT_INTERRUPTED: "the undisclosed bootstrap was burned; repeat with the same root capability",
+    AuthDenial.OUTPUT_INTERRUPTED: (
+        "secret output did not complete; follow the displayed redisplay or restart instructions; "
+        "never resubmit a consumed code"
+    ),
 }
 
 
@@ -86,6 +102,9 @@ def begin_bootstrap_on_tty(
     operator_tty: OperatorTty,
 ) -> AuthOutcome[OpaqueId]:
     """Issue/disclose bootstrap only after root authorization and confirmation."""
+    if root.purpose is RootPurpose.REPROVISION:
+        _deny(operator_tty, "bootstrap", AuthDenial.WRONG_PURPOSE)
+        return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
     if not operator_tty.isatty():
         _deny(operator_tty, "bootstrap", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
@@ -107,6 +126,10 @@ def begin_bootstrap_on_tty(
         service.cancel_bootstrap(credential.handle)
         with suppress(OSError):
             _deny(operator_tty, "bootstrap", AuthDenial.OUTPUT_INTERRUPTED)
+            operator_tty.write_public(
+                "bootstrap-restart: no bootstrap was disclosed or consumed; begin again with "
+                "the same unconsumed initial root.\n"
+            )
         return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
     operator_tty.write_public(
         f"bootstrap-guidance: expires in {service.policy.bootstrap_ttl_seconds} seconds; "
@@ -123,7 +146,53 @@ def exchange_bootstrap_code(
         credential = OpaqueCredential.parse_operator_code(submitted_code)
     except ValueError:
         return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
-    return service.exchange_bootstrap(credential)
+    return service.exchange_operator_bootstrap(credential, reprovision=False)
+
+
+def begin_reprovision_on_tty(
+    service: AuthService,
+    *,
+    operator_tty: OperatorTty,
+) -> AuthOutcome[OpaqueId]:
+    """Issue a reprovision bootstrap from an opaque code and canonical store binding only."""
+    if not operator_tty.isatty():
+        _deny(operator_tty, "reprovision", AuthDenial.NON_INTERACTIVE)
+        return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
+    operator_tty.write_public(SCROLLBACK_WARNING + "\n")
+    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+        _deny(operator_tty, "reprovision", AuthDenial.OPERATOR_DECLINED)
+        return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
+    operator_tty.write_public("reprovision-code (input hidden): ")
+    raw = operator_tty.read_secret_no_echo()
+    try:
+        reprovision = OpaqueCredential.parse_operator_code(raw)
+    except ValueError:
+        _deny(operator_tty, "reprovision", AuthDenial.MALFORMED_CREDENTIAL)
+        return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
+    outcome = service.begin_reprovision(reprovision)
+    if outcome.denial is not None:
+        _deny(operator_tty, "reprovision", outcome.denial)
+        return AuthOutcome.denied(outcome.denial)
+    assert outcome.value is not None
+    credential = outcome.value
+    try:
+        operator_tty.write_secret_block(
+            (("reprovision-bootstrap-code (one-use, short-lived)", credential.operator_code()),)
+        )
+    except OSError:
+        service.cancel_bootstrap(credential.handle)
+        with suppress(OSError):
+            _deny(operator_tty, "reprovision", AuthDenial.OUTPUT_INTERRUPTED)
+            operator_tty.write_public(
+                "reprovision-restart: the offline route was not consumed; begin again with the "
+                "same current reprovision code.\n"
+            )
+        return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
+    operator_tty.write_public(
+        f"reprovision-guidance: bootstrap expires in {service.policy.bootstrap_ttl_seconds} "
+        "seconds; the offline route is not consumed until the separately confirmed exchange\n"
+    )
+    return AuthOutcome.allowed(credential.handle)
 
 
 def _display_bootstrap_handoff(exchange: BootstrapExchange, operator_tty: OperatorTty) -> bool:
@@ -141,6 +210,8 @@ def _display_bootstrap_handoff(exchange: BootstrapExchange, operator_tty: Operat
     try:
         operator_tty.write_secret_block(tuple(values))
     except OSError:
+        with suppress(OSError):
+            operator_tty.write_public(HANDOFF_INTERRUPTED)
         return False
     operator_tty.write_public(
         "bootstrap-exchange-succeeded: session and recovery handed off; save offline authority now\n"
@@ -155,16 +226,59 @@ def exchange_bootstrap_on_tty(
     operator_tty: OperatorTty,
 ) -> AuthOutcome[OperatorBootstrapResult]:
     """Consume bootstrap only after confirmation, then hand off all issued authority."""
+    return _exchange_bootstrap_on_tty(
+        service,
+        submitted_code=submitted_code,
+        operator_tty=operator_tty,
+        reprovision=False,
+    )
+
+
+def exchange_reprovision_on_tty(
+    service: AuthService,
+    *,
+    submitted_code: str,
+    operator_tty: OperatorTty,
+) -> AuthOutcome[OperatorBootstrapResult]:
+    """Consume only a reprovision bootstrap after explicit destructive confirmation."""
+    return _exchange_bootstrap_on_tty(
+        service,
+        submitted_code=submitted_code,
+        operator_tty=operator_tty,
+        reprovision=True,
+    )
+
+
+def _exchange_bootstrap_on_tty(
+    service: AuthService,
+    *,
+    submitted_code: str,
+    operator_tty: OperatorTty,
+    reprovision: bool,
+) -> AuthOutcome[OperatorBootstrapResult]:
     if not operator_tty.isatty():
-        _deny(operator_tty, "bootstrap-exchange", AuthDenial.NON_INTERACTIVE)
+        prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
+        _deny(operator_tty, prefix, AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
-        _deny(operator_tty, "bootstrap-exchange", AuthDenial.OPERATOR_DECLINED)
+    warning = REPROVISION_WARNING if reprovision else SCROLLBACK_WARNING
+    if reprovision:
+        operator_tty.write_public(REPROVISION_WARNING + "\n")
+    if not operator_tty.confirm_secret_display(warning):
+        prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
+        _deny(operator_tty, prefix, AuthDenial.OPERATOR_DECLINED)
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
-    outcome = exchange_bootstrap_code(service, submitted_code)
+    try:
+        credential = OpaqueCredential.parse_operator_code(submitted_code)
+    except ValueError:
+        outcome: AuthOutcome[BootstrapExchange] = AuthOutcome.denied(
+            AuthDenial.MALFORMED_CREDENTIAL
+        )
+    else:
+        outcome = service.exchange_operator_bootstrap(credential, reprovision=reprovision)
     if outcome.denial is not None:
-        _deny(operator_tty, "bootstrap-exchange", outcome.denial)
+        prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
+        _deny(operator_tty, prefix, outcome.denial)
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
     displayed = _display_bootstrap_handoff(outcome.value, operator_tty)
@@ -195,6 +309,8 @@ def _display_recovery(exchange: BootstrapExchange, operator_tty: OperatorTty) ->
             )
         )
     except OSError:
+        with suppress(OSError):
+            operator_tty.write_public(HANDOFF_INTERRUPTED)
         return False
     operator_tty.write_public("recovery-succeeded: old sessions and old recovery codes revoked\n")
     return True
