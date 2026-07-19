@@ -12,7 +12,15 @@ from alembic.config import Config
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.pool import Pool
 
-from mycogni.adapters.persistence import FilesystemMount, SystemFilesystemProbe
+from mycogni.adapters.persistence import (
+    FilesystemMount,
+    FixedFilesystemProbe,
+    SQLiteProcessRole,
+    SQLiteRecoveryError,
+    SQLiteRuntime,
+    SQLiteSettings,
+    SystemFilesystemProbe,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 HEAD_REVISION = "0001_database_baseline"
@@ -133,3 +141,21 @@ def test_upgrade_and_downgrade_are_repeatable(tmp_path: Path) -> None:
     command.downgrade(config, "base")
     command.upgrade(config, "head")
     assert _current_revision(database_path) == HEAD_REVISION
+
+
+def test_migration_refuses_unresolved_recovery_latch(tmp_path: Path) -> None:
+    database_path = tmp_path / "recovery-required.sqlite"
+    settings = SQLiteSettings(url=f"sqlite:///{database_path}")
+    runtime = SQLiteRuntime.open(settings, probe=FixedFilesystemProbe("ext4"))
+    runtime.abandon()
+
+    with pytest.raises(SQLiteRecoveryError, match="migration refused"):
+        command.upgrade(_config(database_path), "head")
+
+    with pytest.raises(SQLiteRecoveryError, match="migration refused"):
+        SQLiteRuntime.open(
+            settings,
+            role=SQLiteProcessRole.MIGRATION,
+            probe=FixedFilesystemProbe("ext4"),
+        )
+    assert _current_revision(database_path) is None

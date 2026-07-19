@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import Engine, event
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import ConnectionPoolEntry, Pool
+from sqlalchemy.pool import ConnectionPoolEntry
 
 from mycogni.adapters.persistence.durability import SQLiteWriterLease
 
@@ -142,7 +142,6 @@ def create_sqlite_engine(
     settings: SQLiteSettings,
     *,
     writer_lease: SQLiteWriterLease,
-    poolclass: type[Pool] | None = None,
 ) -> Engine:
     """Create a synchronous Engine with the required per-connection policy.
 
@@ -160,25 +159,46 @@ def create_sqlite_engine(
         "max_overflow": 0,
         "pool_timeout": settings.busy_timeout_ms / 1_000,
     }
-    if poolclass is not None:
-        engine_options.pop("pool_size")
-        engine_options.pop("max_overflow")
-        engine_options.pop("pool_timeout")
-        engine_options["poolclass"] = poolclass
     engine = create_engine(settings.sqlalchemy_url, **engine_options)
-    event.listen(
-        engine,
-        "connect",
-        lambda connection, record: _apply_sqlite_pragmas(
+
+    def assert_lease() -> None:
+        writer_lease.assert_active(settings.database_path)
+
+    def register_checkout() -> None:
+        writer_lease.register_checkout()
+
+    def register_checkin() -> None:
+        writer_lease.register_checkin()
+
+    def configure_connection(
+        connection: sqlite3.Connection,
+        record: ConnectionPoolEntry,
+    ) -> None:
+        assert_lease()
+        _apply_sqlite_pragmas(
             connection,
             record,
             database_path=settings.database_path,
             busy_timeout_ms=settings.busy_timeout_ms,
-        ),
+        )
+
+    event.listen(
+        engine,
+        "connect",
+        configure_connection,
     )
     event.listen(
         engine,
         "checkout",
-        lambda connection, record, proxy: writer_lease.assert_active(settings.database_path),
+        lambda connection, record, proxy: register_checkout(),
     )
+    event.listen(engine, "checkin", lambda connection, record: register_checkin())
+    event.listen(
+        engine,
+        "before_cursor_execute",
+        lambda connection, cursor, statement, parameters, context, executemany: assert_lease(),
+    )
+    event.listen(engine, "begin", lambda connection: assert_lease())
+    event.listen(engine, "commit", lambda connection: assert_lease())
+    event.listen(engine, "rollback", lambda connection: assert_lease())
     return engine

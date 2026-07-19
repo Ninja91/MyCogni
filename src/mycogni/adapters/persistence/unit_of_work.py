@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import TracebackType
 
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 
-def create_session_factory(engine: Engine) -> sessionmaker[Session]:
+def _create_session_factory(engine: Engine) -> sessionmaker[Session]:
     """Create sessions that do not hide transaction boundaries."""
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
@@ -20,9 +21,16 @@ class SqlAlchemyUnitOfWork:
     concrete adapter is not an application port and exposes no repositories yet.
     """
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        readiness_guard: Callable[[], None],
+    ) -> None:
         self._session_factory = session_factory
+        self._readiness_guard = readiness_guard
         self._session: Session | None = None
+        self._terminal = False
 
     @property
     def session(self) -> Session:
@@ -32,8 +40,9 @@ class SqlAlchemyUnitOfWork:
         return self._session
 
     def __enter__(self) -> SqlAlchemyUnitOfWork:
-        if self._session is not None:
-            raise RuntimeError("unit of work cannot be entered twice")
+        if self._session is not None or self._terminal:
+            raise RuntimeError("unit of work is terminal and cannot be entered")
+        self._readiness_guard()
         self._session = self._session_factory()
         # Every application UoW is a potential writer. BEGIN IMMEDIATE obtains
         # SQLite's reserved lock before domain reads can lead to a write, while
@@ -46,6 +55,7 @@ class SqlAlchemyUnitOfWork:
             finally:
                 self._session.close()
                 self._session = None
+                self._terminal = True
             raise
         return self
 
@@ -58,16 +68,32 @@ class SqlAlchemyUnitOfWork:
         del exc_type, exc_value, traceback
         if self._session is None:
             return
+        self._finish(commit=False)
+
+    def _finish(self, *, commit: bool) -> None:
+        session = self.session
         try:
-            self._session.rollback()
-        finally:
-            self._session.close()
-            self._session = None
+            if commit:
+                self._readiness_guard()
+                session.commit()
+            else:
+                session.rollback()
+        except BaseException:
+            try:
+                session.rollback()
+            finally:
+                session.close()
+                self._session = None
+                self._terminal = True
+            raise
+        session.close()
+        self._session = None
+        self._terminal = True
 
     def commit(self) -> None:
-        """Commit the active transaction."""
-        self.session.commit()
+        """Commit and terminally close the active transaction."""
+        self._finish(commit=True)
 
     def rollback(self) -> None:
-        """Roll back the active transaction."""
-        self.session.rollback()
+        """Roll back and terminally close the active transaction."""
+        self._finish(commit=False)

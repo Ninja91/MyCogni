@@ -26,9 +26,11 @@ from sqlalchemy.engine import ExceptionContext
 
 if TYPE_CHECKING:
     from mycogni.adapters.persistence.database import SQLiteSettings
+    from mycogni.adapters.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 _ALLOWED_FILESYSTEMS = frozenset({"apfs", "btrfs", "ext4", "xfs"})
 _DIRTY_MARKER = b'{"schema":1,"state":"open"}\n'
+_RECOVERY_LATCH = b'{"schema":1,"state":"recovery-required"}\n'
 _MAX_MARKER_BYTES = 128
 _ACTIVE_PATHS: set[Path] = set()
 _ACTIVE_PATHS_LOCK = threading.Lock()
@@ -57,6 +59,7 @@ class SQLiteOperatorState(StrEnum):
     STORAGE_IO_FAILURE = "storage_io_failure"
     INTEGRITY_FAILURE = "integrity_failure"
     WRITER_CONTENTION = "writer_contention"
+    SHUTDOWN_BLOCKED = "shutdown_blocked"
 
 
 class SQLiteOwnershipError(RuntimeError):
@@ -69,6 +72,19 @@ class SQLiteStorageUnsupported(RuntimeError):
 
 class SQLiteRecoveryError(RuntimeError):
     """Raised when recovery or a clean checkpoint cannot be proven."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operator_state: SQLiteOperatorState = SQLiteOperatorState.RECOVERY_REQUIRED,
+    ) -> None:
+        super().__init__(message)
+        self.operator_state = operator_state
+
+
+class SQLiteReadinessError(RuntimeError):
+    """Raised when new application work is not currently permitted."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +119,10 @@ class SystemFilesystemProbe:
     """Inspect Linux mountinfo or the macOS filesystem type."""
 
     def inspect(self, path: Path) -> FilesystemMount:
-        resolved = path.resolve(strict=True)
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            raise SQLiteStorageUnsupported("cannot resolve the database directory") from None
         if sys.platform.startswith("linux"):
             return self._inspect_linux(resolved)
         if sys.platform == "darwin":
@@ -150,7 +169,7 @@ class SystemFilesystemProbe:
     def _inspect_macos(path: Path) -> FilesystemMount:
         try:
             completed = subprocess.run(
-                ["/usr/bin/stat", "-f", "%T", str(path)],
+                ["/sbin/mount"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -158,10 +177,26 @@ class SystemFilesystemProbe:
             )
         except (OSError, subprocess.SubprocessError):
             raise SQLiteStorageUnsupported("cannot identify the database filesystem type") from None
-        filesystem_type = completed.stdout.strip().lower()
-        if not filesystem_type:
-            raise SQLiteStorageUnsupported("database filesystem type was empty")
-        return FilesystemMount(filesystem_type, path)
+        candidates: list[FilesystemMount] = []
+        for line in completed.stdout.splitlines():
+            left, separator, options_text = line.rpartition(" (")
+            if not separator or not options_text.endswith(")"):
+                continue
+            _source, on_separator, mount_text = left.rpartition(" on ")
+            if not on_separator or not mount_text.startswith("/"):
+                continue
+            options = [value.strip().lower() for value in options_text[:-1].split(",")]
+            if not options or not options[0]:
+                continue
+            try:
+                mount_point = Path(mount_text).resolve(strict=True)
+                path.relative_to(mount_point)
+            except (OSError, ValueError):
+                continue
+            candidates.append(FilesystemMount(options[0], mount_point))
+        if not candidates:
+            raise SQLiteStorageUnsupported("cannot identify the database filesystem mount")
+        return max(candidates, key=lambda candidate: len(candidate.mount_point.parts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,15 +208,82 @@ class SQLiteStorageAssessment:
     mount_point: Path
 
 
-def _assert_regular_file(path: Path, *, label: str) -> None:
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+def _assert_owned_regular_file(metadata: os.stat_result, *, label: str) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
         raise SQLiteStorageUnsupported(f"{label} must be a regular non-symlink file")
+    if metadata.st_uid != os.geteuid():
+        raise SQLiteStorageUnsupported(f"{label} must be owned by the current service user")
+    if metadata.st_nlink != 1:
+        raise SQLiteStorageUnsupported(f"{label} must have exactly one hard link")
     if metadata.st_mode & 0o022:
         raise SQLiteStorageUnsupported(f"{label} must not be group/world writable")
+
+
+def _assert_no_symlinked_ancestors(parent: Path) -> None:
+    current = Path(parent.anchor)
+    try:
+        for part in parent.parts[1:]:
+            current /= part
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise SQLiteStorageUnsupported(
+                    "database directory ancestors must be real directories"
+                )
+    except FileNotFoundError:
+        raise SQLiteStorageUnsupported("database directory does not exist") from None
+    except OSError:
+        raise SQLiteStorageUnsupported("cannot validate database directory ancestors") from None
+
+
+def _open_private_directory(parent: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(parent, flags)
+        metadata = os.fstat(descriptor)
+    except OSError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise SQLiteStorageUnsupported("cannot open the private database directory") from None
+    if not stat.S_ISDIR(metadata.st_mode):
+        os.close(descriptor)
+        raise SQLiteStorageUnsupported("database directory must be a directory")
+    if metadata.st_uid != os.geteuid():
+        os.close(descriptor)
+        raise SQLiteStorageUnsupported("database directory must be owned by the service user")
+    if metadata.st_mode & 0o077:
+        os.close(descriptor)
+        raise SQLiteStorageUnsupported("database directory must be private (mode 0700 or stricter)")
+    return descriptor
+
+
+def _assert_named_file(
+    directory_descriptor: int,
+    name: str,
+    *,
+    label: str,
+    required: bool = False,
+) -> None:
+    try:
+        metadata = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        if required:
+            raise SQLiteStorageUnsupported(f"{label} does not exist") from None
+        return
+    except OSError:
+        raise SQLiteStorageUnsupported(f"cannot validate {label}") from None
+    _assert_owned_regular_file(metadata, label=label)
+
+
+def _managed_names(database_name: str) -> tuple[tuple[str, str], ...]:
+    return (
+        (database_name, "database"),
+        (f"{database_name}-wal", "SQLite WAL sidecar"),
+        (f"{database_name}-shm", "SQLite shared-memory sidecar"),
+        (f".{database_name}.writer.lock", "writer lock"),
+        (f".{database_name}.dirty", "dirty marker"),
+        (f".{database_name}.recovery-required", "recovery latch"),
+    )
 
 
 def assess_sqlite_storage(
@@ -198,39 +300,38 @@ def assess_sqlite_storage(
     configured_path = settings.configured_database_path
     parent = configured_path.parent
     try:
-        parent_metadata = parent.lstat()
-    except FileNotFoundError:
-        raise SQLiteStorageUnsupported("database directory does not exist") from None
-    if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(parent_metadata.st_mode):
-        raise SQLiteStorageUnsupported("database directory must be a non-symlink directory")
-    if parent_metadata.st_mode & 0o077:
-        raise SQLiteStorageUnsupported("database directory must be private (mode 0700 or stricter)")
+        _assert_no_symlinked_ancestors(parent)
+        directory_descriptor = _open_private_directory(parent)
+        try:
+            for name, label in _managed_names(configured_path.name):
+                _assert_named_file(directory_descriptor, name, label=label)
+        finally:
+            os.close(directory_descriptor)
 
-    database_path = configured_path.resolve(strict=False)
-    _assert_regular_file(configured_path, label="database")
-    for suffix in ("-wal", "-shm"):
-        _assert_regular_file(Path(f"{configured_path}{suffix}"), label=f"SQLite {suffix} sidecar")
-
-    mount = (probe or SystemFilesystemProbe()).inspect(parent)
-    filesystem_type = mount.filesystem_type.strip().lower()
-    if filesystem_type not in _ALLOWED_FILESYSTEMS:
-        allowed = ", ".join(sorted(_ALLOWED_FILESYSTEMS))
-        raise SQLiteStorageUnsupported(
-            f"filesystem {filesystem_type!r} is unsupported; allowed local types: {allowed}"
-        )
+        mount = (probe or SystemFilesystemProbe()).inspect(parent)
+        filesystem_type = mount.filesystem_type.strip().lower()
+        if filesystem_type not in _ALLOWED_FILESYSTEMS:
+            allowed = ", ".join(sorted(_ALLOWED_FILESYSTEMS))
+            raise SQLiteStorageUnsupported(
+                f"filesystem {filesystem_type!r} is unsupported; allowed local types: {allowed}"
+            )
+        mount_point = mount.mount_point.resolve(strict=True)
+    except SQLiteStorageUnsupported:
+        raise
+    except OSError:
+        raise SQLiteStorageUnsupported("cannot assess database storage") from None
     return SQLiteStorageAssessment(
-        database_path=database_path,
+        database_path=parent / configured_path.name,
         filesystem_type=filesystem_type,
-        mount_point=mount.mount_point.resolve(strict=False),
+        mount_point=mount_point,
     )
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+def _fsync_directory(descriptor: int) -> None:
     try:
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    except OSError:
+        raise SQLiteRecoveryError("cannot synchronize the database directory") from None
 
 
 class SQLiteWriterLease:
@@ -243,6 +344,7 @@ class SQLiteWriterLease:
         role: SQLiteProcessRole,
         lock_path: Path,
         descriptor: int,
+        directory_descriptor: int,
         assessment: SQLiteStorageAssessment,
     ) -> None:
         self.database_path = database_path
@@ -250,9 +352,13 @@ class SQLiteWriterLease:
         self.lock_path = lock_path
         self.assessment = assessment
         self._descriptor = descriptor
+        self._directory_descriptor = directory_descriptor
+        self._database_name = database_path.name
         self._owner_pid = os.getpid()
         self._active = True
         self._engine_bound = False
+        self._checked_out = 0
+        self._checkout_lock = threading.Lock()
 
     @classmethod
     def acquire(
@@ -272,13 +378,22 @@ class SQLiteWriterLease:
             _ACTIVE_PATHS.add(database_path)
 
         descriptor = -1
+        directory_descriptor = -1
         try:
+            directory_descriptor = _open_private_directory(database_path.parent)
             flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(lock_path, flags, 0o600)
+            descriptor = os.open(
+                lock_path.name,
+                flags,
+                0o600,
+                dir_fd=directory_descriptor,
+            )
             metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode):
-                raise SQLiteOwnershipError("writer lock is not a regular file")
+            try:
+                _assert_owned_regular_file(metadata, label="writer lock")
+            except SQLiteStorageUnsupported as error:
+                raise SQLiteOwnershipError(str(error)) from None
             os.fchmod(descriptor, 0o600)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -290,34 +405,66 @@ class SQLiteWriterLease:
             os.ftruncate(descriptor, 0)
             os.write(descriptor, payload + b"\n")
             os.fsync(descriptor)
-            _fsync_directory(lock_path.parent)
+            _fsync_directory(directory_descriptor)
+            for name, label in _managed_names(database_path.name):
+                if name != lock_path.name:
+                    _assert_named_file(directory_descriptor, name, label=label)
             return cls(
                 database_path=database_path,
                 role=role,
                 lock_path=lock_path,
                 descriptor=descriptor,
+                directory_descriptor=directory_descriptor,
                 assessment=assessment,
             )
-        except BaseException:
+        except BaseException as error:
             if descriptor >= 0:
                 os.close(descriptor)
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
             with _ACTIVE_PATHS_LOCK:
                 _ACTIVE_PATHS.discard(database_path)
-            raise
+            if isinstance(error, (SQLiteOwnershipError, SQLiteStorageUnsupported)):
+                raise
+            raise SQLiteOwnershipError("SQLite writer-lease acquisition failed") from None
 
     def assert_active(self, database_path: Path) -> None:
         if not self._active or self._owner_pid != os.getpid():
             raise SQLiteOwnershipError(
                 "SQLite writer lease is inactive or belongs to another process"
             )
-        if database_path.resolve(strict=False) != self.database_path:
+        if database_path != self.database_path:
             raise SQLiteOwnershipError("SQLite writer lease is bound to a different database")
+
+    @property
+    def database_name(self) -> str:
+        return self._database_name
+
+    @property
+    def directory_descriptor(self) -> int:
+        self.assert_active(self.database_path)
+        return self._directory_descriptor
 
     def bind_engine(self, database_path: Path) -> None:
         self.assert_active(database_path)
         if self._engine_bound:
             raise SQLiteOwnershipError("one writer lease may bind exactly one SQLAlchemy Engine")
         self._engine_bound = True
+
+    def register_checkout(self) -> None:
+        self.assert_active(self.database_path)
+        with self._checkout_lock:
+            self._checked_out += 1
+
+    def register_checkin(self) -> None:
+        with self._checkout_lock:
+            if self._checked_out <= 0:
+                raise SQLiteOwnershipError("SQLite connection checkout accounting underflow")
+            self._checked_out -= 1
+
+    def has_checked_out_connections(self) -> bool:
+        with self._checkout_lock:
+            return self._checked_out != 0
 
     def release(self) -> None:
         if not self._active:
@@ -326,10 +473,15 @@ class SQLiteWriterLease:
             raise SQLiteOwnershipError(
                 "forked child cannot release its parent's SQLite writer lease"
             )
+        if self.has_checked_out_connections():
+            raise SQLiteOwnershipError(
+                "SQLite writer lease cannot release with checked-out connections"
+            )
         try:
             fcntl.flock(self._descriptor, fcntl.LOCK_UN)
         finally:
             os.close(self._descriptor)
+            os.close(self._directory_descriptor)
             self._active = False
             with _ACTIVE_PATHS_LOCK:
                 _ACTIVE_PATHS.discard(self.database_path)
@@ -392,38 +544,100 @@ def _primary_sqlite_error_code(error: BaseException) -> int | None:
     return None
 
 
-def _read_marker(marker_path: Path) -> ShutdownState:
+def _operator_state_for_error(error: BaseException) -> SQLiteOperatorState | None:
+    code = _primary_sqlite_error_code(error)
+    if code == sqlite3.SQLITE_FULL:
+        return SQLiteOperatorState.STORAGE_EXHAUSTED
+    if code == sqlite3.SQLITE_IOERR:
+        return SQLiteOperatorState.STORAGE_IO_FAILURE
+    if code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}:
+        return SQLiteOperatorState.INTEGRITY_FAILURE
+    if code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+        return SQLiteOperatorState.WRITER_CONTENTION
+    return None
+
+
+def _read_state_file(
+    lease: SQLiteWriterLease,
+    name: str,
+    *,
+    expected: bytes,
+    label: str,
+) -> bool:
     try:
-        metadata = marker_path.lstat()
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=lease.directory_descriptor,
+        )
     except FileNotFoundError:
-        return ShutdownState.CLEAN
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise SQLiteRecoveryError("dirty marker is not a regular file")
-    if metadata.st_size > _MAX_MARKER_BYTES:
-        raise SQLiteRecoveryError("dirty marker is oversized")
-    try:
-        payload = marker_path.read_bytes()
+        return False
     except OSError:
-        raise SQLiteRecoveryError("dirty marker cannot be read") from None
-    if payload != _DIRTY_MARKER:
-        raise SQLiteRecoveryError("dirty marker has an invalid schema")
-    return ShutdownState.DIRTY
+        raise SQLiteRecoveryError(f"cannot open {label}") from None
+    try:
+        metadata = os.fstat(descriptor)
+        try:
+            _assert_owned_regular_file(metadata, label=label)
+        except SQLiteStorageUnsupported as error:
+            raise SQLiteRecoveryError(str(error)) from None
+        if metadata.st_size > _MAX_MARKER_BYTES:
+            raise SQLiteRecoveryError(f"{label} is oversized")
+        payload = os.read(descriptor, _MAX_MARKER_BYTES + 1)
+    except OSError:
+        raise SQLiteRecoveryError(f"cannot read {label}") from None
+    finally:
+        os.close(descriptor)
+    if payload != expected:
+        raise SQLiteRecoveryError(f"{label} has an invalid schema")
+    return True
 
 
-def _create_marker(marker_path: Path, previous_shutdown: ShutdownState) -> None:
-    if previous_shutdown is ShutdownState.DIRTY:
+def _create_state_file(
+    lease: SQLiteWriterLease,
+    name: str,
+    *,
+    payload: bytes,
+    label: str,
+) -> None:
+    if _read_state_file(lease, name, expected=payload, label=label):
         return
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(marker_path, flags, 0o600)
     try:
-        written = os.write(descriptor, _DIRTY_MARKER)
-        if written != len(_DIRTY_MARKER):
-            raise SQLiteRecoveryError("dirty marker write was incomplete")
+        descriptor = os.open(
+            name,
+            flags,
+            0o600,
+            dir_fd=lease.directory_descriptor,
+        )
+    except OSError:
+        raise SQLiteRecoveryError(f"cannot create {label}") from None
+    try:
+        metadata = os.fstat(descriptor)
+        try:
+            _assert_owned_regular_file(metadata, label=label)
+        except SQLiteStorageUnsupported as error:
+            raise SQLiteRecoveryError(str(error)) from None
+        written = os.write(descriptor, payload)
+        if written != len(payload):
+            raise SQLiteRecoveryError(f"{label} write was incomplete")
         os.fsync(descriptor)
+    except OSError:
+        raise SQLiteRecoveryError(f"cannot synchronize {label}") from None
     finally:
         os.close(descriptor)
-    _fsync_directory(marker_path.parent)
+    _fsync_directory(lease.directory_descriptor)
+
+
+def _remove_state_file(lease: SQLiteWriterLease, name: str, *, label: str) -> None:
+    try:
+        _assert_named_file(lease.directory_descriptor, name, label=label, required=True)
+        os.unlink(name, dir_fd=lease.directory_descriptor)
+        _fsync_directory(lease.directory_descriptor)
+    except SQLiteStorageUnsupported as error:
+        raise SQLiteRecoveryError(str(error)) from None
+    except OSError:
+        raise SQLiteRecoveryError(f"cannot remove {label}") from None
 
 
 def _quick_check(engine: Engine, lease: SQLiteWriterLease) -> str:
@@ -431,7 +645,10 @@ def _quick_check(engine: Engine, lease: SQLiteWriterLease) -> str:
     with engine.connect() as connection:
         rows = tuple(str(row[0]) for row in connection.execute(text("PRAGMA quick_check")))
     if rows != ("ok",):
-        raise SQLiteRecoveryError("SQLite quick_check failed")
+        raise SQLiteRecoveryError(
+            "SQLite quick_check failed",
+            operator_state=SQLiteOperatorState.INTEGRITY_FAILURE,
+        )
     return rows[0]
 
 
@@ -460,16 +677,50 @@ class SQLiteRuntime:
         engine: Engine,
         lease: SQLiteWriterLease,
         marker_path: Path,
+        recovery_latch_path: Path,
         startup: SQLiteStartupReport,
         readiness: SQLiteReadiness,
     ) -> None:
         self.engine = engine
         self.lease = lease
         self.marker_path = marker_path
+        self.recovery_latch_path = recovery_latch_path
         self.startup = startup
         self.readiness = readiness
         self._closed = False
         event.listen(self.engine, "handle_error", self._handle_driver_error)
+
+    @property
+    def _marker_name(self) -> str:
+        return self.marker_path.name
+
+    @property
+    def _recovery_latch_name(self) -> str:
+        return self.recovery_latch_path.name
+
+    def _pause(self, state: SQLiteOperatorState) -> None:
+        self.readiness.accepting_new_work = False
+        self.readiness.external_actions_must_remain_paused = True
+        self.readiness.operator_state = state
+
+    def assert_accepting_new_work(self) -> None:
+        """Fail closed before every supported application UoW boundary."""
+        self.lease.assert_active(self.lease.database_path)
+        if self._closed or not self.readiness.accepting_new_work:
+            raise SQLiteReadinessError("SQLite runtime is not accepting new work")
+
+    def unit_of_work(self) -> SqlAlchemyUnitOfWork:
+        """Return the only supported readiness-guarded application UoW."""
+        from mycogni.adapters.persistence.unit_of_work import (
+            SqlAlchemyUnitOfWork,
+            _create_session_factory,
+        )
+
+        self.assert_accepting_new_work()
+        return SqlAlchemyUnitOfWork(
+            _create_session_factory(self.engine),
+            readiness_guard=self.assert_accepting_new_work,
+        )
 
     def _handle_driver_error(self, context: ExceptionContext) -> None:
         self.record_driver_failure(context.original_exception)
@@ -480,19 +731,10 @@ class SQLiteRuntime:
         Returns whether the error was a storage/integrity class that changed
         readiness. The raw error and database path are never retained.
         """
-        code = _primary_sqlite_error_code(error)
-        if code == sqlite3.SQLITE_FULL:
-            self.readiness.operator_state = SQLiteOperatorState.STORAGE_EXHAUSTED
-        elif code == sqlite3.SQLITE_IOERR:
-            self.readiness.operator_state = SQLiteOperatorState.STORAGE_IO_FAILURE
-        elif code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}:
-            self.readiness.operator_state = SQLiteOperatorState.INTEGRITY_FAILURE
-        elif code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
-            # With one process and one pooled connection, a write-side BUSY or
-            # LOCKED error means an unsupported writer bypassed ownership.
-            self.readiness.operator_state = SQLiteOperatorState.WRITER_CONTENTION
-        else:
+        state = _operator_state_for_error(error)
+        if state is None:
             return False
+        self.readiness.operator_state = state
         self.readiness.accepting_new_work = False
         self.readiness.external_actions_must_remain_paused = True
         return True
@@ -509,24 +751,58 @@ class SQLiteRuntime:
 
         lease = SQLiteWriterLease.acquire(settings, role=role, probe=probe)
         marker_path = lease.database_path.parent / f".{lease.database_path.name}.dirty"
+        recovery_latch_path = (
+            lease.database_path.parent / f".{lease.database_path.name}.recovery-required"
+        )
         engine: Engine | None = None
         try:
-            previous_shutdown = _read_marker(marker_path)
-            _create_marker(marker_path, previous_shutdown)
+            inherited_dirty = _read_state_file(
+                lease,
+                marker_path.name,
+                expected=_DIRTY_MARKER,
+                label="dirty marker",
+            )
+            recovery_latched = _read_state_file(
+                lease,
+                recovery_latch_path.name,
+                expected=_RECOVERY_LATCH,
+                label="recovery latch",
+            )
+            if inherited_dirty:
+                _create_state_file(
+                    lease,
+                    recovery_latch_path.name,
+                    payload=_RECOVERY_LATCH,
+                    label="recovery latch",
+                )
+                recovery_latched = True
+            if role is SQLiteProcessRole.MIGRATION and recovery_latched:
+                raise SQLiteRecoveryError("migration refused while recovery is required")
+            _create_state_file(
+                lease,
+                marker_path.name,
+                payload=_DIRTY_MARKER,
+                label="dirty marker",
+            )
             engine = create_sqlite_engine(settings, writer_lease=lease)
             quick_check = _quick_check(engine, lease)
+            for name, label in _managed_names(lease.database_name):
+                _assert_named_file(lease.directory_descriptor, name, label=label)
             recovery_checkpoint = None
-            if previous_shutdown is ShutdownState.DIRTY:
+            if inherited_dirty:
                 recovery_checkpoint = _checkpoint(engine, lease, mode="PASSIVE")
                 if recovery_checkpoint.busy != 0:
                     raise SQLiteRecoveryError("dirty-start WAL recovery checkpoint was busy")
-            requires_reconciliation = previous_shutdown is ShutdownState.DIRTY
+            requires_reconciliation = recovery_latched
             return cls(
                 engine=engine,
                 lease=lease,
                 marker_path=marker_path,
+                recovery_latch_path=recovery_latch_path,
                 startup=SQLiteStartupReport(
-                    previous_shutdown=previous_shutdown,
+                    previous_shutdown=(
+                        ShutdownState.DIRTY if inherited_dirty else ShutdownState.CLEAN
+                    ),
                     quick_check=quick_check,
                     recovery_checkpoint=recovery_checkpoint,
                     requires_reconciliation=requires_reconciliation,
@@ -549,54 +825,71 @@ class SQLiteRuntime:
             lease.release()
             if isinstance(error, SQLiteRecoveryError):
                 raise
-            raise SQLiteRecoveryError("SQLite startup validation failed") from None
+            raise SQLiteRecoveryError(
+                "SQLite startup validation failed",
+                operator_state=(
+                    _operator_state_for_error(error) or SQLiteOperatorState.RECOVERY_REQUIRED
+                ),
+            ) from None
 
     def close_cleanly(self) -> None:
-        """Checkpoint, validate, dispose, then durably remove the dirty marker."""
+        """Prove a clean close while retaining ownership on every failure."""
         if self._closed:
             return
-        failure: BaseException | None = None
+        self.readiness.accepting_new_work = False
         try:
             checkpoint = _checkpoint(self.engine, self.lease, mode="TRUNCATE")
             if checkpoint != SQLiteCheckpoint(0, 0, 0):
                 raise SQLiteRecoveryError(f"clean-shutdown checkpoint incomplete: {checkpoint!r}")
             _quick_check(self.engine, self.lease)
-        except BaseException as error:
-            failure = (
-                error
-                if isinstance(error, SQLiteRecoveryError)
-                else SQLiteRecoveryError("clean-shutdown validation failed")
-            )
-        finally:
-            self.engine.dispose()
-
-        if failure is not None:
-            # The marker still records an unclean lifecycle, so another owner
-            # may safely acquire only after this lease is released.
-            self.lease.release()
-            self._closed = True
-            raise failure
-        try:
-            self.marker_path.unlink()
-            _fsync_directory(self.marker_path.parent)
-        except OSError:
-            # Never release the kernel lease after losing the marker. Recreate
-            # and fsync it first; if that also fails, retain ownership so a
-            # second process cannot be admitted without a recovery signal.
+            if self.lease.has_checked_out_connections():
+                raise SQLiteRecoveryError("clean shutdown still has checked-out connections")
+        except BaseException:
             try:
-                marker_state = _read_marker(self.marker_path)
-                _create_marker(self.marker_path, marker_state)
+                _create_state_file(
+                    self.lease,
+                    self._recovery_latch_name,
+                    payload=_RECOVERY_LATCH,
+                    label="recovery latch",
+                )
+            finally:
+                self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+            raise SQLiteRecoveryError(
+                "clean-shutdown validation failed; ownership retained"
+            ) from None
+
+        if self.readiness.operator_state is not SQLiteOperatorState.READY:
+            _create_state_file(
+                self.lease,
+                self._recovery_latch_name,
+                payload=_RECOVERY_LATCH,
+                label="recovery latch",
+            )
+        self.engine.dispose()
+        try:
+            _remove_state_file(self.lease, self._marker_name, label="dirty marker")
+        except BaseException:
+            try:
+                _create_state_file(
+                    self.lease,
+                    self._marker_name,
+                    payload=_DIRTY_MARKER,
+                    label="dirty marker",
+                )
+                _create_state_file(
+                    self.lease,
+                    self._recovery_latch_name,
+                    payload=_RECOVERY_LATCH,
+                    label="recovery latch",
+                )
             except BaseException:
-                self.readiness.accepting_new_work = False
-                self.readiness.external_actions_must_remain_paused = True
-                self.readiness.operator_state = SQLiteOperatorState.STORAGE_IO_FAILURE
+                self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
                 raise SQLiteRecoveryError(
                     "clean shutdown lost its recovery marker; writer lease retained"
                 ) from None
-            self.lease.release()
-            self._closed = True
+            self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
             raise SQLiteRecoveryError(
-                "clean shutdown could not durably remove its marker"
+                "clean shutdown could not durably remove its marker; ownership retained"
             ) from None
         self.lease.release()
         self._closed = True
@@ -605,17 +898,25 @@ class SQLiteRuntime:
         """Release resources but leave the marker to force recovery next start."""
         if self._closed:
             return
-        self.engine.dispose()
-        marker_state = _read_marker(self.marker_path)
-        try:
-            _create_marker(self.marker_path, marker_state)
-        except BaseException:
-            self.readiness.accepting_new_work = False
-            self.readiness.external_actions_must_remain_paused = True
-            self.readiness.operator_state = SQLiteOperatorState.STORAGE_IO_FAILURE
+        self.readiness.accepting_new_work = False
+        if self.lease.has_checked_out_connections():
+            self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
             raise SQLiteRecoveryError(
-                "cannot preserve dirty marker; writer lease retained"
-            ) from None
+                "cannot abandon runtime with checked-out connections; ownership retained"
+            )
+        _create_state_file(
+            self.lease,
+            self._marker_name,
+            payload=_DIRTY_MARKER,
+            label="dirty marker",
+        )
+        _create_state_file(
+            self.lease,
+            self._recovery_latch_name,
+            payload=_RECOVERY_LATCH,
+            label="recovery latch",
+        )
+        self.engine.dispose()
         self.lease.release()
         self._closed = True
 

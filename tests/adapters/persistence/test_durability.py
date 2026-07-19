@@ -14,23 +14,23 @@ import traceback
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, Table, func, insert, select, text
+from sqlalchemy import Column, Integer, MetaData, Table, func, select, text
 from sqlalchemy.exc import OperationalError, TimeoutError
 
 from mycogni.adapters.persistence import (
     FixedFilesystemProbe,
     ShutdownState,
-    SqlAlchemyUnitOfWork,
     SQLiteOperatorState,
     SQLiteOwnershipError,
     SQLiteProcessRole,
+    SQLiteReadinessError,
     SQLiteRecoveryError,
     SQLiteRuntime,
     SQLiteSettings,
     SQLiteStorageUnsupported,
     SQLiteWriterLease,
+    SystemFilesystemProbe,
     assess_sqlite_storage,
-    create_session_factory,
     create_sqlite_engine,
 )
 
@@ -60,6 +60,14 @@ def test_local_persistent_filesystem_types_are_eligible(
     )
 
     assert assessment.filesystem_type == filesystem_type
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin mount-table probe")
+def test_real_macos_probe_reports_apfs_ancestor_without_mock(tmp_path: Path) -> None:
+    mount = SystemFilesystemProbe().inspect(tmp_path)
+
+    assert mount.filesystem_type == "apfs"
+    tmp_path.resolve(strict=True).relative_to(mount.mount_point)
 
 
 @pytest.mark.parametrize(
@@ -102,6 +110,52 @@ def test_symlink_target_is_rejected_without_leaking_its_path(tmp_path: Path) -> 
     assert str(tmp_path) not in str(caught.value)
 
 
+def test_symlinked_directory_ancestor_is_rejected(tmp_path: Path) -> None:
+    real_directory = tmp_path / "real"
+    real_directory.mkdir(mode=0o700)
+    linked_directory = tmp_path / "linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+    settings = SQLiteSettings(url=f"sqlite:///{linked_directory / 'database.sqlite'}")
+
+    with pytest.raises(SQLiteStorageUnsupported, match="ancestors must be real directories"):
+        assess_sqlite_storage(settings, probe=FixedFilesystemProbe("ext4"))
+
+
+@pytest.mark.parametrize(
+    "managed_name",
+    [
+        "database.sqlite",
+        "database.sqlite-wal",
+        "database.sqlite-shm",
+        ".database.sqlite.writer.lock",
+        ".database.sqlite.dirty",
+        ".database.sqlite.recovery-required",
+    ],
+)
+def test_hardlinked_managed_files_are_rejected(tmp_path: Path, managed_name: str) -> None:
+    managed_path = tmp_path / managed_name
+    managed_path.write_bytes(b"synthetic")
+    managed_path.chmod(0o600)
+    os.link(managed_path, tmp_path / f"alias-{managed_name}")
+
+    with pytest.raises(SQLiteStorageUnsupported, match="exactly one hard link"):
+        assess_sqlite_storage(
+            _settings(tmp_path / "database.sqlite"),
+            probe=FixedFilesystemProbe("ext4"),
+        )
+
+
+def test_wrong_owner_metadata_is_rejected() -> None:
+    from mycogni.adapters.persistence import durability
+
+    metadata_values = list(os.stat(__file__))
+    metadata_values[4] = os.geteuid() + 1
+    metadata = os.stat_result(metadata_values)
+
+    with pytest.raises(SQLiteStorageUnsupported, match="owned by the current service user"):
+        durability._assert_owned_regular_file(metadata, label="database")
+
+
 def test_os_error_traceback_suppresses_private_path_context(tmp_path: Path) -> None:
     canary_name = "synthetic-private-directory-canary"
     database_path = tmp_path / canary_name / "database.sqlite"
@@ -116,6 +170,36 @@ def test_os_error_traceback_suppresses_private_path_context(tmp_path: Path) -> N
     assert canary_name not in rendered
     assert str(tmp_path) not in rendered
     assert caught.value.__suppress_context__ is True
+
+
+def test_lock_acquisition_os_error_suppresses_private_path_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.persistence import durability
+
+    database_path = tmp_path / "synthetic-acquisition-canary.sqlite"
+    settings = _settings(database_path)
+    real_open = durability.os.open
+
+    def fail_lock_open(path: object, *args: object, **kwargs: object) -> int:
+        if path == f".{database_path.name}.writer.lock":
+            raise OSError(f"synthetic failure at {database_path}")
+        return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(durability.os, "open", fail_lock_open)
+    with pytest.raises(SQLiteOwnershipError) as caught:
+        SQLiteWriterLease.acquire(
+            settings,
+            role=SQLiteProcessRole.ALL_IN_ONE,
+            probe=FixedFilesystemProbe("ext4"),
+        )
+
+    rendered = "".join(
+        traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__)
+    )
+    assert database_path.name not in rendered
+    assert str(tmp_path) not in rendered
 
 
 def test_one_process_and_one_engine_own_the_writer_boundary(tmp_path: Path) -> None:
@@ -135,6 +219,8 @@ def test_one_process_and_one_engine_own_the_writer_boundary(tmp_path: Path) -> N
             )
         with pytest.raises(SQLiteOwnershipError, match="exactly one"):
             create_sqlite_engine(settings, writer_lease=lease)
+        with pytest.raises(TypeError, match="poolclass"):
+            create_sqlite_engine(settings, writer_lease=lease, poolclass=object)  # type: ignore[call-arg]
     finally:
         engine.dispose()
         lease.release()
@@ -211,6 +297,57 @@ def test_single_connection_pool_serializes_in_process_access(tmp_path: Path) -> 
         lease.release()
 
 
+def test_raw_lease_release_refuses_checked_out_connection(tmp_path: Path) -> None:
+    settings = _settings(tmp_path / "raw-checkout.sqlite")
+    lease = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    engine = create_sqlite_engine(settings, writer_lease=lease)
+    connection = engine.connect()
+    try:
+        with pytest.raises(SQLiteOwnershipError, match="checked-out connections"):
+            lease.release()
+        lease.assert_active(settings.database_path)
+    finally:
+        connection.close()
+        engine.dispose()
+        lease.release()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+def test_forked_inherited_connection_fails_before_execution(tmp_path: Path) -> None:
+    runtime = _open_runtime(tmp_path / "fork.sqlite")
+    connection = runtime.engine.connect()
+    read_descriptor, write_descriptor = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:  # pragma: no cover - asserted through parent pipe
+        os.close(read_descriptor)
+        try:
+            connection.execute(text("SELECT 1"))
+        except SQLiteOwnershipError:
+            result = b"denied"
+        except BaseException:
+            result = b"wrong-error"
+        else:
+            result = b"allowed"
+        os.write(write_descriptor, result)
+        os.close(write_descriptor)
+        os._exit(0)
+
+    os.close(write_descriptor)
+    try:
+        result = os.read(read_descriptor, 64)
+        _, status = os.waitpid(child_pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert result == b"denied"
+    finally:
+        os.close(read_descriptor)
+        connection.close()
+        runtime.close_cleanly()
+
+
 def test_wal_reader_snapshot_does_not_block_owned_writer(tmp_path: Path) -> None:
     database_path = tmp_path / "wal.sqlite"
     with _open_runtime(database_path) as runtime:
@@ -237,23 +374,24 @@ def test_unexpected_external_writer_contention_fails_without_corruption(tmp_path
     metadata = MetaData()
     records = Table("synthetic_records", metadata, Column("id", Integer, primary_key=True))
     metadata.create_all(runtime.engine)
-    factory = create_session_factory(runtime.engine)
     rogue = sqlite3.connect(database_path, timeout=0.05)
     try:
         rogue.execute("BEGIN IMMEDIATE")
         rogue.execute("INSERT INTO synthetic_records (id) VALUES (1)")
+        contending_unit_of_work = runtime.unit_of_work()
         with (
             pytest.raises(OperationalError, match="database is locked"),
-            SqlAlchemyUnitOfWork(factory),
+            contending_unit_of_work,
         ):
             pass
+        with pytest.raises(RuntimeError, match="terminal"):
+            contending_unit_of_work.__enter__()
         rogue.rollback()
 
-        with SqlAlchemyUnitOfWork(factory) as unit_of_work:
-            unit_of_work.session.execute(insert(records).values(id=2))
-            unit_of_work.commit()
+        with pytest.raises(SQLiteReadinessError, match="not accepting new work"):
+            runtime.unit_of_work()
         with runtime.engine.connect() as connection:
-            assert connection.scalar(select(func.count()).select_from(records)) == 1
+            assert connection.scalar(select(func.count()).select_from(records)) == 0
         assert runtime.readiness.accepting_new_work is False
         assert runtime.readiness.external_actions_must_remain_paused is True
         assert runtime.readiness.operator_state is SQLiteOperatorState.WRITER_CONTENTION
@@ -290,6 +428,8 @@ def test_sqlite_full_rolls_back_and_pauses_new_work(tmp_path: Path) -> None:
         assert runtime.readiness.accepting_new_work is False
         assert runtime.readiness.external_actions_must_remain_paused is True
         assert runtime.readiness.operator_state is SQLiteOperatorState.STORAGE_EXHAUSTED
+        with pytest.raises(SQLiteReadinessError, match="not accepting new work"):
+            runtime.unit_of_work()
     finally:
         runtime.close_cleanly()
 
@@ -305,6 +445,29 @@ def test_synthetic_ioerr_has_redacted_fail_closed_readiness(tmp_path: Path) -> N
         assert runtime.readiness.external_actions_must_remain_paused is True
         assert runtime.readiness.operator_state is SQLiteOperatorState.STORAGE_IO_FAILURE
         assert not hasattr(runtime.readiness, "error")
+
+
+def test_fault_between_uow_write_and_commit_rolls_back_terminally(tmp_path: Path) -> None:
+    class SyntheticIOError(sqlite3.OperationalError):
+        sqlite_errorcode = sqlite3.SQLITE_IOERR
+
+    runtime = _open_runtime(tmp_path / "commit-fault.sqlite")
+    metadata = MetaData()
+    records = Table("synthetic_commit", metadata, Column("id", Integer, primary_key=True))
+    metadata.create_all(runtime.engine)
+    unit_of_work = runtime.unit_of_work()
+    try:
+        unit_of_work.__enter__()
+        unit_of_work.session.execute(text("INSERT INTO synthetic_commit VALUES (1)"))
+        runtime.record_driver_failure(SyntheticIOError("synthetic"))
+        with pytest.raises(SQLiteReadinessError, match="not accepting new work"):
+            unit_of_work.commit()
+        with pytest.raises(RuntimeError, match="not active"):
+            _ = unit_of_work.session
+        with runtime.engine.connect() as connection:
+            assert connection.scalar(select(func.count()).select_from(records)) == 0
+    finally:
+        runtime.close_cleanly()
 
 
 def test_sigkill_recovery_keeps_committed_and_discards_uncommitted(tmp_path: Path) -> None:
@@ -365,6 +528,44 @@ time.sleep(30)
     finally:
         runtime.close_cleanly()
 
+    restarted = _open_runtime(database_path)
+    try:
+        assert restarted.startup.previous_shutdown is ShutdownState.CLEAN
+        assert restarted.startup.requires_reconciliation is True
+        assert restarted.readiness.operator_state is SQLiteOperatorState.RECOVERY_REQUIRED
+        with pytest.raises(SQLiteReadinessError, match="not accepting new work"):
+            restarted.unit_of_work()
+    finally:
+        restarted.close_cleanly()
+
+
+def test_recovery_latch_survives_clean_restart_and_blocks_migration(tmp_path: Path) -> None:
+    database_path = tmp_path / "recovery-latch.sqlite"
+    runtime = _open_runtime(database_path)
+    runtime.abandon()
+
+    with pytest.raises(SQLiteRecoveryError, match="migration refused"):
+        SQLiteRuntime.open(
+            _settings(database_path),
+            role=SQLiteProcessRole.MIGRATION,
+            probe=FixedFilesystemProbe("ext4"),
+        )
+
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.previous_shutdown is ShutdownState.DIRTY
+    assert recovered.startup.requires_reconciliation is True
+    assert not hasattr(recovered, "clear_recovery")
+    recovered.close_cleanly()
+
+    restarted = _open_runtime(database_path)
+    try:
+        assert restarted.startup.previous_shutdown is ShutdownState.CLEAN
+        assert restarted.startup.requires_reconciliation is True
+        with pytest.raises(SQLiteReadinessError, match="not accepting new work"):
+            restarted.unit_of_work()
+    finally:
+        restarted.close_cleanly()
+
 
 def test_busy_truncate_checkpoint_refuses_clean_shutdown(tmp_path: Path) -> None:
     database_path = tmp_path / "checkpoint-busy.sqlite"
@@ -379,13 +580,47 @@ def test_busy_truncate_checkpoint_refuses_clean_shutdown(tmp_path: Path) -> None
         connection.execute(text("INSERT INTO synthetic_checkpoint VALUES (2)"))
 
     try:
-        with pytest.raises(SQLiteRecoveryError, match="checkpoint incomplete"):
+        with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
             runtime.close_cleanly()
+        runtime.lease.assert_active(database_path)
+        with pytest.raises(SQLiteOwnershipError, match="already has an owner"):
+            SQLiteWriterLease.acquire(
+                _settings(database_path),
+                role=SQLiteProcessRole.ALL_IN_ONE,
+                probe=FixedFilesystemProbe("ext4"),
+            )
     finally:
         reader.close()
 
+    runtime.close_cleanly()
     recovered = _open_runtime(database_path)
-    assert recovered.startup.previous_shutdown is ShutdownState.DIRTY
+    assert recovered.startup.previous_shutdown is ShutdownState.CLEAN
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_leaked_checkout_blocks_shutdown_and_second_owner(tmp_path: Path) -> None:
+    database_path = tmp_path / "leaked-checkout.sqlite"
+    runtime = _open_runtime(database_path, busy_timeout_ms=50)
+    leaked = runtime.engine.connect()
+    try:
+        with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
+            runtime.close_cleanly()
+        assert runtime.readiness.accepting_new_work is False
+        assert runtime.readiness.operator_state is SQLiteOperatorState.SHUTDOWN_BLOCKED
+        runtime.lease.assert_active(database_path)
+        with pytest.raises(SQLiteOwnershipError, match="already has an owner"):
+            SQLiteWriterLease.acquire(
+                _settings(database_path),
+                role=SQLiteProcessRole.MIGRATION,
+                probe=FixedFilesystemProbe("ext4"),
+            )
+    finally:
+        leaked.close()
+
+    runtime.close_cleanly()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
     recovered.close_cleanly()
 
 
@@ -400,19 +635,21 @@ def test_marker_fsync_failure_restores_marker_before_releasing_lease(
     real_fsync_directory = durability._fsync_directory
     calls = 0
 
-    def fail_once(path: Path) -> None:
+    def fail_once(descriptor: int) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise OSError("synthetic directory fsync failure")
-        real_fsync_directory(path)
+            raise SQLiteRecoveryError("synthetic directory fsync failure")
+        real_fsync_directory(descriptor)
 
     monkeypatch.setattr(durability, "_fsync_directory", fail_once)
-    with pytest.raises(SQLiteRecoveryError, match="could not durably remove"):
+    with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
         runtime.close_cleanly()
+    runtime.lease.assert_active(database_path)
+    runtime.close_cleanly()
 
     recovered = _open_runtime(database_path)
-    assert recovered.startup.previous_shutdown is ShutdownState.DIRTY
+    assert recovered.startup.requires_reconciliation is True
     recovered.close_cleanly()
 
 
@@ -426,5 +663,19 @@ def test_invalid_dirty_marker_fails_closed_and_is_redacted(tmp_path: Path) -> No
     with pytest.raises(SQLiteRecoveryError, match="invalid schema") as caught:
         SQLiteRuntime.open(settings, probe=FixedFilesystemProbe("ext4"))
 
+    assert database_path.name not in str(caught.value)
+    assert str(tmp_path) not in str(caught.value)
+    assert caught.value.operator_state is SQLiteOperatorState.RECOVERY_REQUIRED
+
+
+def test_corrupt_database_startup_has_typed_redacted_operator_state(tmp_path: Path) -> None:
+    database_path = tmp_path / "corrupt.sqlite"
+    database_path.write_bytes(b"synthetic-not-a-database")
+    database_path.chmod(0o600)
+
+    with pytest.raises(SQLiteRecoveryError) as caught:
+        _open_runtime(database_path)
+
+    assert caught.value.operator_state is SQLiteOperatorState.INTEGRITY_FAILURE
     assert database_path.name not in str(caught.value)
     assert str(tmp_path) not in str(caught.value)

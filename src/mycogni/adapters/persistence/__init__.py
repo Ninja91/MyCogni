@@ -20,6 +20,7 @@ from mycogni.adapters.persistence.durability import (
     SQLiteOwnershipError,
     SQLiteProcessRole,
     SQLiteReadiness,
+    SQLiteReadinessError,
     SQLiteRecoveryError,
     SQLiteRuntime,
     SQLiteStartupReport,
@@ -31,7 +32,6 @@ from mycogni.adapters.persistence.durability import (
 )
 from mycogni.adapters.persistence.unit_of_work import (
     SqlAlchemyUnitOfWork,
-    create_session_factory,
 )
 
 __all__ = (
@@ -46,6 +46,7 @@ __all__ = (
     "SQLiteProcessRole",
     "SQLiteRecoveryError",
     "SQLiteReadiness",
+    "SQLiteReadinessError",
     "SQLiteRuntime",
     "SQLiteSettings",
     "SQLiteStartupReport",
@@ -55,6 +56,5 @@ __all__ = (
     "SqlAlchemyUnitOfWork",
     "SystemFilesystemProbe",
     "assess_sqlite_storage",
-    "create_session_factory",
     "create_sqlite_engine",
 )

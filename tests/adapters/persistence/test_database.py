@@ -12,11 +12,10 @@ from sqlalchemy import Column, Engine, Integer, MetaData, String, Table, insert,
 
 from mycogni.adapters.persistence import (
     FixedFilesystemProbe,
-    SqlAlchemyUnitOfWork,
     SQLiteProcessRole,
+    SQLiteRuntime,
     SQLiteSettings,
     SQLiteWriterLease,
-    create_session_factory,
     create_sqlite_engine,
 )
 from mycogni.adapters.persistence.database import _assert_sqlite_connection_policy
@@ -125,8 +124,9 @@ def test_connection_policy_rejects_an_unexpected_physical_file(tmp_path: Path) -
 
 
 def test_unit_of_work_requires_explicit_commit_and_closes_sessions(tmp_path: Path) -> None:
-    owned_engine = _owned_engine(_settings(tmp_path / "uow.sqlite"))
-    engine = owned_engine.__enter__()
+    runtime = SQLiteRuntime.open(
+        _settings(tmp_path / "uow.sqlite"), probe=FixedFilesystemProbe("ext4")
+    )
     metadata = MetaData()
     synthetic_records = Table(
         "synthetic_records",
@@ -134,49 +134,56 @@ def test_unit_of_work_requires_explicit_commit_and_closes_sessions(tmp_path: Pat
         Column("id", Integer, primary_key=True),
         Column("label", String, nullable=False),
     )
-    metadata.create_all(engine)
-    factory = create_session_factory(engine)
+    metadata.create_all(runtime.engine)
 
     try:
-        committed = SqlAlchemyUnitOfWork(factory)
+        committed = runtime.unit_of_work()
         with committed:
             committed.session.execute(insert(synthetic_records).values(label="committed"))
             committed.commit()
         with pytest.raises(RuntimeError, match="not active"):
             _ = committed.session
+        with pytest.raises(RuntimeError, match="not active"):
+            committed.commit()
+        with pytest.raises(RuntimeError, match="not active"):
+            committed.rollback()
+        with pytest.raises(RuntimeError, match="terminal"):
+            committed.__enter__()
 
-        rolled_back = SqlAlchemyUnitOfWork(factory)
+        rolled_back = runtime.unit_of_work()
         with rolled_back:
             rolled_back.session.execute(insert(synthetic_records).values(label="discarded"))
+        with pytest.raises(RuntimeError, match="not active"):
+            rolled_back.rollback()
 
-        with engine.connect() as connection:
+        with runtime.engine.connect() as connection:
             labels = connection.scalars(select(synthetic_records.c.label)).all()
         assert labels == ["committed"]
     finally:
-        owned_engine.__exit__(None, None, None)
+        runtime.close_cleanly()
 
 
 def test_unit_of_work_rolls_back_when_body_raises(tmp_path: Path) -> None:
-    owned_engine = _owned_engine(_settings(tmp_path / "failure.sqlite"))
-    engine = owned_engine.__enter__()
+    runtime = SQLiteRuntime.open(
+        _settings(tmp_path / "failure.sqlite"), probe=FixedFilesystemProbe("ext4")
+    )
     metadata = MetaData()
     synthetic_records = Table(
         "synthetic_records",
         metadata,
         Column("id", Integer, primary_key=True),
     )
-    metadata.create_all(engine)
-    factory = create_session_factory(engine)
+    metadata.create_all(runtime.engine)
 
     try:
         with (
             pytest.raises(RuntimeError, match="synthetic failure"),
-            SqlAlchemyUnitOfWork(factory) as unit_of_work,
+            runtime.unit_of_work() as unit_of_work,
         ):
             unit_of_work.session.execute(insert(synthetic_records).values(id=1))
             raise RuntimeError("synthetic failure")
 
-        with engine.connect() as connection:
+        with runtime.engine.connect() as connection:
             assert connection.scalar(select(synthetic_records.c.id)) is None
     finally:
-        owned_engine.__exit__(None, None, None)
+        runtime.close_cleanly()
