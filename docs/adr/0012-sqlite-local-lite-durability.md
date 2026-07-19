@@ -37,14 +37,18 @@ One lease binds exactly one SQLAlchemy Engine. The application Engine uses a
 fixed one-connection `QueuePool` with no overflow and exposes no caller-selected
 pool override, so worker/scheduler transactions cannot use concurrent SQLite
 connections. The lease counts checked-out connections and refuses release while
-any remain. Engine hooks verify the owning PID and active lease before connection
-configuration, every statement and every begin/commit/rollback boundary.
+any remain. A shutdown seal uses the same lock as checkout accounting: it can be
+set only at a zero count, then denies future checkout and SQL/transaction work
+through release. Per-record counting prevents a denied checkout from producing
+a false checkin decrement. Engine hooks verify the owning PID and active lease
+before connection configuration, every statement and every
+begin/commit/rollback boundary.
 
 The runtime owns the supported application unit-of-work factory. It checks
 readiness before entry and commit, starts each unit with `BEGIN IMMEDIATE`, and
-makes commit, rollback and failed entry terminal. An unexpected `SQLITE_BUSY` or
-`SQLITE_LOCKED` therefore fails readiness closed and the same unit cannot be
-reused after failure.
+makes commit, rollback and failed entry terminal before fallible session cleanup.
+An unexpected `SQLITE_BUSY` or `SQLITE_LOCKED` therefore fails readiness closed
+and the same unit cannot be reused after failure or cleanup error.
 
 ### Connection policy
 
@@ -116,9 +120,15 @@ Only successful clean-shutdown checks may remove and directory-fsync the dirty
 marker. The writer lock remains held through removal. Checkpoint, integrity,
 checked-out-connection, marker removal or directory-sync failure pauses the
 runtime, preserves/creates the recovery latch, and retains the Engine and writer
-lease for safe retry. A second owner remains excluded. If marker removal cannot
-be proven, the dirty marker is restored before returning the failure. There is
-no marker-age shortcut and clean shutdown never clears the recovery latch.
+lease for safe retry. Clean close and abandonment both seal checkout atomically
+before Engine disposal or lease release. If a checkout wins, lifecycle evidence
+and ownership remain; if sealing wins, no later connection work is admitted. A
+second owner remains excluded. If marker removal cannot be proven, the dirty
+marker is restored before returning the failure and the seal is lifted only if
+the same process still owns the lease. There is no marker-age shortcut and clean
+shutdown never clears the recovery latch. Successful kernel `LOCK_UN` is the
+definitive ownership-release boundary; descriptor close errors after that point
+are best-effort cleanup and cannot be reported as retained ownership.
 
 `SQLITE_FULL`, `SQLITE_IOERR`, corruption/not-a-database, unexpected writer
 contention and blocked shutdown produce fixed typed, PII-free operator states,

@@ -1,12 +1,14 @@
 # SQLITE-DUR-001 adversarial review and remediation chronology
 
-Review target: integrated decision/evidence commit `0fff920`
+Review targets: integrated decision/evidence commit `0fff920`; first
+remediation commit `1dfd256`
 
-Remediation target: integrated code commit `1dfd256`
+Remediation commits: `1dfd256`; second remediation `7cb58fa`
 
-Current verdict: **REJECT findings remediated; independent re-review pending**.
-`SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role labels,
-not model identities, human qualifications, attestations or certifications.
+Current verdict: **second REJECT findings remediated; independent re-review
+pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role
+labels, not model identities, human qualifications, attestations or
+certifications.
 
 ## Independent review passes against `0fff920`
 
@@ -74,13 +76,54 @@ treating the implementation narrative as proof.
 | Untyped startup recovery | `SQLiteRecoveryError.operator_state` carries fixed PII-free integrity/storage/recovery states; corrupt database and invalid marker regressions added. |
 | Unreachable evidence hashes | Evidence now points to integrated ancestors `1d67f87`, `b0c4b38`, `103c977` and remediation `1dfd256`, with this chronology. |
 
-The focused acceptance lane after remediation is 65 passing tests with Ruff and
-mypy clean. The exact commands are recorded in `docs/v1/SQLITE-DUR-001.md`.
+The focused acceptance lane after first remediation was 65 passing tests with
+Ruff and mypy clean.
+
+## Second adversarial pass against `1dfd256` — REJECT
+
+The commit-bound lifecycle pass found that the first remediation still had
+unsafe failure ordering and one check-then-act shutdown race:
+
+1. Unit-of-work commit, rollback and failed entry set terminal/session state
+   only after `Session.close()` or cleanup. A cleanup exception could leave the
+   same unit reusable after a successful commit or failed begin.
+2. `abandon()` set full typed pause state only after fallible marker/latch work.
+   A latch synchronization failure could retain ownership while still exposing
+   a readiness state that did not require external actions to remain paused.
+3. Clean close separately checked the checkout count, then disposed the Engine,
+   removed the dirty marker and released the lease. A checkout could win between
+   the count check and removal, leaving both dirty marker and recovery latch
+   absent while release failed.
+4. A checkout rejected during shutdown could still trigger a checkin callback,
+   underflowing lease accounting because the event record did not say whether
+   that checkout had actually been counted.
+5. `abandon()` had the same count-check/release race even though its marker/latch
+   evidence reduced the consequence.
+6. After successful `LOCK_UN`, descriptor cleanup could raise and be reported as
+   “ownership retained” even though kernel ownership had already ended.
+7. The interactive walkthrough still described auth/runner as unaccepted and
+   multi-architecture build evidence as open.
+
+## Second remediation in `7cb58fa`
+
+| Second-pass finding | Integrated disposition and deterministic evidence |
+| --- | --- |
+| Cleanup before terminal state | UoW detaches the session and publishes terminal state before commit/rollback cleanup. A close failure after successful commit proves second commit and re-entry are denied. |
+| Late abandon pause | `abandon()` enters typed `shutdown_blocked` pause before marker/latch work. Injected latch-directory-fsync failure proves pause/evidence/lease retention and retry. |
+| Close checkout race | Lease shutdown sealing and checkout counting share one lock. Seal succeeds only at count zero and then denies checkout, SQL and transaction work; if checkout wins, marker/latch and ownership remain. A forced race reproduces the old window. |
+| Checkin underflow | Persistent SQLAlchemy connection-record metadata records only successful checkout increments; denied checkout/checkin leaves the count unchanged. |
+| Abandon checkout race | Abandon preserves marker/latch first, then uses the same atomic seal before Engine disposal/release. Forced checkout and release-failure regressions retain evidence/ownership. |
+| Post-unlock false ownership | Successful `LOCK_UN` is the logical ownership boundary. Later descriptor closes are best-effort cleanup; injected close errors prove the lease becomes inactive and a replacement owner can acquire. |
+| Stale walkthrough | Current-status copy now records auth/runner code acceptance, PF-002 multi-architecture evidence and SQLite second-pass remediation without promoting any package to complete. |
+
+The focused acceptance lane after second remediation is 72 passing tests with
+Ruff and mypy clean. The exact commands are recorded in
+`docs/v1/SQLITE-DUR-001.md`.
 
 ## Residual risk and next decision
 
-This record does not convert the prior REJECT into ACCEPT. An independent pass
-must review commit `1dfd256` and record its own commit-bound verdict.
+This record does not convert either REJECT into ACCEPT. An independent pass must
+review commit `7cb58fa` and record its own commit-bound verdict.
 
 SQLAlchemy hooks prevent an inherited SQLAlchemy connection from executing in a
 forked child, but cannot revoke a raw SQLite/file descriptor inherited outside

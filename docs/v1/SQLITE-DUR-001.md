@@ -6,7 +6,7 @@ Implementation role: Luna-labelled Principal Core/Data Engineer (role label
 only; no model identity attestation)
 
 Integrated implementation commits: `1d67f87`, `b0c4b38`, `103c977`,
-`1dfd256`
+`1dfd256`, `7cb58fa`
 
 Decision/evidence commits: `0fff920`, plus the documentation commit containing
 this revision
@@ -20,8 +20,8 @@ ADR-0012 freezes the local-lite SQLite contract:
 - migration uses the same exclusive kernel lock and runtime lifecycle; CLI and
   other processes never open SQLite directly;
 - one Engine and one fixed physical pooled connection per ownership lease, with
-  checkout accounting, PID/lease guards and runtime-owned, terminal
-  `BEGIN IMMEDIATE` application units of work;
+  record-scoped checkout accounting, an atomic shutdown seal, PID/lease guards
+  and runtime-owned, terminal `BEGIN IMMEDIATE` application units of work;
 - verified WAL/`FULL`/foreign-key/timeout/trusted-schema/secure-delete/temp-store
   and autocheckpoint PRAGMAs;
 - private absolute-path storage on an allowlisted local filesystem type, with
@@ -49,7 +49,7 @@ ADR-0012 freezes the local-lite SQLite contract:
 
 ## Deterministic executable evidence
 
-The focused suite contains 65 tests across database policy, migrations and
+The focused suite contains 72 tests across database policy, migrations and
 durability. It covers:
 
 - required PRAGMA readback and rejection of an unexpected physical target;
@@ -60,7 +60,8 @@ durability. It covers:
 - lease/PID validation before SQLAlchemy connection setup, execution and
   transaction boundaries, including a fork-inherited SQLAlchemy connection;
 - runtime-owned readiness-guarded units of work whose commit, rollback and
-  failed entry are terminal, including a fault between write and commit;
+  failed entry are terminal before fallible cleanup, including a fault between
+  write and commit and a close failure after successful commit;
 - WAL reader snapshot behavior while the owned writer commits;
 - unexpected raw-writer contention producing `writer_contention`, readiness
   false and external pause;
@@ -73,6 +74,13 @@ durability. It covers:
 - synthetic `SQLITE_IOERR` classification without storing raw error text;
 - busy `wal_checkpoint(TRUNCATE)` and leaked-checkout shutdown refusal, proving
   the Engine/lease remain owned, a second owner is denied and retry can succeed;
+- deterministic close and abandon checkout races proving the atomic seal leaves
+  marker/latch evidence and ownership intact when checkout wins, plus denial
+  without checkout-accounting underflow when sealing wins;
+- abandon latch-directory-sync and lease-release failures proving pause is set
+  before persistence and retry evidence/ownership remain available;
+- post-`LOCK_UN` descriptor cleanup failure proving successful unlock is the
+  truthful ownership boundary and a replacement owner can acquire;
 - transient directory-fsync failure after marker unlink, proving the marker is
   recreated and a recovery latch preserved while ownership remains held;
 - a recovery latch that survives a later clean restart, blocks migration/no-op
@@ -119,9 +127,10 @@ had about 2.3 GiB free. No test consumed the host disk.
 
 `SQLITE-DUR-001` remains `IN_PROGRESS`, not complete or verified. Three
 independent role-based reviews rejected the first implementation; commit
-`1dfd256` remediates their code findings, but independent commit-bound re-review
-of that remediation and the required host conformance evidence remain open. It
-does not promote `JOB-STATE-001`, `MIG-001`, `BAK-001`, any dispatch journal, or
-any live external action. See
+`1dfd256` remediated those findings. A second pass rejected terminal-cleanup,
+abandon-pause and shutdown checkout-race behavior; `7cb58fa` remediates that
+second pass, but independent commit-bound re-review and the required host
+conformance evidence remain open. It does not promote `JOB-STATE-001`,
+`MIG-001`, `BAK-001`, any dispatch journal, or any live external action. See
 `docs/v1/reviews/15-sqlite-dur-adversarial-review.md` for chronology and
 disposition.
