@@ -6,6 +6,7 @@ import hashlib
 import re
 import sys
 from collections import Counter
+from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -127,6 +128,8 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     forbidden_status = (
         "The implementation is next",
         "architecture complete",
+        "architecture is verified",
+        "architecture verified",
         "NET-001 remains in remediation review",
     )
     for phrase in forbidden_status:
@@ -147,10 +150,35 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         errors.append("completion matrix no longer reports the M0 milestone IN_PROGRESS")
 
     status_panel = _element_by_class(document, "project-status")
+    matrix_date_match = re.search(r"^Snapshot date: (\d{4}-\d{2}-\d{2})\.", matrix, re.MULTILINE)
+    visible_status_dates = re.findall(r"STATUS · (\d{4}-\d{2}-\d{2})", html)
+    narrative_dates = re.findall(
+        r"<strong>(\d{4}-\d{2}-\d{2}):</strong> architecture is specified",
+        html,
+    )
+    if not matrix_date_match:
+        errors.append("completion matrix has no parseable snapshot date")
+    elif status_panel is not None:
+        expected_date = matrix_date_match.group(1)
+        try:
+            date.fromisoformat(expected_date)
+        except ValueError:
+            errors.append(f"completion matrix snapshot date is invalid: {expected_date!r}")
+        observed_dates = {
+            "data-status-date": [status_panel.get("data-status-date", "")],
+            "visible status date": visible_status_dates,
+            "current narrative date": narrative_dates,
+        }
+        for label, dates in observed_dates.items():
+            if dates != [expected_date]:
+                errors.append(
+                    f"site {label} {dates!r} does not match matrix snapshot date {expected_date!r}"
+                )
     matrix_statuses = {
         "data-gov-status": r"\| Full traceability validator \| GOV-001 \| `([A-Z_]+)` \|",
         "data-net-status": r"\| Network-deny proof \| NET-001 \| `([A-Z_]+)` \|",
         "data-spikes-status": r"\| Auth/key/egress/runner/browser/backup spikes \| SPIKE-\* \| `([A-Z_]+)` \|",
+        "data-spike-key-status": r"\| Canonical inventory: SPIKE-KEY \| SPIKE-KEY \| `([A-Z_]+)` \|",
         "data-sqlite-dur-status": r"\| SQLite/process durability contract \| SQLITE-DUR-001 \| `([A-Z_]+)` \|",
     }
     if status_panel is None:

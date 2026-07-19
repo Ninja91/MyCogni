@@ -118,7 +118,7 @@ const architectureStories = {
   vault: {
     label: "ENCRYPTED STATE + KEY CATALOG",
     heading: "Data and the ability to recover it are separated.",
-    copy: "Profile data and evidence are field or object encrypted. Independent random profile keys are wrapped by an OS keychain or cloud KMS key and tracked through deletion and backup expiry.",
+    copy: "Profile data and evidence are intended to be field or object encrypted. Independent random profile keys are wrapped through one explicit external key-provider reference and tracked through deletion and backup expiry; native file, Keychain, container volume, and cloud KMS profiles require separate evidence.",
     can: "Encrypt bounded records, export profiles, enforce deletion semantics.",
     cannot: "Recreate a deleted profile key from an installation root."
   },

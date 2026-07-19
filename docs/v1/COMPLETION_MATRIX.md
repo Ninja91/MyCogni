@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-18. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness with code-level acceptance. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package or live connector.
+Snapshot date: 2026-07-19. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness with code-level acceptance. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package or live connector.
 
 ## Status vocabulary
 
@@ -45,7 +45,7 @@ Documentation describing a future component is not implementation evidence for t
 | Shared contracts | CT-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisites and protected-review authorization before package completion |
 | Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6` plus remediation and `reviews/07-sim001-adversarial-review.md`; canonical reserved-domain corpus/scenario goldens, synchronized transactional clock/web/mail protocol and final code-level ACCEPT with zero P0/P1/P2 | authenticated independent attestation is still absent; NET-001 remains separate |
 | Network-deny proof | NET-001 | `IN_PROGRESS` | `362795e`, `docs/v1/NET-001-NETWORK-DENY.md`, `reviews/09-net001-adversarial-review.md`; final code-level ACCEPT, 133 focused/87 simulator/935 dual-runtime lane tests and 240-test review evidence | authenticated attestation and optional Linux namespace reproduction remain open; OS-level hostile-code containment remains a nonclaim |
-| Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `IN_PROGRESS` | auth `030caed`; runner `b2bfa15`; `docs/v1/spikes/SPIKE-AUTH.md`, `docs/v1/spikes/SPIKE-RUNNER.md`, `reviews/12-spike-auth-adversarial-review.md`, `reviews/13-spike-runner-adversarial-review.md`; both implemented spikes have final three-hat code-level ACCEPT with zero P0/P1/P2 | authenticated package acceptance, durable production adapters and runner-specific OCI containment remain open; key/egress/browser/backup spikes remain unstarted |
+| Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `IN_PROGRESS` | auth `030caed`; runner `b2bfa15`; auth and runner review records; ADR-0013, `spikes/SPIKE-KEY.md`, `reviews/16-spike-key-design-adversarial-review.md`, `reviews/17-spike-key-exact-target-adversarial-review.md`; auth/runner have final code-level ACCEPT; key exact target `35eda23` has three clean code-level ACCEPT verdicts and 106 focused tests after six rejected targets | authenticated package acceptance, durable production adapters and runner-specific OCI containment remain open; key needs host/provider conformance and durable accounting/recovery; egress/browser/backup remain open |
 | SQLite/process durability contract | SQLITE-DUR-001 | `IN_PROGRESS` | integrated `1d67f87`, `b0c4b38`, `103c977`, `1dfd256`, `7cb58fa`, `02f91ce`, `f01b3c5`; ADR-0012, `docs/v1/SQLITE-DUR-001.md`, `reviews/15-sqlite-dur-adversarial-review.md`; 80 focused tests; three exact-target code-level ACCEPT verdicts with zero P0/P1/P2; PR run `29672858907` passed 1,471 tests plus all guards on both locked runtimes | authenticated attestation remains unavailable; exact-host filesystem, Docker restart, bounded device-full and independently reviewed power-interruption conformance remain open |
 | Synthetic-only authenticated shell | UX-001 | `NOT_STARTED` | — | depends on auth/contracts |
 | M0 milestone | all M0 | `IN_PROGRESS` | plan and first three foundation packages integrated | complete remaining M0 packages and independently reproduce evidence |
@@ -147,7 +147,8 @@ simulator and network-deny foundations:
 3. obtain the externally rooted authenticated PF-002 semantic-review
    attestation now that amd64/arm64 build and hardened runtime evidence exists;
 4. preserve SQLITE-DUR-001's implemented software contract while obtaining
-   independent review/host conformance, and start SPIKE-KEY;
+   independent review/host conformance, and implement SPIKE-KEY under ADR-0013's no-fallback,
+   strict-wrap and owner-only-provider charter;
 5. retain SPIKE-EGRESS and SPIKE-BROWSER behind the accepted NET boundary, and add
    connector SDK minimum/latest Pydantic coverage before any public SDK release.
 
@@ -228,7 +229,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-KEY | SPIKE-KEY | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-KEY | SPIKE-KEY | `IN_PROGRESS` | ADR-0013, `spikes/SPIKE-KEY.md`, `reviews/16-spike-key-design-adversarial-review.md`, `reviews/17-spike-key-exact-target-adversarial-review.md`; exact target `35eda23` has three clean code-level ACCEPT verdicts and 106 focused tests after six rejected targets | native process/host evidence, durable cross-process accounting, macOS Keychain and rootless-Linux/Docker-Desktop conformance remain open; no KEY-001/KEY-002 claim |
 | Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `IN_PROGRESS` | `b2bfa15`, `reviews/13-spike-runner-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 843 focused tests on both runtimes | authenticated package acceptance, persistent adapter/restart evidence and runner-specific OCI containment remain open; PF-002 proves only trusted-core packaging |
 | Canonical inventory: TRUST-001 | TRUST-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPDATE-001 | UPDATE-001 | `NOT_STARTED` | — | follow work-package dependency order |

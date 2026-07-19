@@ -1,0 +1,280 @@
+"""Contract tests for persisted key bindings and provider-neutral application types."""
+
+from __future__ import annotations
+
+import copy
+import pickle
+import threading
+from dataclasses import replace
+
+import pytest
+
+from mycogni.application.keys import (
+    ActiveKekRef,
+    KeyReadiness,
+    KeyReadinessState,
+    ProfileDekHandle,
+    ProfileKeyBinding,
+    SecretFailureCode,
+    SecretProviderError,
+    SourceStatus,
+    WrappedProfileKey,
+    WrappedReadinessSentinel,
+)
+from mycogni.application.ports import SecretPort
+from mycogni.domain import OpaqueId
+
+
+def _id(value: str) -> OpaqueId:
+    return OpaqueId.parse(value)
+
+
+KEK_REF = ActiveKekRef(
+    provider_kind="owner-file",
+    provider_instance_id=_id("10000000-0000-4000-8000-000000000001"),
+    kek_id=_id("10000000-0000-4000-8000-000000000002"),
+    kek_version=1,
+)
+BINDING = ProfileKeyBinding(
+    installation_id=_id("10000000-0000-4000-8000-000000000003"),
+    profile_id=_id("10000000-0000-4000-8000-000000000004"),
+    profile_key_version=1,
+    catalog_schema_version=1,
+)
+WRAPPED = WrappedProfileKey(
+    kek_ref=KEK_REF,
+    binding=BINDING,
+    nonce=b"n" * 12,
+    ciphertext=b"c" * 48,
+)
+SENTINEL = WrappedReadinessSentinel(
+    kek_ref=KEK_REF,
+    installation_id=BINDING.installation_id,
+    catalog_id=_id("10000000-0000-4000-8000-000000000005"),
+    sentinel_id=_id("10000000-0000-4000-8000-000000000006"),
+    nonce=b"s" * 12,
+    ciphertext=b"t" * 48,
+)
+
+
+def test_wrapped_profile_key_persists_every_binding_and_redacts() -> None:
+    rendered = repr(WRAPPED)
+
+    assert WRAPPED.binding == BINDING
+    assert WRAPPED.suite == "A256GCM"
+    assert WRAPPED.format_version == 1
+    assert WRAPPED.aad_version == 1
+    assert "nnnn" not in rendered
+    assert "cccc" not in rendered
+    assert str(BINDING.profile_id) not in rendered
+    assert str(KEK_REF.kek_id) not in rendered
+    assert str(WRAPPED) == "[REDACTED:wrapped-profile-key]"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"format_version": 2}, "format version"),
+        ({"aad_version": 2}, "AAD version"),
+        ({"suite": "aesgcm"}, "suite"),
+        ({"nonce": b"short"}, "exactly 12"),
+        ({"ciphertext": b"short"}, "exactly 48"),
+    ],
+)
+def test_malformed_wrapped_records_are_unrepresentable(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        replace(WRAPPED, **changes)
+
+
+class _StringSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("changes", "error", "message"),
+    [
+        ({"format_version": 2}, ValueError, "sentinel format"),
+        ({"format_version": 1.0}, TypeError, "format version"),
+        ({"format_version": True}, TypeError, "format version"),
+        ({"aad_version": 1.0}, TypeError, "AAD version"),
+        ({"aad_version": True}, TypeError, "AAD version"),
+        ({"suite": _StringSubclass("A256GCM")}, TypeError, "suite"),
+        ({"nonce": bytearray(b"n" * 12)}, TypeError, "nonce"),
+        ({"ciphertext": bytearray(b"c" * 48)}, TypeError, "ciphertext"),
+    ],
+)
+def test_dedicated_sentinel_is_strict_redacted_and_a_distinct_type(
+    changes: dict[str, object],
+    error: type[Exception],
+    message: str,
+) -> None:
+    assert type(SENTINEL) is WrappedReadinessSentinel
+    assert type(SENTINEL) is not type(WRAPPED)
+    assert "ssss" not in repr(SENTINEL)
+    assert "tttt" not in repr(SENTINEL)
+    with pytest.raises(error, match=message):
+        replace(SENTINEL, **changes)
+
+
+def test_source_readability_and_installation_readiness_are_separate() -> None:
+    ready = KeyReadiness(KeyReadinessState.READY, SourceStatus.READABLE)
+    recovery = KeyReadiness(KeyReadinessState.RECOVERY_REQUIRED, SourceStatus.UNAVAILABLE)
+
+    assert ready.state is KeyReadinessState.READY
+    assert ready.source_status is SourceStatus.READABLE
+    assert recovery.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert "ready" not in {status.value for status in SourceStatus}
+
+
+def test_profile_key_handle_allows_exactly_one_callback_and_auto_closes() -> None:
+    issuer = object()
+    retained_views: list[memoryview] = []
+    retained_copies: list[bytes] = []
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+
+    with handle as active:
+
+        def retain(view: memoryview) -> int:
+            retained_views.append(view)
+            retained_copies.append(bytes(view))
+            return len(view)
+
+        assert active.use(retain) == 32
+        with pytest.raises(RuntimeError, match="not available"):
+            active.use(bytes)
+
+    assert bytes(retained_views[0]) == b"\x00" * 32
+    assert retained_copies[0] == b"p" * 32
+    # The retained immutable copy proves best-effort backing-buffer scrubbing is not zeroization.
+
+
+def test_profile_key_handle_concurrent_enter_and_use_allows_one_callback() -> None:
+    issuer = object()
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+    barrier = threading.Barrier(3)
+    outcomes: list[str] = []
+    outcome_lock = threading.Lock()
+
+    def consume() -> None:
+        barrier.wait()
+        try:
+            with handle as active:
+                active.use(bytes)
+            outcome = "used"
+        except RuntimeError:
+            outcome = "rejected"
+        with outcome_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "profile key handle contention deadlocked"
+
+    assert outcomes.count("used") == 1
+    assert outcomes.count("rejected") == 1
+
+
+def test_profile_key_handle_concurrent_close_waits_for_callback() -> None:
+    issuer = object()
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+    handle.__enter__()
+    callback_started = threading.Event()
+    release_callback = threading.Event()
+    close_started = threading.Event()
+    close_finished = threading.Event()
+    retained: list[bytes] = []
+
+    def operation(view: memoryview) -> None:
+        callback_started.set()
+        assert release_callback.wait(timeout=2)
+        retained.append(bytes(view))
+
+    use_thread = threading.Thread(target=lambda: handle.use(operation))
+    use_thread.start()
+    assert callback_started.wait(timeout=2)
+
+    def close() -> None:
+        close_started.set()
+        handle.close()
+        close_finished.set()
+
+    close_thread = threading.Thread(target=close)
+    close_thread.start()
+    assert close_started.wait(timeout=2)
+    assert not close_finished.is_set()
+    release_callback.set()
+    use_thread.join(timeout=2)
+    close_thread.join(timeout=2)
+
+    assert not use_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert close_finished.is_set()
+    assert retained == [b"p" * 32]
+
+
+def test_profile_key_handle_rejects_foreign_issuer_fork_copy_and_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.application import keys
+
+    issuer = object()
+    accepted = True
+
+    def issuer_check(token: object, _pid: int) -> bool:
+        return accepted and token is issuer
+
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=issuer_check,
+    )
+    current_pid = keys.os.getpid()
+    with pytest.raises(TypeError, match="cannot be copied"):
+        copy.copy(handle)
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(handle)
+    monkeypatch.setattr(keys.os, "getpid", lambda: current_pid + 1)
+    with pytest.raises(RuntimeError, match="not available"):
+        handle.__enter__()
+    monkeypatch.setattr(keys.os, "getpid", lambda: current_pid)
+    accepted = False
+    with pytest.raises(RuntimeError, match="not available"):
+        handle.__enter__()
+
+
+def test_secret_provider_errors_are_finite_and_redacted() -> None:
+    error = SecretProviderError(SecretFailureCode.CATALOG_KEY_MISMATCH)
+
+    assert str(error) == "secret provider failed closed (catalog_key_mismatch)"
+    assert "material" not in repr(error).lower()
+
+
+def test_secret_port_has_only_readiness_gated_provider_neutral_operations() -> None:
+    public = {name for name in SecretPort.__dict__ if not name.startswith("_")}
+    assert public >= {
+        "active_kek",
+        "source_status",
+        "readiness",
+        "create_profile_key",
+        "unwrap_profile_key",
+    }
+    assert not any("read_kek" in name or "export" in name for name in public)

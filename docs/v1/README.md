@@ -11,13 +11,15 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 | [Orchestration and review](ORCHESTRATION.md) | agent roles, three-worktree ceiling, integration protocol, and adversarial review loop |
 | [Completion matrix](COMPLETION_MATRIX.md) | living milestone/deliverable status with evidence and explicit blockers |
 | [SQLite durability evidence](SQLITE-DUR-001.md) | local-lite writer/storage/dirty-shutdown decision, executable evidence and residual host qualification |
+| [SPIKE-KEY evidence](spikes/SPIKE-KEY.md) | explicit local KEK, strict profile-key wrap/AAD, owner-only provider and open host-conformance rows |
 | [Implementation-planner synthesis](reviews/01-implementation-planner-synthesis.md) | independent product, backend, and platform planning findings and council disposition |
 | [Adversarial review disposition](reviews/02-adversarial-review.md) | independent product, security/platform, and backend/OSS findings plus applied corrections |
+| [SPIKE-KEY exact-target review](reviews/17-spike-key-exact-target-adversarial-review.md) | initial rejection, required remediation and repeat-review gate |
 
 ## Current program state
 
 - **Program state:** M0 implementation is active; executable foundations and a deterministic reserved-domain simulator exist, but there is no working remover.
-- **Current milestone:** M0 — executable foundation; SIM-001 and GOV-001 have code-level independent acceptance, NET-001 is in remediation re-review, and SPIKE-AUTH is the active core package. Formal machine promotion remains fail-closed without authenticated external attestations.
+- **Current milestone:** M0 — executable foundation; accepted-source foundations are integrated. After six rejected targets, SPIKE-KEY exact target `35eda23` has three clean code-level ACCEPT verdicts and 106 focused tests. Host/provider conformance, durable accounting/recovery and authenticated external attestations are still required, so formal package promotion remains fail-closed.
 - **Current public claim:** architecture plus synthetic developer-foundation evidence only; no accepted Docker image, live connector, real-broker submission, verified removal, or supported deployment.
 - **Planning envelope for a release candidate:** week 32 with three experienced implementation lanes, subject to M0 velocity and reviewer/canary latency.
 - **Earliest stable V1 eligibility:** week 40 or later, after at least twelve weeks and a mature day-90 denominator for the automatic cohort.

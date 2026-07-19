@@ -13,7 +13,7 @@ flowchart LR
     registry["Government and licensed public sources"]
     mail["User-controlled mail provider"]
     official["Official privacy portals<br/>such as California DROP"]
-    secret["OS keychain or cloud KMS/secret manager"]
+    secret["Explicit KEK provider profile<br/>native owner-file baseline; Keychain/container/KMS unverified"]
     assistant["Personal OpenClaw instance"]
     localModel["Optional local model runtime<br/>post-v1 advisory only"]
     notify["PII-free notification channel"]
@@ -44,3 +44,5 @@ Context invariants:
 - Official identity controls are user-completed, never bypassed.
 - OpenClaw and optional local intelligence have no default vault, approval, or submission authority.
 - “Supported” means a capability with visible maturity/freshness, not a broker metadata row.
+- Owner-file, macOS Keychain helper, container key-only volume and cloud KMS are separate
+  conformance profiles. The diagram is a target boundary, not evidence that every provider works.

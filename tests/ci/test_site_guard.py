@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
+
 from scripts.ci.site_guard import ROOT, validate_repository
 
 
@@ -65,6 +67,21 @@ def test_superseded_net_remediation_claim_fails_closed(tmp_path: Path) -> None:
     assert any("stale project-status phrase" in error for error in validate_repository(root))
 
 
+def test_unqualified_architecture_verification_claim_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "architecture specified and adversarially reviewed",
+            "architecture verified",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    assert any("stale project-status phrase" in error for error in validate_repository(root))
+
+
 def test_incomplete_no_script_story_fails_closed(tmp_path: Path) -> None:
     root = _site_fixture(tmp_path)
     index = root / "site/index.html"
@@ -92,6 +109,86 @@ def test_matrix_status_drift_fails_closed(tmp_path: Path) -> None:
 
     assert any(
         "data-net-status" in error and "does not match matrix" in error
+        for error in validate_repository(root)
+    )
+
+
+def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "STATUS · 2026-07-19",
+            "STATUS · 2026-07-18",
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "visible status date" in error and "does not match matrix snapshot date" in error
+        for error in validate_repository(root)
+    )
+
+
+@pytest.mark.parametrize(
+    ("current", "replacement", "label"),
+    [
+        ('data-status-date="2026-07-19"', 'data-status-date="2026-07-18"', "data-status-date"),
+        (
+            "<strong>2026-07-19:</strong> architecture is specified",
+            "<strong>2026-07-18:</strong> architecture is specified",
+            "current narrative date",
+        ),
+    ],
+)
+def test_other_status_date_drift_fails_closed(
+    tmp_path: Path,
+    current: str,
+    replacement: str,
+    label: str,
+) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(current, replacement),
+        encoding="utf-8",
+    )
+
+    assert any(
+        label in error and "does not match matrix snapshot date" in error
+        for error in validate_repository(root)
+    )
+
+
+def test_invalid_calendar_status_date_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    matrix = root / "docs/v1/COMPLETION_MATRIX.md"
+    matrix.write_text(
+        matrix.read_text(encoding="utf-8").replace("2026-07-19", "2026-99-99"),
+        encoding="utf-8",
+    )
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace("2026-07-19", "2026-99-99"),
+        encoding="utf-8",
+    )
+
+    assert any("snapshot date is invalid" in error for error in validate_repository(root))
+
+
+def test_spike_key_status_drift_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            'data-spike-key-status="IN_PROGRESS"',
+            'data-spike-key-status="COMPLETE"',
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "data-spike-key-status" in error and "does not match matrix" in error
         for error in validate_repository(root)
     )
 
