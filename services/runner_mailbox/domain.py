@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -27,7 +27,7 @@ _CAPABILITY = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 
 class MailboxState(StrEnum):
-    """Finite action-mailbox states; no state is an external outcome fact."""
+    """Internal mailbox states; no state is an external outcome fact."""
 
     EMPTY = "empty"
     OFFERED = "offered"
@@ -35,6 +35,15 @@ class MailboxState(StrEnum):
     RESULT_COMMITTED = "result_committed"
     EXPIRED = "expired"
     ABANDONED = "abandoned"
+
+
+class CollectionState(StrEnum):
+    """Durable-consumer delivery axis, deliberately separate from mailbox state."""
+
+    NONE = "none"
+    READY = "ready"
+    DELIVERING = "delivering"
+    ACKNOWLEDGED = "acknowledged"
 
 
 class MailboxDenial(StrEnum):
@@ -51,9 +60,11 @@ class MailboxDenial(StrEnum):
     OVERSIZE = "oversize"
     DIGEST_MISMATCH = "digest_mismatch"
     RESULT_MISMATCH = "result_mismatch"
+    CAPABILITY_MISMATCH = "capability_mismatch"
     EVIDENCE_MISSING = "evidence_missing"
     EVIDENCE_UNREFERENCED = "evidence_unreferenced"
     EVIDENCE_LIMIT = "evidence_limit"
+    QUOTA_EXCEEDED = "quota_exceeded"
     INTERNAL_UNCERTAINTY = "internal_uncertainty"
 
 
@@ -69,9 +80,11 @@ _SAFE_MESSAGES: dict[MailboxDenial, str] = {
     MailboxDenial.OVERSIZE: "mailbox payload exceeds its bound",
     MailboxDenial.DIGEST_MISMATCH: "mailbox payload digest does not match",
     MailboxDenial.RESULT_MISMATCH: "result does not match the claimed action",
+    MailboxDenial.CAPABILITY_MISMATCH: "result is not permitted for the action capability",
     MailboxDenial.EVIDENCE_MISSING: "committed result references missing evidence",
     MailboxDenial.EVIDENCE_UNREFERENCED: "staged evidence is not referenced by the result",
-    MailboxDenial.EVIDENCE_LIMIT: "mailbox evidence exceeds its aggregate bound",
+    MailboxDenial.EVIDENCE_LIMIT: "mailbox response exceeds its aggregate bound",
+    MailboxDenial.QUOTA_EXCEEDED: "mailbox installation capacity is exhausted",
     MailboxDenial.INTERNAL_UNCERTAINTY: "mailbox operation ended with internal uncertainty",
 }
 
@@ -93,6 +106,8 @@ class CrashPoint(StrEnum):
     AFTER_EVIDENCE_COMMIT = "after_evidence_commit"
     BEFORE_RESULT_COMMIT = "before_result_commit"
     AFTER_RESULT_COMMIT = "after_result_commit"
+    BEFORE_COLLECTION_ACK = "before_collection_ack"
+    AFTER_COLLECTION_ACK = "after_collection_ack"
 
 
 class InjectedCrash(RuntimeError):
@@ -119,18 +134,41 @@ def _require_digest(value: str, field_name: str) -> None:
 
 
 def _require_utc(value: datetime, field_name: str) -> None:
-    if not isinstance(value, datetime) or value.utcoffset() != UTC.utcoffset(value):
+    if type(value) is not datetime or value.utcoffset() != UTC.utcoffset(value):
         raise ValueError(f"{field_name} must be an aware UTC instant")
 
 
 @dataclass(frozen=True, slots=True)
-class ActionBinding:
-    """Immutable authority-free binding selected before a connector may claim work.
+class MailboxLimits:
+    """Finite installation bounds and authenticated-GC retention windows."""
 
-    ``selected_artifact_digest`` is supplied independently of the connector
-    manifest. This type records equality, not signature, provenance, freshness,
-    authorization, or actual OCI identity verification.
-    """
+    max_mailboxes: int = 256
+    max_total_evidence_bytes: int = 268_435_456
+    max_total_committed_bytes: int = 268_435_456
+    terminal_retention: timedelta = timedelta(days=7)
+    uncollected_retention: timedelta = timedelta(days=30)
+    tombstone_retention: timedelta = timedelta(days=30)
+    max_tombstones: int = 4_096
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_mailboxes",
+            "max_total_evidence_bytes",
+            "max_total_committed_bytes",
+            "max_tombstones",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive exact integer")
+        for name in ("terminal_retention", "uncollected_retention", "tombstone_retention"):
+            value = getattr(self, name)
+            if type(value) is not timedelta or value <= timedelta(0):
+                raise ValueError(f"{name} must be a positive timedelta")
+
+
+@dataclass(frozen=True, slots=True)
+class ActionBinding:
+    """Immutable authority-free binding selected before connector claim."""
 
     mailbox_id: UUID
     action_id: UUID
@@ -142,6 +180,7 @@ class ActionBinding:
     dispatch_epoch: int
     fence: int
     authorization_epoch: int
+    claim_deadline_utc: datetime
     deadline_utc: datetime
     wall_seconds: int
     response_bytes: int
@@ -163,7 +202,10 @@ class ActionBinding:
         _require_exact_int(self.dispatch_epoch, "dispatch_epoch")
         _require_exact_int(self.fence, "fence")
         _require_exact_int(self.authorization_epoch, "authorization_epoch")
+        _require_utc(self.claim_deadline_utc, "claim_deadline_utc")
         _require_utc(self.deadline_utc, "deadline_utc")
+        if self.claim_deadline_utc >= self.deadline_utc:
+            raise ValueError("claim deadline must precede the result deadline")
         _require_exact_int(self.wall_seconds, "wall_seconds")
         _require_exact_int(self.response_bytes, "response_bytes")
         if self.wall_seconds == 0 or self.response_bytes == 0:
@@ -174,46 +216,47 @@ class ActionBinding:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceUpload:
-    """One bounded ciphertext object; ciphertext is deliberately absent from repr."""
+    """Untrusted sensitive connector payload; body is deliberately absent from repr.
+
+    The digest provides integrity against accidental/caller mismatch only. The
+    repository wraps the payload under a mailbox-owned authenticated-storage key
+    before retaining it. This type makes no connector-side encryption claim.
+    """
 
     object_id: UUID
     kind: str
-    ciphertext_digest: str
-    ciphertext: bytes = field(repr=False)
+    payload_digest: str
+    payload: bytes = field(repr=False)
 
     def __post_init__(self) -> None:
         _require_uuid4(self.object_id, "object_id")
         if type(self.kind) is not str or not re.fullmatch(r"^[a-z][a-z0-9_]{0,63}$", self.kind):
             raise ValueError("kind must be a canonical evidence kind")
-        _require_digest(self.ciphertext_digest, "ciphertext_digest")
-        if type(self.ciphertext) is not bytes or not self.ciphertext:
-            raise ValueError("ciphertext must be non-empty bytes")
-        if len(self.ciphertext) > MAX_EVIDENCE_BYTES:
-            raise ValueError("ciphertext exceeds the evidence bound")
+        _require_digest(self.payload_digest, "payload_digest")
+        if type(self.payload) is not bytes or not self.payload:
+            raise ValueError("payload must be non-empty bytes")
+        if len(self.payload) > MAX_EVIDENCE_BYTES:
+            raise ValueError("payload exceeds the evidence bound")
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceSeal:
-    """Metadata copied from a validated result reference for atomic commit."""
-
     object_id: UUID
     kind: str
-    ciphertext_digest: str
+    payload_digest: str
     byte_count: int
 
     def __post_init__(self) -> None:
         _require_uuid4(self.object_id, "object_id")
         if type(self.kind) is not str or not re.fullmatch(r"^[a-z][a-z0-9_]{0,63}$", self.kind):
             raise ValueError("kind must be a canonical evidence kind")
-        _require_digest(self.ciphertext_digest, "ciphertext_digest")
+        _require_digest(self.payload_digest, "payload_digest")
         if type(self.byte_count) is not int or not 0 < self.byte_count <= MAX_EVIDENCE_BYTES:
             raise ValueError("byte_count must be a positive bounded integer")
 
 
 @dataclass(frozen=True, slots=True)
 class ClaimedAction:
-    """One-time claimed action material; secret fields never appear in repr."""
-
     binding: ActionBinding
     envelope_json: bytes = field(repr=False)
     action_key: bytes = field(repr=False)
@@ -237,7 +280,7 @@ class ClaimedAction:
 
 @dataclass(frozen=True, slots=True)
 class CommittedBundle:
-    """One-time core collection containing only validated protocol ciphertext."""
+    """Idempotently deliverable core bundle; explicit ack completes collection."""
 
     binding: ActionBinding
     result_json: bytes = field(repr=False)
@@ -256,31 +299,39 @@ class CommittedBundle:
             raise ValueError("evidence must be an immutable EvidenceUpload tuple")
         if len(self.evidence) > MAX_EVIDENCE_ITEMS:
             raise ValueError("evidence exceeds its item bound")
-        if sum(len(item.ciphertext) for item in self.evidence) > MAX_EVIDENCE_BYTES:
+        if sum(len(item.payload) for item in self.evidence) > MAX_EVIDENCE_BYTES:
             raise ValueError("evidence exceeds its aggregate bound")
+        if (
+            len(self.result_json) + sum(len(item.payload) for item in self.evidence)
+            > self.binding.response_bytes
+        ):
+            raise ValueError("bundle exceeds the exact action response bound")
 
 
 @dataclass(frozen=True, slots=True)
 class MailboxSnapshot:
-    """Redacted immutable operational state with no credentials or payload bodies."""
+    """Credential-scoped redacted operational state; never an external status."""
 
-    binding: ActionBinding
+    mailbox_id: UUID
     state: MailboxState
+    collection_state: CollectionState
     staged_evidence_count: int
     staged_evidence_bytes: int
     result_present: bool
-    collected: bool
     claim_material_retained: bool
     result_credential_material_retained: bool
 
     def __post_init__(self) -> None:
-        if type(self.binding) is not ActionBinding or type(self.state) is not MailboxState:
-            raise ValueError("snapshot binding or state is invalid")
+        _require_uuid4(self.mailbox_id, "mailbox_id")
+        if (
+            type(self.state) is not MailboxState
+            or type(self.collection_state) is not CollectionState
+        ):
+            raise ValueError("snapshot state is invalid")
         for field_name in ("staged_evidence_count", "staged_evidence_bytes"):
             _require_exact_int(getattr(self, field_name), field_name)
         for field_name in (
             "result_present",
-            "collected",
             "claim_material_retained",
             "result_credential_material_retained",
         ):

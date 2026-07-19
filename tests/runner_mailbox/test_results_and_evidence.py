@@ -27,14 +27,14 @@ def _claim(offered: RunnerMailboxService, binding: ActionBinding) -> bytes:
     return offered.claim(binding, claim_credential=CLAIM_CREDENTIAL).result_credential
 
 
-def _upload(*, ciphertext: bytes = b"sealed deterministic simulator evidence") -> EvidenceUpload:
+def _upload(*, payload: bytes = b"untrusted deterministic simulator evidence") -> EvidenceUpload:
     import hashlib
 
     return EvidenceUpload(
         object_id=UUID(EVIDENCE_ID),
         kind="sanitized_html",
-        ciphertext_digest="sha256:" + hashlib.sha256(ciphertext).hexdigest(),
-        ciphertext=ciphertext,
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
     )
 
 
@@ -49,8 +49,8 @@ def _result_payload(evidence: EvidenceUpload) -> dict[str, object]:
             {
                 "kind": evidence.kind,
                 "mailbox_object_id": str(evidence.object_id),
-                "ciphertext_digest": evidence.ciphertext_digest,
-                "byte_count": len(evidence.ciphertext),
+                "payload_digest": evidence.payload_digest,
+                "byte_count": len(evidence.payload),
             }
         ],
         "disclosures": [{"attribute_type": "name", "destination": "broker.example.test"}],
@@ -73,7 +73,7 @@ def test_deterministic_synthetic_result_round_trip_preserves_fact_not_outcome(
     )
     assert b"candidate_observed" in bundle.result_json
     assert b"verified_removed" not in bundle.result_json
-    assert bundle.evidence[0].ciphertext == evidence.ciphertext
+    assert bundle.evidence[0].payload == evidence.payload
 
 
 def test_evidence_digest_mismatch_fails_before_repository_mutation(
@@ -85,13 +85,18 @@ def test_evidence_digest_mismatch_fails_before_repository_mutation(
     altered = EvidenceUpload(
         object_id=evidence.object_id,
         kind=evidence.kind,
-        ciphertext_digest="sha256:" + "f" * 64,
-        ciphertext=evidence.ciphertext,
+        payload_digest="sha256:" + "f" * 64,
+        payload=evidence.payload,
     )
     with pytest.raises(MailboxError) as denied:
         offered.stage_evidence(binding, result_credential=credential, evidence=altered)
     assert denied.value.denial is MailboxDenial.DIGEST_MISMATCH
-    assert offered.snapshot(binding.mailbox_id).staged_evidence_count == 0
+    assert (
+        offered.snapshot(
+            binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL
+        ).staged_evidence_count
+        == 0
+    )
 
 
 def test_evidence_object_replay_and_wrong_result_credential_fail_closed(
@@ -109,16 +114,21 @@ def test_evidence_object_replay_and_wrong_result_credential_fail_closed(
     assert replay.value.denial is MailboxDenial.REPLAY
 
 
-def test_action_response_budget_caps_staged_ciphertext(
+def test_action_response_budget_caps_staged_sensitive_payload(
     offered: RunnerMailboxService,
     binding: ActionBinding,
 ) -> None:
     credential = _claim(offered, binding)
-    evidence = _upload(ciphertext=b"x" * (binding.response_bytes + 1))
+    evidence = _upload(payload=b"x" * (binding.response_bytes + 1))
     with pytest.raises(MailboxError) as over_budget:
         offered.stage_evidence(binding, result_credential=credential, evidence=evidence)
     assert over_budget.value.denial is MailboxDenial.EVIDENCE_LIMIT
-    assert offered.snapshot(binding.mailbox_id).staged_evidence_count == 0
+    assert (
+        offered.snapshot(
+            binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL
+        ).staged_evidence_count
+        == 0
+    )
 
 
 def test_result_must_reference_every_staged_object_exactly_once(
@@ -149,7 +159,7 @@ def test_result_rejects_missing_or_metadata_mismatched_evidence(
 
     offered.stage_evidence(binding, result_credential=credential, evidence=evidence)
     mismatch_payload = _result_payload(evidence)
-    mismatch_payload["evidence"][0]["byte_count"] = len(evidence.ciphertext) + 1  # type: ignore[index]
+    mismatch_payload["evidence"][0]["byte_count"] = len(evidence.payload) + 1  # type: ignore[index]
     with pytest.raises(MailboxError) as mismatch:
         offered.commit_result(binding, encode(mismatch_payload), result_credential=credential)
     assert mismatch.value.denial is MailboxDenial.DIGEST_MISMATCH

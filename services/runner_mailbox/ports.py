@@ -18,42 +18,31 @@ from services.runner_mailbox.domain import (
 
 
 class Clock(Protocol):
-    """Injected deterministic UTC clock."""
-
-    def now(self) -> datetime:
-        """Return the current aware UTC instant."""
+    def now(self) -> datetime: ...
 
 
 class CredentialDigester(Protocol):
-    """One-way digest port for high-entropy one-action credentials."""
-
-    def digest(self, credential: bytes) -> bytes:
-        """Return a domain-separated digest without retaining the credential."""
+    def digest(self, credential: bytes) -> bytes: ...
 
 
 class CredentialSource(Protocol):
-    """Injected source of independently random one-action credentials."""
-
-    def issue(self) -> bytes:
-        """Return a new credential with at least 256 bits of entropy."""
+    def issue(self) -> bytes: ...
 
 
 class FailureInjector(Protocol):
-    """Test-only crash hook at named atomic transition edges."""
-
-    def hit(self, point: CrashPoint) -> None:
-        """Return normally or raise a synthetic crash."""
+    def hit(self, point: CrashPoint) -> None: ...
 
 
 class MailboxRepository(Protocol):
-    """Atomic storage operations required by the mailbox application service."""
+    """Each time-sensitive operation samples ``clock`` after taking its lock."""
 
     def create(
         self,
         binding: ActionBinding,
+        action_credential_digest: bytes,
         claim_credential_digest: bytes,
         collection_credential_digest: bytes,
-        now: datetime,
+        clock: Clock,
     ) -> MailboxSnapshot: ...
 
     def offer(
@@ -61,16 +50,18 @@ class MailboxRepository(Protocol):
         binding: ActionBinding,
         envelope_json: bytes,
         action_key: bytearray,
+        action_credential_digest: bytes,
+        collection_credential_digest: bytes,
         result_credential: bytearray,
         result_credential_digest: bytes,
-        now: datetime,
+        clock: Clock,
     ) -> MailboxSnapshot: ...
 
     def claim(
         self,
         binding: ActionBinding,
         claim_credential_digest: bytes,
-        now: datetime,
+        clock: Clock,
     ) -> ClaimedAction: ...
 
     def stage_evidence(
@@ -78,8 +69,10 @@ class MailboxRepository(Protocol):
         binding: ActionBinding,
         result_credential_digest: bytes,
         evidence: EvidenceUpload,
-        now: datetime,
-    ) -> MailboxSnapshot: ...
+        clock: Clock,
+    ) -> MailboxSnapshot:
+        """Atomically authenticate-wrap payload before any persistent retention."""
+        ...
 
     def commit_result(
         self,
@@ -87,22 +80,42 @@ class MailboxRepository(Protocol):
         result_credential_digest: bytes,
         result_json: bytes,
         evidence_seals: tuple[EvidenceSeal, ...],
-        now: datetime,
+        clock: Clock,
     ) -> MailboxSnapshot: ...
 
     def collect(
         self,
         mailbox_id: UUID,
         collection_credential_digest: bytes,
-    ) -> CommittedBundle: ...
+        clock: Clock,
+    ) -> CommittedBundle:
+        """Authenticate and unwrap only for idempotent trusted-core delivery."""
+        ...
+
+    def acknowledge_collection(
+        self,
+        mailbox_id: UUID,
+        collection_credential_digest: bytes,
+        clock: Clock,
+    ) -> MailboxSnapshot: ...
 
     def abandon(
         self,
         mailbox_id: UUID,
         collection_credential_digest: bytes,
-        now: datetime,
+        clock: Clock,
     ) -> MailboxSnapshot: ...
 
-    def expire(self, now: datetime) -> tuple[UUID, ...]: ...
+    def expire(self, maintenance_credential_digest: bytes, clock: Clock) -> tuple[UUID, ...]: ...
 
-    def snapshot(self, mailbox_id: UUID) -> MailboxSnapshot: ...
+    def garbage_collect(
+        self,
+        maintenance_credential_digest: bytes,
+        clock: Clock,
+    ) -> tuple[UUID, ...]: ...
+
+    def snapshot(
+        self,
+        mailbox_id: UUID,
+        collection_credential_digest: bytes,
+    ) -> MailboxSnapshot: ...

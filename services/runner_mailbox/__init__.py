@@ -3,10 +3,12 @@
 from services.runner_mailbox.domain import (
     ActionBinding,
     ClaimedAction,
+    CollectionState,
     CommittedBundle,
     EvidenceUpload,
     MailboxDenial,
     MailboxError,
+    MailboxLimits,
     MailboxSnapshot,
     MailboxState,
 )
@@ -20,10 +22,12 @@ from services.runner_mailbox.volatile import (
 __all__ = (
     "ActionBinding",
     "ClaimedAction",
+    "CollectionState",
     "CommittedBundle",
     "EvidenceUpload",
     "MailboxDenial",
     "MailboxError",
+    "MailboxLimits",
     "MailboxSnapshot",
     "MailboxState",
     "RunnerMailboxService",

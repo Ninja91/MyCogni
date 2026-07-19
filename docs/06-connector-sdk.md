@@ -66,7 +66,7 @@ The runner receives the one-time action key through a separate channel. Output i
   "result": "candidate_observed",
   "reason_code": "name_address_match",
   "external_reference": "sealed-value",
-  "evidence": [{"kind": "sanitized_html", "mailbox_object_id": "opaque-object", "ciphertext_digest": "sha256:...", "bytes": 4096}],
+  "evidence": [{"kind": "sanitized_html", "mailbox_object_id": "opaque-object", "payload_digest": "sha256:...", "byte_count": 4096}],
   "disclosures": [{"attribute_type": "name", "destination": "privacy.example.test"}],
   "next": {"kind": "user_review"}
 }

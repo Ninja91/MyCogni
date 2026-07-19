@@ -24,6 +24,7 @@ from tests.runner_mailbox.conftest import (
     COLLECTION_CREDENTIAL,
     EVIDENCE_ID,
     MAILBOX_ID,
+    MAINTENANCE_CREDENTIAL,
     FakeClock,
     FixedCredentialSource,
     encode,
@@ -47,7 +48,10 @@ def _configured_service(
     point: CrashPoint,
 ) -> tuple[RunnerMailboxService, ActionBinding]:
     service = RunnerMailboxService(
-        VolatileMailboxRepository(OneShotCrash(point)),
+        VolatileMailboxRepository(
+            OneShotCrash(point),
+            maintenance_credential_digest=Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL),
+        ),
         clock,
         Sha256CredentialDigester(),
         FixedCredentialSource(),
@@ -57,9 +61,11 @@ def _configured_service(
         action_json,
         selected_artifact_digest=ARTIFACT_DIGEST,
         dispatch_epoch=0,
+        claim_deadline_utc=clock.current.replace(minute=1),
     )
     service.open_empty(
         binding,
+        action_credential=ACTION_KEY,
         claim_credential=CLAIM_CREDENTIAL,
         collection_credential=COLLECTION_CREDENTIAL,
     )
@@ -67,17 +73,18 @@ def _configured_service(
         binding,
         action_json,
         action_key=ACTION_KEY,
+        collection_credential=COLLECTION_CREDENTIAL,
     )
     return service, binding
 
 
 def _evidence() -> EvidenceUpload:
-    ciphertext = b"sealed crash-boundary evidence"
+    payload = b"untrusted crash-boundary evidence"
     return EvidenceUpload(
         object_id=UUID(EVIDENCE_ID),
         kind="sanitized_html",
-        ciphertext_digest="sha256:" + hashlib.sha256(ciphertext).hexdigest(),
-        ciphertext=ciphertext,
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
     )
 
 
@@ -93,8 +100,8 @@ def _result(evidence: EvidenceUpload) -> bytes:
                 {
                     "kind": evidence.kind,
                     "mailbox_object_id": str(evidence.object_id),
-                    "ciphertext_digest": evidence.ciphertext_digest,
-                    "byte_count": len(evidence.ciphertext),
+                    "payload_digest": evidence.payload_digest,
+                    "byte_count": len(evidence.payload),
                 }
             ],
             "disclosures": [],
@@ -118,7 +125,10 @@ def test_concurrent_claim_has_exactly_one_winner_and_no_secret_aliases(
     winners = [item for item in outcomes if not isinstance(item, str)]
     # StrEnum is also str; successful values are the only non-string outcomes.
     assert len(winners) == 1
-    assert offered.snapshot(binding.mailbox_id).state is MailboxState.CLAIMED_ONCE
+    assert (
+        offered.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.CLAIMED_ONCE
+    )
     assert winners[0].action_key == ACTION_KEY  # type: ignore[union-attr]
 
 
@@ -150,7 +160,10 @@ def test_concurrent_result_commit_has_exactly_one_winner(
     winners = [item for item in outcomes if not isinstance(item, str)]
     assert len(winners) == 1
     assert winners[0].state is MailboxState.RESULT_COMMITTED  # type: ignore[union-attr]
-    assert offered.snapshot(binding.mailbox_id).state is MailboxState.RESULT_COMMITTED
+    assert (
+        offered.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.RESULT_COMMITTED
+    )
 
 
 @pytest.mark.parametrize(
@@ -170,7 +183,7 @@ def test_claim_crash_edges_are_fail_closed_and_never_create_result(
     service, binding = _configured_service(action_json, clock, point)
     with pytest.raises(InjectedCrash):
         service.claim(binding, claim_credential=CLAIM_CREDENTIAL)
-    snapshot = service.snapshot(binding.mailbox_id)
+    snapshot = service.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is expected_state
     assert snapshot.claim_material_retained is material_retained
     assert not snapshot.result_present
@@ -204,7 +217,7 @@ def test_evidence_upload_crash_edges_are_atomic(
             result_credential=claim.result_credential,
             evidence=_evidence(),
         )
-    snapshot = service.snapshot(binding.mailbox_id)
+    snapshot = service.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is MailboxState.CLAIMED_ONCE
     assert snapshot.staged_evidence_count == evidence_count
     assert not snapshot.result_present
@@ -238,7 +251,7 @@ def test_result_commit_crash_edges_preserve_authoritative_mailbox_truth(
             _result(evidence),
             result_credential=claim.result_credential,
         )
-    snapshot = service.snapshot(binding.mailbox_id)
+    snapshot = service.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is expected_state
     assert snapshot.result_present is result_present
     if expected_state is MailboxState.RESULT_COMMITTED:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import traceback
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from services.runner_mailbox import MailboxError, RunnerMailboxService, SystemCr
 from services.runner_mailbox.domain import ActionBinding, EvidenceSeal, EvidenceUpload
 from tests.runner_mailbox.conftest import (
     CLAIM_CREDENTIAL,
+    COLLECTION_CREDENTIAL,
     EVIDENCE_ID,
     MAILBOX_ID,
 )
@@ -78,7 +80,9 @@ def test_claim_secrets_are_absent_from_repr_errors_and_snapshots(
     claim = offered.claim(binding, claim_credential=CLAIM_CREDENTIAL)
     secret_values = (claim.action_key, claim.result_credential, claim.envelope_json)
     claim_repr = repr(claim).encode()
-    snapshot_repr = repr(offered.snapshot(UUID(MAILBOX_ID))).encode()
+    snapshot_repr = repr(
+        offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
+    ).encode()
     assert all(value not in claim_repr for value in secret_values)
     assert all(value not in snapshot_repr for value in secret_values)
 
@@ -90,8 +94,8 @@ def test_claim_secrets_are_absent_from_repr_errors_and_snapshots(
             evidence=EvidenceUpload(
                 object_id=UUID(EVIDENCE_ID),
                 kind="sanitized_html",
-                ciphertext_digest="sha256:" + "a" * 64,
-                ciphertext=b"sealed",
+                payload_digest="sha256:" + "a" * 64,
+                payload=b"untrusted-sensitive-canary",
             ),
         )
     assert private_canary not in str(denied.value).encode()
@@ -105,14 +109,14 @@ def test_public_evidence_types_reject_mutable_or_weakly_typed_aliases(
         EvidenceUpload(
             object_id=UUID(EVIDENCE_ID),
             kind="sanitized_html",
-            ciphertext_digest="sha256:" + "a" * 64,
-            ciphertext=bytearray(b"mutable"),  # type: ignore[arg-type]
+            payload_digest="sha256:" + "a" * 64,
+            payload=bytearray(b"mutable"),  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="positive bounded integer"):
         EvidenceSeal(
             object_id=UUID(EVIDENCE_ID),
             kind="sanitized_html",
-            ciphertext_digest="sha256:" + "a" * 64,
+            payload_digest="sha256:" + "a" * 64,
             byte_count=True,  # type: ignore[arg-type]
         )
     with pytest.raises(FrozenInstanceError):
@@ -124,7 +128,7 @@ def test_missing_mailbox_error_contains_no_identifier(
 ) -> None:
     missing = UUID("7f29ed50-fb6c-4d92-905b-b90a9c9f7ea0")
     with pytest.raises(MailboxError) as denied:
-        service.snapshot(missing)
+        service.snapshot(missing, collection_credential=COLLECTION_CREDENTIAL)
     assert str(missing) not in str(denied.value)
 
 
@@ -148,6 +152,7 @@ def test_protocol_validation_traceback_suppresses_raw_input_and_chained_errors(
             invalid,
             selected_artifact_digest="sha256:" + "a" * 64,
             dispatch_epoch=0,
+            claim_deadline_utc=datetime(2030, 1, 1, 0, 1, tzinfo=UTC),
         )
     except MailboxError as exc:
         formatted = "".join(traceback.format_exception(exc)).encode()

@@ -1,205 +1,200 @@
-# SPIKE-RUNNER — pure mailbox/protocol decision slice
+# SPIKE-RUNNER — finite mailbox and protocol decision slice
 
-Status: implementation evidence awaiting independent adversarial review. This is
-not package acceptance, an OCI isolation result, or a runnable connector service.
+Status: remediated implementation evidence awaiting independent adversarial
+re-review. This is not package acceptance, OCI isolation evidence, or a runnable
+connector service.
 
 Decision target: determine whether a statically declared connector can receive one
-action and return bounded ciphertext without a Docker socket, shared core storage,
-reusable credential, or replayable mailbox. The pure slice provisionally supports a
-sidecar protocol. It does not create or accept an ADR: independent review and real
-runtime evidence can still reject the topology. Real runtime disposition remains
-blocked until PF-002 can produce real-engine evidence.
+action and return a bounded untrusted attempt fact without a Docker socket, shared
+core storage, reusable credential, or replayable mailbox. The pure slice supports
+continued evaluation of a small mailbox sidecar. PF-002 must still prove the real
+container topology and resource controls.
 
-## Proposed decision disposition
+## Boundary and faces
 
-Provisionally prefer a tiny predeclared trusted mailbox sidecar over placing a
-connector-facing endpoint inside the trusted core. The sidecar would expose only an
-action-scoped claim/result face to the connector and a separate offer/collect face
-to the core. This keeps the large, high-value core process off the untrusted
-connector network and avoids shared filesystem paths, host volumes, dynamic launch,
-or a Docker socket.
+`services/runner_mailbox/` has a framework-free domain, typed ports, a strict
+application service, and a volatile lock-serialized reference repository. There is
+no network, filesystem, process launch, trusted-core import, outcome inference, or
+broker authorization in this slice.
 
-This remains a proposal rather than governance truth. A persistent adapter must
-resolve authenticated storage, atomic collection acknowledgement, restart recovery,
-restore-epoch invalidation, orphan sweeping, and a durable time high-water. PF-002
-must then prove the effective engine topology and cleanup on each claimed platform.
-If those controls cannot be demonstrated, the spike records a blocker and the
-sidecar proposal is rejected or replaced before an ADR is accepted.
+The connector face contains only:
 
-## Implemented scope
+- one claim operation authenticated by a claim credential; and
+- evidence staging and result commit authenticated by the independently generated
+  result credential returned by successful claim.
 
-`services/runner_mailbox/` contains three separable layers:
+Offer, redacted snapshot, abandon, collect, and collection acknowledgement require
+the collection credential held by trusted core. Installation-wide expiry and GC
+require a distinct maintenance credential. There is no unauthenticated snapshot,
+offer, expiry, or cleanup surface.
 
-| Layer | Responsibility | Deliberately absent |
-| --- | --- | --- |
-| `domain.py` | immutable binding, finite states/reasons, secret-redacted transfer types | framework, network, filesystem, core imports |
-| `ports.py` | injected clock, credential digest, failure hook, atomic repository protocol | concrete runtime or persistence |
-| `service.py` | strict `ActionEnvelope`/`ResultEnvelope` parsing, binding and evidence checks | authorization, artifact trust, outcome inference |
-| `volatile.py` | lock-serialized one-process reference adapter and crash edges | durability, host isolation, secure memory claim |
+## State and collection axes
 
-The service imports the standalone `connector_protocol`; that package imports
-neither the sidecar nor `mycogni`. The trusted core is not imported and the sidecar
-has no path to core data.
-
-## Finite protocol
+Mailbox lifecycle and trusted-core delivery are deliberately separate:
 
 ```mermaid
 stateDiagram-v2
     [*] --> empty
-    empty --> offered: "core offers canonical envelope + one-time material"
-    offered --> claimed_once: "declared connector claims exactly once"
-    claimed_once --> result_committed: "validated result references all staged ciphertext"
-    empty --> expired: "deadline reached"
-    offered --> expired: "deadline reached"
-    claimed_once --> expired: "deadline reached"
-    empty --> abandoned: "core abandons"
-    offered --> abandoned: "core abandons"
-    claimed_once --> abandoned: "core abandons orphan"
-    result_committed --> result_committed: "one core collection sets collected flag"
+    empty --> offered: core offer
+    offered --> claimed_once: one connector claim
+    claimed_once --> result_committed: validated atomic commit
+    empty --> expired: claim deadline
+    offered --> expired: claim deadline
+    claimed_once --> expired: result deadline
+    empty --> abandoned: core abandon
+    offered --> abandoned: core abandon
+    claimed_once --> abandoned: core abandon
 ```
 
-No replay path returns to `offered`. A crash after atomic claim consumes the key and
-leaves an orphaned `claimed_once` mailbox for explicit core abandonment. A crash
-after atomic result commit leaves `result_committed`, so the core can collect it.
-Expiry, crash, and abandonment do not create protocol results or external outcome
-facts.
+```mermaid
+stateDiagram-v2
+    [*] --> none
+    none --> ready: result committed
+    ready --> delivering: core begins collection
+    delivering --> delivering: idempotent redelivery
+    delivering --> acknowledged: durable consumer ack
+```
 
-## Immutable binding and role separation
+`result_committed` is internal mailbox truth, not a broker or removal status. The
+credential-scoped snapshot is redacted to mailbox ID, internal axes, byte/count
+totals, and retention flags; it does not expose the action binding. External status
+rendering is outside this component and must never map these states to an outcome.
 
-Every operation presents the same `ActionBinding`. It contains:
+Collection is two-phase. `collect` begins or resumes delivery without deleting the
+bundle. Only `acknowledge_collection`, called after the trusted consumer durably
+records it, clears result and evidence. A crash after ack is idempotently
+recoverable; collection after acknowledged state is replay-denied. The volatile
+adapter proves transition semantics but not restart durability.
 
-- UUIDv4 mailbox/action/intent/attempt IDs;
-- selected `sha256` artifact digest supplied independently of manifest parsing;
-- canonical bounded connector release and capability;
-- non-negative installation dispatch epoch, fence, and authorization epoch;
-- exact aware-UTC deadline and positive bounded wall/response budgets;
-- digest of canonical strict protocol-v1 action JSON.
+## Immutable binding, deadlines, and four secret roles
 
-Zero is a valid initial epoch/fence. Python booleans are rejected even though `bool`
-is an `int` subclass. Wrong digest, release, capability, action, attempt, epoch,
-fence, deadline, or budget fails before claim/upload/commit state mutation.
-The injected UTC clock advances a per-mailbox high-water; rollback fails closed and
-cannot extend the deadline. Persistence of that high-water is not proven.
+Every action binds exact UUIDv4 identifiers, selected artifact digest, connector
+release and capability, dispatch/fence/authorization epochs, canonical action
+digest, claim deadline, result deadline, wall-budget metadata, and response bytes.
 
-Credentials are role-distinct and at least 256 bits:
+- The earlier claim deadline bounds how long an offer can be accepted.
+- The action deadline bounds evidence and result commit after claim.
+- `wall_seconds` is metadata for the later runtime enforcer. This slice checks its
+  value and equality but does not enforce elapsed CPU or wall time.
 
-1. claim credential: consumes envelope and action key once;
-2. result credential: generated inside the sidecar from an injected operating-system
-   randomness port and returned only by a successful claim; it permits bounded
-   evidence staging, then is burned by one result commit;
-3. collection credential: retained by the core for abandon or one result collection.
+The repository samples its clock only after acquiring the transaction lock. A
+caller blocked behind another transaction cannot carry a stale service-layer time
+sample across the lock. Rollback against the per-record high-water fails before
+mutation. Durable time high-water and restore-epoch handling remain persistent
+adapter requirements.
 
-The application requires claim and collection credentials to differ. Offer also
-rejects a generated result credential equal to either role or the action key.
+Four per-action secrets are pairwise distinct and at least 256 bits:
 
-## Result and evidence semantics
+1. action key/credential authenticates the core offer and seals action attributes;
+2. claim credential consumes the offer once;
+3. result credential is generated by the mailbox, delivered once, and burned at
+   result commit;
+4. collection credential scopes core diagnostics, abandon, collection, and ack.
 
-Evidence is non-empty opaque ciphertext with canonical kind, UUIDv4 object ID,
-SHA-256 digest, at most 64 objects, and the smaller of the action response budget or
-protocol aggregate byte bound. Upload recomputes the digest and prevents object
-overwrite. Commit parses strict protocol-v1 result JSON and requires:
+The repository also rejects a credential already active for another mailbox. The
+maintenance credential is installation-scoped and cannot perform connector or
+collection operations.
 
-- exact action and attempt IDs;
-- every result evidence reference has an uploaded object;
-- no staged object is omitted;
-- exact object ID, kind, digest, and byte count equality;
-- protocol result/reason vocabulary and aggregate limits remain valid.
+## Capability/result/next-action policy
 
-The deterministic test fixture uses only reserved-domain synthetic identifiers and
-records `candidate_observed`. The mailbox does not interpret that fact and never
-upgrades it to acknowledgement, broker assertion, one-absence observation, or
-`verified_removed`.
+Strict `ResultEnvelope` schema validation is necessary but not sufficient. The
+service applies an exhaustive matrix over every protocol capability, result code,
+and next-step enum. Import fails if a newly added enum lacks policy coverage.
 
-## Failure evidence
+- `observe` cannot emit prepared, transport, receipt, acknowledgement, processing,
+  or completion facts.
+- `prepare` can emit only `payload_prepared` plus challenge, inconclusive, or
+  failure facts; it cannot claim any send or broker effect.
+- submit, poll, and verify each have an explicit finite result set.
+- each result has an explicit next-step set.
+- `retry_later` is accepted by the wire schema for compatibility but rejected by
+  every mailbox policy cell. A connector cannot decide to retry after possible
+  effect or uncertainty. Trusted core must reconcile facts and authorize a fresh
+  attempt with a new fence and credentials.
 
-| Required failure | Executable evidence |
-| --- | --- |
-| wrong artifact/release/capability/fence/epochs/deadline/budgets/action digest | `test_every_immutable_binding_dimension_is_checked_on_claim` |
-| claim replay, cross-mailbox access and wrong role credential | state-machine and result/evidence denial tests |
-| concurrent double claim | 64 contenders produce exactly one claimed action |
-| oversized/invalid envelopes and strict result schema | protocol parsing bounds plus connector-protocol suite |
-| evidence digest/size/reference mismatch and overwrite | result/evidence adversarial tests |
-| crash before/after claim, upload and result commit | six named deterministic failure-injection edges |
-| orphan cleanup and action/result key logical disposal | abandon/expiry and post-claim redacted snapshots |
-| clock rollback extends deadline | last-seen high-water denial test |
-| PII/key canaries in repr/errors/snapshots | boundary redaction tests and repository safety guard |
-| connector/core import separation | AST boundary test and standalone SDK distribution tests |
-| network/process path absent | AST boundary test plus NET-001 source and runtime guards |
+All rejected matrix cells leave state, evidence, and credentials unconsumed.
 
-These are candidate review targets for `VFY-RUNNER-001`; this slice does not change
-the governed threat/test catalog or claim authenticated acceptance.
+## Sensitive evidence and byte accounting
 
-## Operator and security nonclaims
+Connector evidence is named an **untrusted sensitive payload**, not ciphertext.
+`payload_digest` detects mismatch but proves neither origin nor encryption. The
+storage adapter must immediately wrap and authenticate bytes under a mailbox-owned
+storage key before retention, then authenticate and unwrap only for core
+collection. The volatile adapter demonstrates this contract with AES-256-GCM and
+metadata-bound associated data. Its process-local key is intentionally not a
+production key-management design.
 
-- `VolatileMailboxRepository` is erased on process restart; restart durability is
-  unproven and it must never carry a real action.
-- Mutable internal buffers are overwritten and references dropped on
-  claim/expiry/abandon. Returned immutable Python bytes, allocator copies, swap,
-  crash dumps, and host memory are not guaranteed zeroized.
-- SHA-256 is used only to compare independently generated high-entropy one-action
-  credentials. This is not a password KDF or encryption scheme.
+Raw payload bodies are absent from repr, snapshots, and finite error text. Tests use
+PII canaries to prove the volatile record retains authenticated wrapped bytes rather
+than raw connector payload. Persistent adapters must additionally prove raw values
+never enter database diagnostics, logs, traces, crash output, backups, or temporary
+files.
+
+Per mailbox, result-envelope bytes plus staged evidence bytes must be less than or
+equal to the exact action response budget. Evidence also has item and protocol
+aggregate bounds. Installation limits independently bound active records, total
+evidence bytes, and total committed response bytes; capacity exhaustion returns
+finite backpressure without mutation.
+
+## Retention, GC, and replay
+
+Committed but unacknowledged bundles and acknowledged/expired/abandoned records
+have separate finite retention windows. Authenticated GC removes eligible records,
+releases quota counters, and creates finite tombstones. Tombstones reject mailbox
+ID replay for their configured retention window and are themselves TTL- and
+count-bounded. This intentionally chooses bounded replay memory; after tombstone
+expiry, unpredictable UUIDv4 IDs, fresh credentials, dispatch epochs, fences, and a
+durable restore epoch must provide the remaining defense in a production adapter.
+
+Concurrency tests cover single claim/commit winners and installation evidence
+saturation. Crash edges cover claim, evidence, result commit, and collection ack.
+Long-idle uncollected bundles are collected by policy rather than retained without
+bound.
+
+## Nonclaims and remaining runtime work
+
+- `VolatileMailboxRepository` loses all state and its wrapping key on restart. It
+  must never carry a real action.
+- AES-GCM here proves the adapter contract only. Production requires durable
+  envelope-key management, rotation, restore-epoch invalidation, backup policy,
+  and restart/crash recovery.
+- Python bytes, allocator copies, swap, crash dumps, and host memory are not
+  guaranteed zeroized.
+- SHA-256 credential digests assume uniformly random credentials; they are not a
+  password KDF.
 - No signature, SBOM, provenance, manifest freshness, revocation, authorization,
-  image lookup, or runtime digest is verified here. The selected artifact digest is
-  an immutable caller-supplied binding, not proof that a container matches it.
-- No Compose, OCI image, sidecar transport, host path, environment allowlist,
-  namespace, seccomp, capability, PID/CPU/RAM/time enforcement, or cleanup of real
-  volumes/layers/logs has been exercised.
-- No network exists in the slice. NET-001 remains a pytest safety belt, not runtime
-  containment. Egress and first-byte authorization belong to later packages.
-- Collection is an atomic in-process move, not durable delivery acknowledgement.
-  Persistent collection/ack crash semantics must be resolved before implementation.
-- A valid connector result is an untrusted attempt fact, never proof of transport,
-  acknowledgement, compliance, or removal.
+  image lookup, or runtime digest is verified here.
+- No Compose/OCI topology, read-only filesystem, namespace, seccomp, dropped
+  capability, PID/CPU/RAM/wall enforcement, network containment, or real cleanup
+  has been exercised by this slice.
+- NET-001 remains a source/runtime safety belt, not kernel containment.
+- A valid connector result remains an untrusted attempt fact, never proof of
+  transport, acknowledgement, compliance, absence, or removal.
 
-## Runtime evidence still required
+PF-002 must record effective multi-architecture image and runtime evidence,
+malicious containment probes, storage/log cleanup, restart/orphan recovery, and
+resource termination. Failure to prove those controls rejects the sidecar proposal
+before an ADR can be accepted.
 
-SPIKE-RUNNER cannot be accepted until a responsive real engine records, on each
-claimed platform/architecture:
+## Verification
 
-- immutable selected image digest and effective statically declared Compose model;
-- non-root/rootless, read-only root, tmpfs, dropped capabilities,
-  `no-new-privileges`, syscall and PID/CPU/RAM/time enforcement;
-- no Docker socket, host paths, core/data/key mounts, ports/devices/privileged mode,
-  host PID/IPC/network/host-gateway, default network, or reusable environment secret;
-- malicious probes for environment, `/proc`, metadata/private/loopback/DNS routes,
-  other actions, writes outside tmpfs, privilege escalation, and resource kills;
-- artifact inspection proving connector contains `connector_protocol` but not
-  `mycogni`, while core artifacts contain no connector implementation;
-- restart/orphan cleanup proving no envelope/key/evidence survives in volume, image
-  layer, log, or unintended host path.
-
-Docker unavailability is a named evidence blocker, not a reason to simulate or
-claim these controls.
-
-## Verification commands
-
-Run through the repository's locked toolchain and guarded pytest launcher:
+Run the locked toolchain on both supported Python versions:
 
 ```text
+uv run --all-packages --frozen --python 3.12.12 ruff check .
 uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 ruff check .
 uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 ```
 
-Focused counts and full-repository gate results are evidence for the exact commit
-under review and must be recorded in the independent review, not treated as a
-floating acceptance claim here.
+Exact counts and full-repository results belong in the independent review for the
+reviewed commit. Passing focused tests does not complete PF-002 or accept V1.
 
 ## Rollback
 
-Remove `services/runner_mailbox/`, its focused tests, and this spike note; remove
-`services/` from the static runtime guard roots and type-check target. Because
-the adapter is volatile and synthetic-only, there is no migration or retained real
-state. Preserve negative review evidence and do not reuse any synthetic credentials.
-
-## Independent review targets
-
-1. Security/recovery: secret roles, replay/oracle behavior, deadline/restore epoch,
-   cleanup, collection acknowledgement, and zeroization nonclaims.
-2. Backend/concurrency: atomicity, linearizability, crash edges, bounded memory,
-   persistent-adapter contract, and aliasing.
-3. Platform/edge: sidecar versus core endpoint, real Compose topology, effective
-   mounts/environment/network/namespaces/resources, and cross-platform limitations.
-4. OSS/API: standalone package direction, finite compatibility/versioning,
-   contributor diagnostics, test readability, and rollback.
+Remove `services/runner_mailbox/`, its focused tests, and this spike note; revert
+the connector-protocol evidence-field rename and regenerated schema snapshot; then
+remove the service from static guards/type-check targets. Preserve negative review
+evidence and never reuse synthetic credentials.

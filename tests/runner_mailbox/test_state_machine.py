@@ -26,6 +26,7 @@ from tests.runner_mailbox.conftest import (
     COLLECTION_CREDENTIAL,
     EVIDENCE_ID,
     MAILBOX_ID,
+    MAINTENANCE_CREDENTIAL,
     RESULT_CREDENTIAL,
     FakeClock,
     FixedCredentialSource,
@@ -38,12 +39,12 @@ def _digest(value: bytes) -> str:
 
 
 def _evidence() -> EvidenceUpload:
-    ciphertext = b"sealed deterministic simulator evidence"
+    payload = b"untrusted deterministic simulator evidence"
     return EvidenceUpload(
         object_id=UUID(EVIDENCE_ID),
         kind="sanitized_html",
-        ciphertext_digest=_digest(ciphertext),
-        ciphertext=ciphertext,
+        payload_digest=_digest(payload),
+        payload=payload,
     )
 
 
@@ -60,8 +61,8 @@ def _result(evidence: EvidenceUpload, *, action_id: str | None = None) -> bytes:
                 {
                     "kind": evidence.kind,
                     "mailbox_object_id": str(evidence.object_id),
-                    "ciphertext_digest": evidence.ciphertext_digest,
-                    "byte_count": len(evidence.ciphertext),
+                    "payload_digest": evidence.payload_digest,
+                    "byte_count": len(evidence.payload),
                 }
             ],
             "disclosures": [{"attribute_type": "name", "destination": "broker.example.test"}],
@@ -78,12 +79,15 @@ def test_full_one_time_state_machine_and_collection(
     offered: RunnerMailboxService,
     binding: ActionBinding,
 ) -> None:
-    assert offered.snapshot(UUID(MAILBOX_ID)).state is MailboxState.OFFERED
+    assert (
+        offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.OFFERED
+    )
 
     claim = offered.claim(binding, claim_credential=CLAIM_CREDENTIAL)
     assert claim.action_key == ACTION_KEY
     assert claim.result_credential == RESULT_CREDENTIAL
-    claimed = offered.snapshot(UUID(MAILBOX_ID))
+    claimed = offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
     assert claimed.state is MailboxState.CLAIMED_ONCE
     assert not claimed.claim_material_retained
     assert not claimed.result_credential_material_retained
@@ -96,7 +100,7 @@ def test_full_one_time_state_machine_and_collection(
     )
     assert (staged.staged_evidence_count, staged.staged_evidence_bytes) == (
         1,
-        len(evidence.ciphertext),
+        len(evidence.payload),
     )
 
     committed = offered.commit_result(
@@ -113,15 +117,18 @@ def test_full_one_time_state_machine_and_collection(
     )
     assert bundle.binding == binding
     assert bundle.evidence == (evidence,)
-    final = offered.snapshot(UUID(MAILBOX_ID))
+    final = offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
     assert final.state is MailboxState.RESULT_COMMITTED
-    assert final.collected
-    assert not final.result_present
-    assert final.staged_evidence_count == 0
-
-    with pytest.raises(MailboxError) as replay:
-        offered.collect(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
-    _assert_denial(MailboxDenial.REPLAY, replay)
+    assert final.collection_state.value == "delivering"
+    assert final.result_present
+    repeated = offered.collect(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
+    assert repeated == bundle
+    acknowledged = offered.acknowledge_collection(
+        UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL
+    )
+    assert acknowledged.collection_state.value == "acknowledged"
+    assert not acknowledged.result_present
+    assert acknowledged.staged_evidence_count == 0
 
 
 def test_claim_and_offer_replay_fail_closed(
@@ -134,6 +141,7 @@ def test_claim_and_offer_replay_fail_closed(
             binding,
             action_json,
             action_key=ACTION_KEY,
+            collection_credential=COLLECTION_CREDENTIAL,
         )
     _assert_denial(MailboxDenial.REPLAY, second_offer)
     offered.claim(binding, claim_credential=CLAIM_CREDENTIAL)
@@ -151,6 +159,7 @@ def test_claim_and_offer_replay_fail_closed(
         {"dispatch_epoch": 1},
         {"fence": 1},
         {"authorization_epoch": 1},
+        {"claim_deadline_utc": datetime(2030, 1, 1, 0, 2, tzinfo=UTC)},
         {"deadline_utc": datetime(2030, 1, 1, 0, 4, tzinfo=UTC)},
         {"wall_seconds": 31},
         {"response_bytes": 4097},
@@ -163,6 +172,7 @@ def test_claim_and_offer_replay_fail_closed(
         "dispatch-epoch",
         "fence",
         "authority-epoch",
+        "claim-deadline",
         "deadline",
         "wall-budget",
         "byte-budget",
@@ -178,7 +188,10 @@ def test_every_immutable_binding_dimension_is_checked_on_claim(
     with pytest.raises(MailboxError) as denied:
         offered.claim(altered, claim_credential=CLAIM_CREDENTIAL)
     _assert_denial(MailboxDenial.BINDING_MISMATCH, denied)
-    assert offered.snapshot(UUID(MAILBOX_ID)).state is MailboxState.OFFERED
+    assert (
+        offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.OFFERED
+    )
 
 
 def test_wrong_and_cross_action_credentials_fail_without_consuming_offer(
@@ -188,7 +201,10 @@ def test_wrong_and_cross_action_credentials_fail_without_consuming_offer(
     with pytest.raises(MailboxError) as wrong:
         offered.claim(binding, claim_credential=b"x" * 32)
     _assert_denial(MailboxDenial.UNAUTHORIZED, wrong)
-    assert offered.snapshot(UUID(MAILBOX_ID)).state is MailboxState.OFFERED
+    assert (
+        offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.OFFERED
+    )
 
     other = replace(binding, mailbox_id=uuid4())
     with pytest.raises(MailboxError) as absent:
@@ -202,8 +218,8 @@ def test_expiry_is_terminal_and_never_manufactures_a_result(
     clock: FakeClock,
 ) -> None:
     clock.current = binding.deadline_utc
-    assert offered.expire_due() == (UUID(MAILBOX_ID),)
-    snapshot = offered.snapshot(UUID(MAILBOX_ID))
+    assert offered.expire_due(maintenance_credential=MAINTENANCE_CREDENTIAL) == (UUID(MAILBOX_ID),)
+    snapshot = offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is MailboxState.EXPIRED
     assert not snapshot.result_present
     assert snapshot.staged_evidence_count == 0
@@ -250,7 +266,7 @@ def test_result_committed_before_deadline_remains_collectable_by_core_after_dead
         result_credential=claim.result_credential,
     )
     clock.current = binding.deadline_utc + timedelta(days=1)
-    assert offered.expire_due() == ()
+    assert offered.expire_due(maintenance_credential=MAINTENANCE_CREDENTIAL) == ()
     bundle = offered.collect(
         UUID(MAILBOX_ID),
         collection_credential=COLLECTION_CREDENTIAL,
@@ -290,17 +306,19 @@ def test_public_snapshots_are_frozen_and_validate_exact_scalar_types(
     offered: RunnerMailboxService,
     binding: ActionBinding,
 ) -> None:
-    snapshot = offered.snapshot(UUID(MAILBOX_ID))
+    snapshot = offered.snapshot(UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL)
     with pytest.raises(FrozenInstanceError):
-        snapshot.collected = True
+        snapshot.result_present = True
     with pytest.raises(ValueError, match="exact bool"):
         MailboxSnapshot(
-            binding=binding,
+            mailbox_id=binding.mailbox_id,
             state=MailboxState.EMPTY,
+            collection_state=offered.snapshot(
+                UUID(MAILBOX_ID), collection_credential=COLLECTION_CREDENTIAL
+            ).collection_state,
             staged_evidence_count=0,
             staged_evidence_bytes=0,
             result_present=1,  # type: ignore[arg-type]
-            collected=False,
             claim_material_retained=False,
             result_credential_material_retained=False,
         )
@@ -313,6 +331,7 @@ def test_open_rejects_reused_or_weak_credentials(
     with pytest.raises(MailboxError) as reused:
         service.open_empty(
             binding,
+            action_credential=ACTION_KEY,
             claim_credential=CLAIM_CREDENTIAL,
             collection_credential=CLAIM_CREDENTIAL,
         )
@@ -320,6 +339,7 @@ def test_open_rejects_reused_or_weak_credentials(
     with pytest.raises(MailboxError) as weak:
         service.open_empty(
             binding,
+            action_credential=ACTION_KEY,
             claim_credential=b"short",
             collection_credential=COLLECTION_CREDENTIAL,
         )
@@ -334,13 +354,16 @@ def test_offer_rejects_cross_role_secret_reuse(
     result_credential: bytes,
 ) -> None:
     service = RunnerMailboxService(
-        VolatileMailboxRepository(),
+        VolatileMailboxRepository(
+            maintenance_credential_digest=Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL)
+        ),
         clock,
         Sha256CredentialDigester(),
         FixedCredentialSource(result_credential),
     )
     service.open_empty(
         binding,
+        action_credential=ACTION_KEY,
         claim_credential=CLAIM_CREDENTIAL,
         collection_credential=COLLECTION_CREDENTIAL,
     )
@@ -349,6 +372,7 @@ def test_offer_rejects_cross_role_secret_reuse(
             binding,
             action_json,
             action_key=ACTION_KEY,
+            collection_credential=COLLECTION_CREDENTIAL,
         )
     _assert_denial(MailboxDenial.INVALID_INPUT, reused)
 
@@ -361,6 +385,7 @@ def test_untrusted_clock_failure_fails_closed(
 ) -> None:
     service.open_empty(
         binding,
+        action_credential=ACTION_KEY,
         claim_credential=CLAIM_CREDENTIAL,
         collection_credential=COLLECTION_CREDENTIAL,
     )
@@ -370,6 +395,7 @@ def test_untrusted_clock_failure_fails_closed(
             binding,
             action_json,
             action_key=ACTION_KEY,
+            collection_credential=COLLECTION_CREDENTIAL,
         )
     _assert_denial(MailboxDenial.INTERNAL_UNCERTAINTY, uncertainty)
 
@@ -383,7 +409,7 @@ def test_clock_rollback_cannot_extend_an_offered_mailbox(
     with pytest.raises(MailboxError) as uncertainty:
         offered.claim(binding, claim_credential=CLAIM_CREDENTIAL)
     _assert_denial(MailboxDenial.INTERNAL_UNCERTAINTY, uncertainty)
-    snapshot = offered.snapshot(binding.mailbox_id)
+    snapshot = offered.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is MailboxState.OFFERED
     assert not snapshot.result_present
 
@@ -397,12 +423,14 @@ def test_artifact_digest_is_independent_input_not_manifest_trust(
         action_json,
         selected_artifact_digest=ARTIFACT_DIGEST,
         dispatch_epoch=0,
+        claim_deadline_utc=datetime(2030, 1, 1, 0, 1, tzinfo=UTC),
     )
     second = service.bind_action(
         UUID(MAILBOX_ID),
         action_json,
         selected_artifact_digest="sha256:" + "b" * 64,
         dispatch_epoch=0,
+        claim_deadline_utc=datetime(2030, 1, 1, 0, 1, tzinfo=UTC),
     )
     assert first.envelope_digest == second.envelope_digest
     assert first.selected_artifact_digest != second.selected_artifact_digest

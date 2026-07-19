@@ -1,14 +1,15 @@
-"""Validated application service for the pure SPIKE-RUNNER mailbox protocol."""
+"""Validated application service for the finite runner mailbox protocol."""
 
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import ValidationError
 
-from connector_protocol import ActionEnvelope, ResultEnvelope
+from connector_protocol import ActionEnvelope, Capability, ResultEnvelope
+from connector_protocol.result import NextStepKind, ResultCode
 from services.runner_mailbox.domain import (
     ACTION_KEY_BYTES,
     MAX_ACTION_ENVELOPE_BYTES,
@@ -32,9 +33,92 @@ from services.runner_mailbox.ports import (
     MailboxRepository,
 )
 
+_RESULTS_BY_CAPABILITY: dict[Capability, frozenset[ResultCode]] = {
+    Capability.OBSERVE: frozenset(
+        {
+            ResultCode.NO_CANDIDATE,
+            ResultCode.CANDIDATE_OBSERVED,
+            ResultCode.AMBIGUOUS_CANDIDATES,
+            ResultCode.CHALLENGE,
+            ResultCode.INCONCLUSIVE,
+            ResultCode.FAILED,
+        }
+    ),
+    Capability.PREPARE: frozenset(
+        {
+            ResultCode.PAYLOAD_PREPARED,
+            ResultCode.CHALLENGE,
+            ResultCode.INCONCLUSIVE,
+            ResultCode.FAILED,
+        }
+    ),
+    Capability.SUBMIT: frozenset(
+        {
+            ResultCode.TRANSPORT_RECEIPT,
+            ResultCode.BROKER_ACKNOWLEDGED,
+            ResultCode.BROKER_PROCESSING,
+            ResultCode.BROKER_ASSERTED_COMPLETE,
+            ResultCode.PARTIAL_RESPONSE,
+            ResultCode.BROKER_DENIED,
+            ResultCode.CHALLENGE,
+            ResultCode.INCONCLUSIVE,
+            ResultCode.FAILED,
+        }
+    ),
+    Capability.POLL: frozenset(
+        {
+            ResultCode.BROKER_PROCESSING,
+            ResultCode.BROKER_ASSERTED_COMPLETE,
+            ResultCode.PARTIAL_RESPONSE,
+            ResultCode.BROKER_DENIED,
+            ResultCode.CHALLENGE,
+            ResultCode.INCONCLUSIVE,
+            ResultCode.FAILED,
+        }
+    ),
+    Capability.VERIFY: frozenset(
+        {
+            ResultCode.NO_CANDIDATE,
+            ResultCode.CANDIDATE_OBSERVED,
+            ResultCode.AMBIGUOUS_CANDIDATES,
+            ResultCode.BROKER_PROCESSING,
+            ResultCode.BROKER_ASSERTED_COMPLETE,
+            ResultCode.PARTIAL_RESPONSE,
+            ResultCode.BROKER_DENIED,
+            ResultCode.CHALLENGE,
+            ResultCode.INCONCLUSIVE,
+            ResultCode.FAILED,
+        }
+    ),
+}
+
+_NEXT_BY_RESULT: dict[ResultCode, frozenset[NextStepKind]] = {
+    ResultCode.NO_CANDIDATE: frozenset({NextStepKind.NONE}),
+    ResultCode.CANDIDATE_OBSERVED: frozenset({NextStepKind.NONE, NextStepKind.USER_REVIEW}),
+    ResultCode.AMBIGUOUS_CANDIDATES: frozenset({NextStepKind.USER_REVIEW}),
+    ResultCode.PAYLOAD_PREPARED: frozenset({NextStepKind.NONE, NextStepKind.USER_REVIEW}),
+    ResultCode.TRANSPORT_RECEIPT: frozenset({NextStepKind.NONE}),
+    ResultCode.BROKER_ACKNOWLEDGED: frozenset({NextStepKind.NONE}),
+    ResultCode.BROKER_PROCESSING: frozenset({NextStepKind.NONE}),
+    ResultCode.BROKER_ASSERTED_COMPLETE: frozenset({NextStepKind.NONE, NextStepKind.USER_REVIEW}),
+    ResultCode.PARTIAL_RESPONSE: frozenset({NextStepKind.NONE, NextStepKind.USER_REVIEW}),
+    ResultCode.BROKER_DENIED: frozenset(
+        {NextStepKind.NONE, NextStepKind.USER_REVIEW, NextStepKind.REAUTHORIZE}
+    ),
+    ResultCode.CHALLENGE: frozenset({NextStepKind.USER_REVIEW, NextStepKind.REAUTHORIZE}),
+    ResultCode.INCONCLUSIVE: frozenset({NextStepKind.NONE, NextStepKind.USER_REVIEW}),
+    ResultCode.FAILED: frozenset(
+        {NextStepKind.NONE, NextStepKind.USER_REVIEW, NextStepKind.REAUTHORIZE}
+    ),
+}
+
+# Import-time completeness prevents a newly added wire enum from failing open.
+if set(_RESULTS_BY_CAPABILITY) != set(Capability) or set(_NEXT_BY_RESULT) != set(ResultCode):
+    raise RuntimeError("runner result policy is not exhaustive")
+
 
 class RunnerMailboxService:
-    """Fail-closed boundary with no network, filesystem, runtime, or outcome authority."""
+    """Fail-closed boundary with distinct connector and trusted-core faces."""
 
     def __init__(
         self,
@@ -55,8 +139,9 @@ class RunnerMailboxService:
         *,
         selected_artifact_digest: str,
         dispatch_epoch: int,
+        claim_deadline_utc: datetime,
     ) -> ActionBinding:
-        """Validate and independently bind exact canonical action bytes to an artifact."""
+        """Bind canonical action bytes plus a separate earlier claim deadline."""
 
         action, canonical = RunnerMailboxService._parse_action(action_json)
         try:
@@ -71,6 +156,7 @@ class RunnerMailboxService:
                 dispatch_epoch=dispatch_epoch,
                 fence=action.fence,
                 authorization_epoch=action.authorization_epoch,
+                claim_deadline_utc=claim_deadline_utc,
                 deadline_utc=action.deadline_utc,
                 wall_seconds=action.budget.wall_seconds,
                 response_bytes=action.budget.response_bytes,
@@ -83,21 +169,21 @@ class RunnerMailboxService:
         self,
         binding: ActionBinding,
         *,
+        action_credential: bytes,
         claim_credential: bytes,
         collection_credential: bytes,
     ) -> MailboxSnapshot:
         self._require_binding_type(binding)
-        self._require_credential(claim_credential)
-        self._require_credential(collection_credential)
-        self._require_distinct_credentials(claim_credential, collection_credential)
-        now = self._now()
-        if now >= binding.deadline_utc:
-            raise MailboxError(MailboxDenial.EXPIRED)
+        credentials = (action_credential, claim_credential, collection_credential)
+        self._require_pairwise_credentials(credentials)
+        if len(action_credential) != ACTION_KEY_BYTES:
+            raise MailboxError(MailboxDenial.INVALID_INPUT)
         return self._repository.create(
             binding,
+            self._credential_digester.digest(action_credential),
             self._credential_digester.digest(claim_credential),
             self._credential_digester.digest(collection_credential),
-            now,
+            self._clock,
         )
 
     def offer(
@@ -106,40 +192,35 @@ class RunnerMailboxService:
         action_json: bytes,
         *,
         action_key: bytes,
+        collection_credential: bytes,
     ) -> MailboxSnapshot:
+        """Credential-scoped trusted-core offer face."""
+
         self._require_binding_type(binding)
         action, canonical = self._parse_action(action_json)
         self._require_action_binding(binding, action, canonical)
-        if type(action_key) is not bytes or len(action_key) != ACTION_KEY_BYTES:
+        self._require_credential(action_key)
+        if len(action_key) != ACTION_KEY_BYTES:
             raise MailboxError(MailboxDenial.INVALID_INPUT)
+        self._require_credential(collection_credential)
         result_credential = self._credential_source.issue()
-        self._require_credential(result_credential)
-        self._require_distinct_credentials(action_key, result_credential)
-        now = self._now()
-        if now >= binding.deadline_utc:
-            self._repository.expire(now)
-            raise MailboxError(MailboxDenial.EXPIRED)
+        self._require_pairwise_credentials((action_key, collection_credential, result_credential))
         return self._repository.offer(
             binding,
             canonical,
             bytearray(action_key),
+            self._credential_digester.digest(action_key),
+            self._credential_digester.digest(collection_credential),
             bytearray(result_credential),
             self._credential_digester.digest(result_credential),
-            now,
+            self._clock,
         )
 
-    def claim(
-        self,
-        binding: ActionBinding,
-        *,
-        claim_credential: bytes,
-    ) -> ClaimedAction:
+    def claim(self, binding: ActionBinding, *, claim_credential: bytes) -> ClaimedAction:
         self._require_binding_type(binding)
         self._require_credential(claim_credential)
         return self._repository.claim(
-            binding,
-            self._credential_digester.digest(claim_credential),
-            self._now(),
+            binding, self._credential_digester.digest(claim_credential), self._clock
         )
 
     def stage_evidence(
@@ -153,15 +234,15 @@ class RunnerMailboxService:
         self._require_credential(result_credential)
         if type(evidence) is not EvidenceUpload:
             raise MailboxError(MailboxDenial.INVALID_INPUT)
-        if len(evidence.ciphertext) > MAX_EVIDENCE_BYTES:
+        if len(evidence.payload) > MAX_EVIDENCE_BYTES:
             raise MailboxError(MailboxDenial.OVERSIZE)
-        if self._sha256(evidence.ciphertext) != evidence.ciphertext_digest:
+        if self._sha256(evidence.payload) != evidence.payload_digest:
             raise MailboxError(MailboxDenial.DIGEST_MISMATCH)
         return self._repository.stage_evidence(
             binding,
             self._credential_digester.digest(result_credential),
             evidence,
-            self._now(),
+            self._clock,
         )
 
     def commit_result(
@@ -176,11 +257,12 @@ class RunnerMailboxService:
         result, canonical = self._parse_result(result_json)
         if result.action_id != binding.action_id or result.attempt_id != binding.attempt_id:
             raise MailboxError(MailboxDenial.RESULT_MISMATCH)
+        self._require_result_policy(binding, result)
         seals = tuple(
             EvidenceSeal(
                 object_id=item.mailbox_object_id,
                 kind=item.kind,
-                ciphertext_digest=item.ciphertext_digest,
+                payload_digest=item.payload_digest,
                 byte_count=item.byte_count,
             )
             for item in result.evidence
@@ -190,42 +272,64 @@ class RunnerMailboxService:
             self._credential_digester.digest(result_credential),
             canonical,
             seals,
-            self._now(),
+            self._clock,
         )
 
-    def collect(
-        self,
-        mailbox_id: UUID,
-        *,
-        collection_credential: bytes,
-    ) -> CommittedBundle:
+    def collect(self, mailbox_id: UUID, *, collection_credential: bytes) -> CommittedBundle:
+        """Begin or resume idempotent delivery; data remains until explicit ack."""
+
         self._require_mailbox_id(mailbox_id)
         self._require_credential(collection_credential)
         return self._repository.collect(
-            mailbox_id,
-            self._credential_digester.digest(collection_credential),
+            mailbox_id, self._credential_digester.digest(collection_credential), self._clock
         )
 
-    def abandon(
-        self,
-        mailbox_id: UUID,
-        *,
-        collection_credential: bytes,
+    def acknowledge_collection(
+        self, mailbox_id: UUID, *, collection_credential: bytes
     ) -> MailboxSnapshot:
         self._require_mailbox_id(mailbox_id)
         self._require_credential(collection_credential)
-        return self._repository.abandon(
-            mailbox_id,
-            self._credential_digester.digest(collection_credential),
-            self._now(),
+        return self._repository.acknowledge_collection(
+            mailbox_id, self._credential_digester.digest(collection_credential), self._clock
         )
 
-    def expire_due(self) -> tuple[UUID, ...]:
-        return self._repository.expire(self._now())
-
-    def snapshot(self, mailbox_id: UUID) -> MailboxSnapshot:
+    def abandon(self, mailbox_id: UUID, *, collection_credential: bytes) -> MailboxSnapshot:
         self._require_mailbox_id(mailbox_id)
-        return self._repository.snapshot(mailbox_id)
+        self._require_credential(collection_credential)
+        return self._repository.abandon(
+            mailbox_id, self._credential_digester.digest(collection_credential), self._clock
+        )
+
+    def expire_due(self, *, maintenance_credential: bytes) -> tuple[UUID, ...]:
+        self._require_credential(maintenance_credential)
+        return self._repository.expire(
+            self._credential_digester.digest(maintenance_credential), self._clock
+        )
+
+    def garbage_collect(self, *, maintenance_credential: bytes) -> tuple[UUID, ...]:
+        self._require_credential(maintenance_credential)
+        return self._repository.garbage_collect(
+            self._credential_digester.digest(maintenance_credential), self._clock
+        )
+
+    def snapshot(self, mailbox_id: UUID, *, collection_credential: bytes) -> MailboxSnapshot:
+        """Credential-scoped trusted-core diagnostics face."""
+
+        self._require_mailbox_id(mailbox_id)
+        self._require_credential(collection_credential)
+        return self._repository.snapshot(
+            mailbox_id, self._credential_digester.digest(collection_credential)
+        )
+
+    @staticmethod
+    def _require_result_policy(binding: ActionBinding, result: ResultEnvelope) -> None:
+        capability = Capability(binding.capability)
+        if result.result not in _RESULTS_BY_CAPABILITY[capability]:
+            raise MailboxError(MailboxDenial.CAPABILITY_MISMATCH)
+        if result.next.kind not in _NEXT_BY_RESULT[result.result]:
+            raise MailboxError(MailboxDenial.CAPABILITY_MISMATCH)
+        # RETRY_LATER is intentionally absent: reconciliation/retry belongs to
+        # trusted core after it evaluates possible effect and uncertainty.
 
     @staticmethod
     def _parse_action(action_json: bytes) -> tuple[ActionEnvelope, bytes]:
@@ -253,9 +357,7 @@ class RunnerMailboxService:
 
     @staticmethod
     def _require_action_binding(
-        binding: ActionBinding,
-        action: ActionEnvelope,
-        canonical: bytes,
+        binding: ActionBinding, action: ActionEnvelope, canonical: bytes
     ) -> None:
         if (
             action.action_id != binding.action_id
@@ -280,9 +382,11 @@ class RunnerMailboxService:
         ):
             raise MailboxError(MailboxDenial.INVALID_INPUT)
 
-    @staticmethod
-    def _require_distinct_credentials(first: bytes, second: bytes) -> None:
-        if first == second:
+    @classmethod
+    def _require_pairwise_credentials(cls, credentials: tuple[bytes, ...]) -> None:
+        for credential in credentials:
+            cls._require_credential(credential)
+        if len(set(credentials)) != len(credentials):
             raise MailboxError(MailboxDenial.INVALID_INPUT)
 
     @staticmethod
@@ -294,12 +398,6 @@ class RunnerMailboxService:
     def _require_mailbox_id(mailbox_id: UUID) -> None:
         if type(mailbox_id) is not UUID or mailbox_id.version != 4:
             raise MailboxError(MailboxDenial.INVALID_INPUT)
-
-    def _now(self) -> datetime:
-        now = self._clock.now()
-        if type(now) is not datetime or now.utcoffset() != UTC.utcoffset(now):
-            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        return now
 
     @staticmethod
     def _sha256(value: bytes) -> str:

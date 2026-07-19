@@ -27,18 +27,13 @@
     },
     "EvidenceReference": {
       "additionalProperties": false,
-      "description": "Opaque reference to bounded ciphertext already uploaded to the mailbox.",
+      "description": "Reference to a bounded untrusted sensitive payload uploaded to the mailbox.\n\n``payload_digest`` is an integrity binding, not a claim that the connector\nencrypted the payload. The mailbox storage adapter is responsible for\nauthenticated wrapping before persistence.",
       "properties": {
         "byte_count": {
           "exclusiveMinimum": 0,
           "maximum": 67108864,
           "title": "Byte Count",
           "type": "integer"
-        },
-        "ciphertext_digest": {
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "title": "Ciphertext Digest",
-          "type": "string"
         },
         "kind": {
           "maxLength": 64,
@@ -51,12 +46,17 @@
           "format": "uuid4",
           "title": "Mailbox Object Id",
           "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
         }
       },
       "required": [
         "kind",
         "mailbox_object_id",
-        "ciphertext_digest",
+        "payload_digest",
         "byte_count"
       ],
       "title": "EvidenceReference",

@@ -86,7 +86,7 @@ def result_payload() -> dict[str, Any]:
             {
                 "kind": "sanitized_html",
                 "mailbox_object_id": UUIDS["mailbox"],
-                "ciphertext_digest": DIGEST_A,
+                "payload_digest": DIGEST_A,
                 "byte_count": 256,
             }
         ],
@@ -288,7 +288,7 @@ def test_result_ids_reject_noncanonical_uuid_text(
 
 
 def test_bad_digest_and_zero_evidence_size_fail(result_payload: dict[str, Any]) -> None:
-    result_payload["evidence"][0]["ciphertext_digest"] = "sha256:not-a-digest"
+    result_payload["evidence"][0]["payload_digest"] = "sha256:not-a-digest"
     result_payload["evidence"][0]["byte_count"] = 0
     with pytest.raises(ValidationError):
         ResultEnvelope.model_validate_json(json.dumps(result_payload))
@@ -305,7 +305,7 @@ def test_aggregate_evidence_size_is_bounded(result_payload: dict[str, Any]) -> N
     first["byte_count"] = 40_000_000
     second = deepcopy(first)
     second["mailbox_object_id"] = UUIDS["mailbox_2"]
-    second["ciphertext_digest"] = DIGEST_B
+    second["payload_digest"] = DIGEST_B
     second["byte_count"] = 30_000_000
     result_payload["evidence"].append(second)
     with pytest.raises(ValidationError, match="aggregate evidence"):
@@ -317,7 +317,7 @@ def test_aggregate_evidence_size_accepts_exact_limit(result_payload: dict[str, A
     first["byte_count"] = 40_000_000
     second = deepcopy(first)
     second["mailbox_object_id"] = UUIDS["mailbox_2"]
-    second["ciphertext_digest"] = DIGEST_B
+    second["payload_digest"] = DIGEST_B
     second["byte_count"] = 27_108_864
     result_payload["evidence"].append(second)
     parsed = ResultEnvelope.model_validate_json(json.dumps(result_payload))

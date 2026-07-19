@@ -27,6 +27,7 @@ CLAIM_CREDENTIAL = b"c" * 32
 COLLECTION_CREDENTIAL = b"o" * 32
 ACTION_KEY = b"k" * 32
 RESULT_CREDENTIAL = b"r" * 32
+MAINTENANCE_CREDENTIAL = b"m" * 32
 
 
 @dataclass(slots=True)
@@ -81,7 +82,9 @@ def action_json(action_payload: dict[str, Any]) -> bytes:
 
 @pytest.fixture
 def repository() -> VolatileMailboxRepository:
-    return VolatileMailboxRepository()
+    return VolatileMailboxRepository(
+        maintenance_credential_digest=Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL)
+    )
 
 
 @pytest.fixture
@@ -106,6 +109,7 @@ def binding(service: RunnerMailboxService, action_json: bytes) -> ActionBinding:
         action_json,
         selected_artifact_digest=ARTIFACT_DIGEST,
         dispatch_epoch=0,
+        claim_deadline_utc=datetime(2030, 1, 1, 0, 1, tzinfo=UTC),
     )
 
 
@@ -117,6 +121,7 @@ def offered(
 ) -> RunnerMailboxService:
     service.open_empty(
         binding,
+        action_credential=ACTION_KEY,
         claim_credential=CLAIM_CREDENTIAL,
         collection_credential=COLLECTION_CREDENTIAL,
     )
@@ -124,5 +129,6 @@ def offered(
         binding,
         action_json,
         action_key=ACTION_KEY,
+        collection_credential=COLLECTION_CREDENTIAL,
     )
     return service

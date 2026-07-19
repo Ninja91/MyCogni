@@ -124,11 +124,16 @@ _REASONS_BY_RESULT: dict[ResultCode, frozenset[ReasonCode]] = {
 
 
 class EvidenceReference(FrozenWireModel):
-    """Opaque reference to bounded ciphertext already uploaded to the mailbox."""
+    """Reference to a bounded untrusted sensitive payload uploaded to the mailbox.
+
+    ``payload_digest`` is an integrity binding, not a claim that the connector
+    encrypted the payload. The mailbox storage adapter is responsible for
+    authenticated wrapping before persistence.
+    """
 
     kind: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
     mailbox_object_id: UUID4
-    ciphertext_digest: Digest
+    payload_digest: Digest
     byte_count: Annotated[int, Field(gt=0, le=MAX_EVIDENCE_BYTES)]
 
     @field_validator("mailbox_object_id", mode="before")
