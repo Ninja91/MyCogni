@@ -283,8 +283,12 @@ def test_pr_and_push_ci_use_immutable_base_sha_and_fetch_full_history() -> None:
         encoding="utf-8"
     )
     assert (
-        "THREAT_CATALOG_BASE_REF: ${{ github.event_name == 'pull_request' && "
-        "github.event.pull_request.base.sha || github.event.before }}" in workflow
+        "THREAT_CATALOG_BASE_REF: ${{ vars.MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA != ''" in workflow
+    )
+    assert "'0000000000000000000000000000000000000000'" in workflow
+    assert (
+        "github.event_name == 'pull_request' && github.event.pull_request.base.sha || "
+        "github.event.before" in workflow
     )
     assert 'MYCOGNI_GOVERNANCE_CI: "1"' in workflow
     assert "MYCOGNI_GOVERNANCE_GENESIS_SHA: ${{ vars.MYCOGNI_GOVERNANCE_GENESIS_SHA }}" in workflow

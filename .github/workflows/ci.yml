@@ -10,7 +10,7 @@ permissions:
 
 env:
   # PRs use the protected base tree; pushes use the exact pre-push tree.
-  THREAT_CATALOG_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+  THREAT_CATALOG_BASE_REF: ${{ vars.MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA != '' && '0000000000000000000000000000000000000000' || (github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before) }}
   MYCOGNI_GOVERNANCE_CI: "1"
   # Repository-admin variables are outside branch control. Empty means no authority.
   MYCOGNI_GOVERNANCE_GENESIS_SHA: ${{ vars.MYCOGNI_GOVERNANCE_GENESIS_SHA }}

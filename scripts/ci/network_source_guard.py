@@ -75,6 +75,9 @@ PROCESS_DYNAMIC_CALLS = {
     "subprocess.check_output",
     "subprocess.run",
 }
+RUNTIME_IMPORT_ALLOWLIST = {
+    "src/mycogni/adapters/persistence/durability.py": {"subprocess"},
+}
 TEST_IMPORT_ALLOWLIST = {
     "tests/ci/test_network_guard.py": TEST_ESCAPE_IMPORTS,
     "tests/simulator/test_network_guard_simulator.py": {"httpx", "socket"},
@@ -84,6 +87,7 @@ TEST_IMPORT_ALLOWLIST = {
     "tests/architecture/test_distribution_boundaries.py": {"subprocess"},
     "tests/architecture/test_container_skeleton.py": {"importlib"},
     "tests/architecture/test_package_boundaries.py": {"importlib"},
+    "tests/adapters/persistence/test_durability.py": {"subprocess"},
 }
 PROCESS_CALL_ALLOWLIST = {
     "tests/ci/test_network_guard.py",
@@ -92,6 +96,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/architecture/test_distribution_boundaries.py",
     "tests/architecture/test_container_skeleton.py",
     "tests/architecture/test_package_boundaries.py",
+    "tests/adapters/persistence/test_durability.py",
     "tests/simulator/test_web_mail_safety.py",
 }
 
@@ -153,16 +158,18 @@ def _runtime_errors() -> list[str]:
         for path in sorted(base.rglob("*.py")):
             if path in guarded or "tests" in path.parts:
                 continue
+            relative = path.relative_to(ROOT).as_posix()
+            allowed = RUNTIME_IMPORT_ALLOWLIST.get(relative, set())
             violations = {
                 forbidden
                 for forbidden in FORBIDDEN_RUNTIME_IMPORTS
+                if forbidden not in allowed
                 if any(
                     imported == forbidden or imported.startswith(f"{forbidden}.")
                     for imported in _imports(path)
                 )
             }
             if violations:
-                relative = path.relative_to(ROOT).as_posix()
                 errors.append(f"{relative}: unguarded network/process import")
     return errors
 

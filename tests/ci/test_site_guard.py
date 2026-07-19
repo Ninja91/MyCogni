@@ -55,7 +55,7 @@ def test_superseded_net_remediation_claim_fails_closed(tmp_path: Path) -> None:
     index = root / "site/index.html"
     index.write_text(
         index.read_text(encoding="utf-8").replace(
-            "GOV-001 and NET-001 have code-level acceptance",
+            "GOV-001, NET-001, auth, runner, and the exact SQLite durability remediation have code-level acceptance",
             "GOV-001 has code-level acceptance; NET-001 remains in remediation review",
             1,
         ),

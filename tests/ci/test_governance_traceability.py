@@ -695,7 +695,7 @@ def test_zero_ref_recreation_runs_full_external_recovery_comparison(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     recovery = subprocess.run(
-        ["git", "rev-parse", "HEAD^"],
+        ["git", "rev-list", "--max-count=1", "HEAD", "--", "governance"],
         cwd=governance_guard.ROOT,
         check=True,
         capture_output=True,
