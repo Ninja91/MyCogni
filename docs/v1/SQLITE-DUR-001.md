@@ -147,10 +147,13 @@ validation/release ordering, concurrent runtime lifecycle and UoW retry
 ambiguity; `02f91ce` remediates those findings, but independent commit-bound
 re-review still rejected a cleanup-pause/shutdown race; `f01b3c5` remediates it,
 and three independent exact-target reviews now record code-level ACCEPT with
-zero P0/P1/P2. This does not complete the package: Python 3.13 and the full
-merged test lane were unavailable on the critically full host, authenticated
-attestation remains absent, and exact-host filesystem, Docker restart, bounded
-device-full and independently reviewed power-interruption evidence remain open.
+zero P0/P1/P2. GitHub Actions PR run `29672858907` subsequently passed the
+merge revision on Python 3.12.12 and 3.13.11: each lane collected 1,472 tests,
+passed 1,471 with the expected Linux skip of the real macOS probe, and passed
+all guards with the externally configured recovery baseline verified. This
+does not complete the package: authenticated attestation remains absent, and
+exact-host filesystem, Docker restart, bounded device-full and independently
+reviewed power-interruption evidence remain open.
 It does not promote `JOB-STATE-001`, `MIG-001`, `BAK-001`, any dispatch journal,
 or any live external action. See
 `docs/v1/reviews/15-sqlite-dur-adversarial-review.md` for chronology and

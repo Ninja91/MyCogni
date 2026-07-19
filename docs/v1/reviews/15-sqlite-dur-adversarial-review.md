@@ -202,9 +202,10 @@ not authenticated external attestations or host durability certification.
 ## Residual risk and next decision
 
 The exact-target code review is accepted, but package status remains
-`IN_PROGRESS`. Python 3.13 and the full merged test lane were unavailable on the
-critically full development host. GOV-001 authenticated acceptance is also
-absent.
+`IN_PROGRESS`. GitHub Actions PR run `29672858907` passed the merge revision on
+both locked runtimes: 1,471 passed and the real macOS-probe test was the one
+expected Linux skip in each lane. All guards passed against the configured
+external-recovery baseline. GOV-001 authenticated acceptance is still absent.
 
 SQLAlchemy hooks prevent an inherited SQLAlchemy connection from executing in a
 forked child, but cannot revoke a raw SQLite/file descriptor inherited outside
