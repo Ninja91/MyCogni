@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from threading import Event, current_thread
 from typing import Any
@@ -303,6 +303,29 @@ def _result(binding: ActionBinding, result: ResultCode, next_kind: NextStepKind)
             "evidence": [],
             "disclosures": [],
             "next": {"kind": next_kind.value},
+        }
+    )
+
+
+def _result_with_evidence(binding: ActionBinding, evidence: tuple[EvidenceUpload, ...]) -> bytes:
+    return encode(
+        {
+            "protocol_version": 1,
+            "action_id": str(binding.action_id),
+            "attempt_id": str(binding.attempt_id),
+            "result": "candidate_observed",
+            "reason_code": "exact_match",
+            "evidence": [
+                {
+                    "kind": item.kind,
+                    "mailbox_object_id": str(item.object_id),
+                    "payload_digest": item.payload_digest,
+                    "byte_count": len(item.payload),
+                }
+                for item in evidence
+            ],
+            "disclosures": [],
+            "next": {"kind": "user_review"},
         }
     )
 
@@ -989,6 +1012,158 @@ def test_low_entropy_dictionary_guesses_do_not_match_retained_sensitive_metadata
         assert digest not in retained
         assert digest.hex().encode() not in retained
     assert upload.payload_digest.encode() not in retained
+
+
+def test_moved_evidence_slot_and_alias_result_reference_fail_before_result_mutation(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, _, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"alias-sensitive-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    alias = uuid4()
+    record.evidence[alias] = record.evidence.pop(upload.object_id)
+    aliased_upload = EvidenceUpload(
+        object_id=alias,
+        kind=upload.kind,
+        payload_digest=upload.payload_digest,
+        payload=upload.payload,
+    )
+    with pytest.raises(MailboxError) as denied:
+        service.commit_result(
+            binding,
+            _result_with_evidence(binding, (aliased_upload,)),
+            result_credential=result_credential,
+        )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert record.state is MailboxState.CLAIMED_ONCE
+    assert record.result_envelope is None
+
+
+def test_swapping_two_authenticated_evidence_slots_fails_before_result_mutation(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, _, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    uploads = tuple(
+        EvidenceUpload(
+            object_id=uuid4(),
+            kind="raw_response",
+            payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+            payload=payload,
+        )
+        for payload in (b"first-sensitive-evidence", b"second-sensitive-evidence")
+    )
+    for upload in uploads:
+        service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    first, second = uploads
+    record.evidence[first.object_id], record.evidence[second.object_id] = (
+        record.evidence[second.object_id],
+        record.evidence[first.object_id],
+    )
+    with pytest.raises(MailboxError) as denied:
+        service.commit_result(
+            binding,
+            _result_with_evidence(binding, uploads),
+            result_credential=result_credential,
+        )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert record.state is MailboxState.CLAIMED_ONCE
+    assert record.result_envelope is None
+
+
+def test_collect_rejects_post_commit_evidence_slot_alias_without_delivery_mutation(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"collect-consistency-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    service.commit_result(
+        binding,
+        _result_with_evidence(binding, (upload,)),
+        result_credential=result_credential,
+    )
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    record.evidence[uuid4()] = record.evidence.pop(upload.object_id)
+    with pytest.raises(MailboxError) as denied:
+        service.collect(binding.mailbox_id, collection_credential=collection_credential)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert record.collection_state is CollectionState.READY
+    assert record.result_envelope is not None
+
+
+def test_wrapped_result_cannot_move_between_mailboxes_or_change_bundle_binding(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    configured = tuple(
+        _configure(
+            action_payload,
+            clock,
+            repository=repository,
+            credentials=_credentials(seed),
+        )
+        for seed in (10, 20)
+    )
+    for service, binding, _, claim_credential, _, _ in configured:
+        result_credential = service.claim(
+            binding, claim_credential=claim_credential
+        ).result_credential
+        service.commit_result(
+            binding,
+            _result(
+                binding,
+                ResultCode.CANDIDATE_OBSERVED,
+                NextStepKind.USER_REVIEW,
+            ),
+            result_credential=result_credential,
+        )
+    first_service, first_binding, _, _, first_collection, _ = configured[0]
+    first_bundle = first_service.collect(
+        first_binding.mailbox_id, collection_credential=first_collection
+    )
+    assert first_bundle.binding == first_binding
+
+    second_service, second_binding, _, _, second_collection, _ = configured[1]
+    first_record = repository._records[first_binding.mailbox_id]  # type: ignore[attr-defined]
+    second_record = repository._records[second_binding.mailbox_id]  # type: ignore[attr-defined]
+    original_second_result = second_record.result_envelope
+    second_record.result_envelope = first_record.result_envelope
+    with pytest.raises(MailboxError) as denied:
+        second_service.collect(second_binding.mailbox_id, collection_credential=second_collection)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert second_record.collection_state is CollectionState.READY
+
+    second_record.result_envelope = original_second_result
+    second_record.binding = replace(second_binding, fence=second_binding.fence + 1)
+    with pytest.raises(MailboxError) as denied:
+        second_service.collect(second_binding.mailbox_id, collection_credential=second_collection)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert second_record.collection_state is CollectionState.READY
 
 
 def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(

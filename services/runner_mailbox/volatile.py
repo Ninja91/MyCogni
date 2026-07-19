@@ -41,6 +41,8 @@ _WRAP_CONTEXT = b"mycogni.runner-mailbox.evidence-wrap.v1\x00"
 _RESULT_WRAP_CONTEXT = b"mycogni.runner-mailbox.result-wrap.v1\x00"
 _SEMANTIC_MAC_CONTEXT = b"mycogni.runner-mailbox.semantic-mac.v1\x00"
 _INNER_DIGEST_BYTES = 32
+_INNER_EVIDENCE_ID_BYTES = 16
+_INNER_RESULT_BINDING_BYTES = 32
 
 
 def _validated_utc_now(clock: Clock) -> datetime:
@@ -319,6 +321,7 @@ class VolatileMailboxRepository:
             self._require_result_access(record, binding, result_credential_digest)
             if self._expire_if_due(record, now):
                 raise MailboxError(MailboxDenial.EXPIRED)
+            self._validated_evidence_slots(record)
             if evidence.object_id in record.evidence:
                 raise MailboxError(MailboxDenial.REPLAY)
             if len(record.evidence) >= MAX_EVIDENCE_ITEMS:
@@ -338,10 +341,11 @@ class VolatileMailboxRepository:
             aad = self._aad(
                 binding.mailbox_id,
                 evidence.object_id,
+                evidence.object_id,
                 evidence.kind,
                 len(evidence.payload),
             )
-            framed_payload = raw_digest + evidence.payload
+            framed_payload = evidence.object_id.bytes + raw_digest + evidence.payload
             wrapped = self._aead.encrypt(nonce, framed_payload, aad)
             item = _WrappedEvidence(
                 object_id=evidence.object_id,
@@ -352,6 +356,7 @@ class VolatileMailboxRepository:
                 nonce=nonce,
                 wrapped_payload=wrapped,
             )
+            self._unwrap(binding.mailbox_id, evidence.object_id, item)
             self._failure.hit(CrashPoint.BEFORE_EVIDENCE_COMMIT)
             record.evidence[evidence.object_id] = item
             self._observe_time(record, now)
@@ -373,6 +378,7 @@ class VolatileMailboxRepository:
             self._require_result_access(record, binding, result_credential_digest)
             if self._expire_if_due(record, now):
                 raise MailboxError(MailboxDenial.EXPIRED)
+            validated_evidence = self._validated_evidence_slots(record)
             referenced = {seal.object_id for seal in evidence_seals}
             staged = set(record.evidence)
             if referenced - staged:
@@ -380,10 +386,10 @@ class VolatileMailboxRepository:
             if staged - referenced:
                 raise MailboxError(MailboxDenial.EVIDENCE_UNREFERENCED)
             for seal in evidence_seals:
-                item = record.evidence[seal.object_id]
-                unwrapped = self._unwrap(record.binding.mailbox_id, item)
+                unwrapped = validated_evidence[seal.object_id]
                 if (
-                    unwrapped.kind != seal.kind
+                    unwrapped.object_id != seal.object_id
+                    or unwrapped.kind != seal.kind
                     or unwrapped.payload_digest != seal.payload_digest
                     or len(unwrapped.payload) != seal.byte_count
                 ):
@@ -399,7 +405,7 @@ class VolatileMailboxRepository:
             raw_result_digest = hashlib.sha256(result_json).digest()
             result_nonce = secrets.token_bytes(12)
             result_aad = self._result_aad(record.binding, len(result_json))
-            framed_result = raw_result_digest + result_json
+            framed_result = self._binding_digest(record.binding) + raw_result_digest + result_json
             wrapped_result = self._aead.encrypt(
                 result_nonce,
                 framed_result,
@@ -441,7 +447,8 @@ class VolatileMailboxRepository:
             if record.collection_state not in {CollectionState.READY, CollectionState.DELIVERING}:
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
             evidence = tuple(
-                self._unwrap(record.binding.mailbox_id, item) for item in record.evidence.values()
+                self._unwrap(record.binding.mailbox_id, slot, item)
+                for slot, item in record.evidence.items()
             )
             result_json = self._unwrap_result(record.binding, record.result_envelope)
             record.collection_state = CollectionState.DELIVERING
@@ -470,6 +477,10 @@ class VolatileMailboxRepository:
                 or record.collection_state is not CollectionState.DELIVERING
             ):
                 raise MailboxError(MailboxDenial.INVALID_STATE)
+            self._validated_evidence_slots(record)
+            if record.result_envelope is None:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            self._unwrap_result(record.binding, record.result_envelope)
             self._failure.hit(CrashPoint.BEFORE_COLLECTION_ACK)
             self._release_record_payloads(record)
             record.collection_state = CollectionState.ACKNOWLEDGED
@@ -575,6 +586,9 @@ class VolatileMailboxRepository:
             now = self._validated_record_now(record, clock)
             if not self._expire_if_due(record, now):
                 self._observe_time(record, now)
+            self._validated_evidence_slots(record)
+            if record.result_envelope is not None:
+                self._unwrap_result(record.binding, record.result_envelope)
             return self._snapshot(record)
 
     def _record(self, mailbox_id: UUID) -> _Record:
@@ -703,32 +717,54 @@ class VolatileMailboxRepository:
         return sum(item.byte_count for item in record.evidence.values())
 
     @staticmethod
-    def _aad(mailbox_id: UUID, object_id: UUID, kind: str, byte_count: int) -> bytes:
+    def _aad(
+        mailbox_id: UUID,
+        authenticated_object_id: UUID,
+        repository_slot: UUID,
+        kind: str,
+        byte_count: int,
+    ) -> bytes:
         return (
             _WRAP_CONTEXT
             + mailbox_id.bytes
-            + object_id.bytes
+            + authenticated_object_id.bytes
+            + repository_slot.bytes
             + kind.encode()
             + b"\x00"
             + byte_count.to_bytes(8, "big")
         )
 
-    def _unwrap(self, mailbox_id: UUID, item: _WrappedEvidence) -> EvidenceUpload:
+    def _unwrap(
+        self, mailbox_id: UUID, repository_slot: UUID, item: _WrappedEvidence
+    ) -> EvidenceUpload:
+        if type(repository_slot) is not UUID or repository_slot != item.object_id:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         if not hmac.compare_digest(
             hashlib.sha256(item.wrapped_payload).digest(), item.storage_digest
         ):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        aad = self._aad(mailbox_id, item.object_id, item.kind, item.byte_count)
+        aad = self._aad(
+            mailbox_id,
+            item.object_id,
+            repository_slot,
+            item.kind,
+            item.byte_count,
+        )
         try:
             framed_payload = self._aead.decrypt(item.nonce, item.wrapped_payload, aad)
         except InvalidTag:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
         if not hmac.compare_digest(self._semantic_mac(aad, framed_payload), item.semantic_mac):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        if len(framed_payload) != _INNER_DIGEST_BYTES + item.byte_count:
+        if len(framed_payload) != _INNER_EVIDENCE_ID_BYTES + _INNER_DIGEST_BYTES + item.byte_count:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        raw_digest = framed_payload[:_INNER_DIGEST_BYTES]
-        payload = framed_payload[_INNER_DIGEST_BYTES:]
+        framed_object_id = framed_payload[:_INNER_EVIDENCE_ID_BYTES]
+        if not hmac.compare_digest(framed_object_id, repository_slot.bytes):
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+        digest_start = _INNER_EVIDENCE_ID_BYTES
+        digest_end = digest_start + _INNER_DIGEST_BYTES
+        raw_digest = framed_payload[digest_start:digest_end]
+        payload = framed_payload[digest_end:]
         if len(payload) != item.byte_count or not hmac.compare_digest(
             hashlib.sha256(payload).digest(), raw_digest
         ):
@@ -740,15 +776,46 @@ class VolatileMailboxRepository:
             payload=payload,
         )
 
+    def _validated_evidence_slots(self, record: _Record) -> dict[UUID, EvidenceUpload]:
+        validated: dict[UUID, EvidenceUpload] = {}
+        for repository_slot, item in record.evidence.items():
+            evidence = self._unwrap(record.binding.mailbox_id, repository_slot, item)
+            if evidence.object_id in validated:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            validated[evidence.object_id] = evidence
+        if set(validated) != set(record.evidence):
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+        return validated
+
     @staticmethod
     def _result_aad(binding: ActionBinding, byte_count: int) -> bytes:
         return (
             _RESULT_WRAP_CONTEXT
-            + binding.mailbox_id.bytes
-            + binding.action_id.bytes
-            + binding.attempt_id.bytes
+            + VolatileMailboxRepository._binding_digest(binding)
             + byte_count.to_bytes(8, "big")
         )
+
+    @staticmethod
+    def _binding_digest(binding: ActionBinding) -> bytes:
+        parts = (
+            binding.mailbox_id.bytes,
+            binding.action_id.bytes,
+            binding.intent_id.bytes,
+            binding.attempt_id.bytes,
+            binding.connector_release.encode(),
+            binding.capability.encode(),
+            binding.selected_artifact_digest.encode(),
+            str(binding.dispatch_epoch).encode(),
+            str(binding.fence).encode(),
+            str(binding.authorization_epoch).encode(),
+            binding.claim_deadline_utc.isoformat(timespec="microseconds").encode(),
+            binding.deadline_utc.isoformat(timespec="microseconds").encode(),
+            str(binding.wall_seconds).encode(),
+            str(binding.response_bytes).encode(),
+            binding.envelope_digest.encode(),
+        )
+        framed = b"".join(len(part).to_bytes(8, "big") + part for part in parts)
+        return hashlib.sha256(framed).digest()
 
     def _unwrap_result(self, binding: ActionBinding, item: _WrappedResult) -> bytes:
         if not hmac.compare_digest(
@@ -762,10 +829,18 @@ class VolatileMailboxRepository:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
         if not hmac.compare_digest(self._semantic_mac(aad, framed_payload), item.semantic_mac):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        if len(framed_payload) != _INNER_DIGEST_BYTES + item.byte_count:
+        if (
+            len(framed_payload)
+            != _INNER_RESULT_BINDING_BYTES + _INNER_DIGEST_BYTES + item.byte_count
+        ):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        raw_digest = framed_payload[:_INNER_DIGEST_BYTES]
-        payload = framed_payload[_INNER_DIGEST_BYTES:]
+        expected_binding = self._binding_digest(binding)
+        if not hmac.compare_digest(framed_payload[:_INNER_RESULT_BINDING_BYTES], expected_binding):
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+        digest_start = _INNER_RESULT_BINDING_BYTES
+        digest_end = digest_start + _INNER_DIGEST_BYTES
+        raw_digest = framed_payload[digest_start:digest_end]
+        payload = framed_payload[digest_end:]
         if len(payload) != item.byte_count or not hmac.compare_digest(
             hashlib.sha256(payload).digest(), raw_digest
         ):

@@ -142,6 +142,17 @@ hash never covers plaintext. The volatile adapter demonstrates this contract wit
 AES-256-GCM and binding/metadata-associated data. Its process-local key is
 intentionally not a production key-management design.
 
+Evidence identity is bound three ways: the repository dictionary slot and wrapped
+object ID must be exactly equal, both values are present in AEAD associated data,
+and the object ID is repeated inside the encrypted frame covered by the semantic
+MAC. Every stage, subsequent stage, commit, scoped snapshot, collect, and ack
+authenticates this slot binding. Moving an item to an alias key, swapping two
+wrapped objects, or referencing an alias is an integrity failure before result or
+delivery state changes. Result frames analogously include a digest of the complete
+immutable `ActionBinding` in both associated data and the encrypted frame, so a
+wrapped result cannot move to another mailbox or produce a bundle with any
+substituted binding field.
+
 Raw payload bodies are absent from repr, snapshots, and finite error text. Tests use
 PII canaries to prove the volatile record retains authenticated wrapped bytes rather
 than raw connector payload. Persistent adapters must additionally prove raw values
