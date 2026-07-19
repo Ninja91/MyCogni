@@ -110,7 +110,10 @@ def test_online_migration_connection_uses_required_policy(tmp_path: Path) -> Non
     finally:
         event.remove(Pool, "checkout", observe_checkout)
 
-    assert len(observed) >= 4
+    # Startup, migration and the single sealed maintenance checkout each prove
+    # the same policy; shutdown checkpoint + quick_check intentionally share
+    # that one designated connection.
+    assert len(observed) >= 3
     assert all(item == (1, "wal", 2, expected_timeout, database_path) for item in observed)
 
 

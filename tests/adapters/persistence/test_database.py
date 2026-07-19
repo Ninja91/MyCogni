@@ -12,6 +12,7 @@ from sqlalchemy import Column, Engine, Integer, MetaData, String, Table, insert,
 
 from mycogni.adapters.persistence import (
     FixedFilesystemProbe,
+    SQLiteOperatorState,
     SQLiteProcessRole,
     SQLiteRuntime,
     SQLiteSettings,
@@ -202,10 +203,7 @@ def test_unit_of_work_close_failure_after_commit_is_terminal(
     metadata.create_all(runtime.engine)
     unit_of_work = runtime.unit_of_work()
     try:
-        with (
-            pytest.raises(RuntimeError, match="synthetic close failure"),
-            unit_of_work,
-        ):
+        with unit_of_work:
             unit_of_work.session.execute(insert(records).values(id=1))
             session = unit_of_work.session
             real_close = session.close
@@ -217,11 +215,50 @@ def test_unit_of_work_close_failure_after_commit_is_terminal(
             monkeypatch.setattr(session, "close", fail_after_close)
             unit_of_work.commit()
 
+        assert runtime.readiness.accepting_new_work is False
+        assert runtime.readiness.external_actions_must_remain_paused is True
+        assert runtime.readiness.operator_state is SQLiteOperatorState.STORAGE_IO_FAILURE
         with pytest.raises(RuntimeError, match="not active"):
             unit_of_work.commit()
         with pytest.raises(RuntimeError, match="terminal"):
             unit_of_work.__enter__()
         with runtime.engine.connect() as connection:
             assert connection.scalar(select(records.c.id)) == 1
+    finally:
+        runtime.close_cleanly()
+
+
+def test_rollback_close_failure_pauses_without_masking_body_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SQLiteRuntime.open(
+        _settings(tmp_path / "rollback-close-failure.sqlite"),
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    metadata = MetaData()
+    records = Table("synthetic_rollback_close", metadata, Column("id", Integer, primary_key=True))
+    metadata.create_all(runtime.engine)
+    unit_of_work = runtime.unit_of_work()
+    try:
+        with pytest.raises(ValueError, match="synthetic body failure"), unit_of_work:
+            unit_of_work.session.execute(insert(records).values(id=1))
+            session = unit_of_work.session
+            real_close = session.close
+
+            def fail_after_close() -> None:
+                real_close()
+                raise RuntimeError("synthetic rollback close failure")
+
+            monkeypatch.setattr(session, "close", fail_after_close)
+            raise ValueError("synthetic body failure")
+
+        assert runtime.readiness.accepting_new_work is False
+        assert runtime.readiness.external_actions_must_remain_paused is True
+        assert runtime.readiness.operator_state is SQLiteOperatorState.STORAGE_IO_FAILURE
+        with pytest.raises(RuntimeError, match="terminal"):
+            unit_of_work.__enter__()
+        with runtime.engine.connect() as connection:
+            assert connection.scalar(select(records.c.id)) is None
     finally:
         runtime.close_cleanly()

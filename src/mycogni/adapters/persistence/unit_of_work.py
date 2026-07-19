@@ -27,9 +27,11 @@ class SqlAlchemyUnitOfWork:
         session_factory: sessionmaker[Session],
         *,
         readiness_guard: Callable[[], None],
+        cleanup_failure_handler: Callable[[], None],
     ) -> None:
         self._session_factory = session_factory
         self._readiness_guard = readiness_guard
+        self._cleanup_failure_handler = cleanup_failure_handler
         self._session: Session | None = None
         self._terminal = False
 
@@ -54,10 +56,14 @@ class SqlAlchemyUnitOfWork:
             session = self.session
             self._session = None
             self._terminal = True
-            with suppress(BaseException):
+            try:
                 session.rollback()
-            with suppress(BaseException):
+            except BaseException:
+                self._report_cleanup_failure()
+            try:
                 session.close()
+            except BaseException:
+                self._report_cleanup_failure()
             raise
         return self
 
@@ -78,19 +84,50 @@ class SqlAlchemyUnitOfWork:
         # commit, rollback, or close must never leave this UoW reusable.
         self._session = None
         self._terminal = True
-        try:
-            if commit:
+        if commit:
+            try:
                 self._readiness_guard()
                 session.commit()
-            else:
-                session.rollback()
-        except BaseException:
-            with suppress(BaseException):
-                session.rollback()
-            with suppress(BaseException):
+            except BaseException:
+                try:
+                    session.rollback()
+                except BaseException:
+                    self._report_cleanup_failure()
+                try:
+                    session.close()
+                except BaseException:
+                    self._report_cleanup_failure()
+                raise
+            try:
                 session.close()
+            except BaseException:
+                # Commit is known successful. Returning success avoids an
+                # unsafe job-level retry; the runtime is paused separately.
+                self._report_cleanup_failure()
+            return
+
+        try:
+            session.rollback()
+        except BaseException:
+            self._report_cleanup_failure()
+            try:
+                session.rollback()
+            except BaseException:
+                self._report_cleanup_failure()
+            try:
+                session.close()
+            except BaseException:
+                self._report_cleanup_failure()
             raise
-        session.close()
+        try:
+            session.close()
+        except BaseException:
+            self._report_cleanup_failure()
+        return
+
+    def _report_cleanup_failure(self) -> None:
+        with suppress(BaseException):
+            self._cleanup_failure_handler()
 
     def commit(self) -> None:
         """Commit and terminally close the active transaction."""

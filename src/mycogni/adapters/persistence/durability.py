@@ -15,14 +15,15 @@ import stat
 import subprocess
 import sys
 import threading
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Protocol, Self
 
-from sqlalchemy import Engine, event, text
+from sqlalchemy import Connection, Engine, event, text
 from sqlalchemy.engine import ExceptionContext
 
 if TYPE_CHECKING:
@@ -49,6 +50,15 @@ class ShutdownState(StrEnum):
 
     CLEAN = "clean"
     DIRTY = "dirty"
+
+
+class _LeaseLifecycle(StrEnum):
+    """Serialized ownership lifecycle; never exposed as operator state."""
+
+    ACTIVE = "active"
+    SEALED = "sealed"
+    RELEASING = "releasing"
+    INACTIVE = "inactive"
 
 
 class SQLiteOperatorState(StrEnum):
@@ -356,10 +366,12 @@ class SQLiteWriterLease:
         self._directory_descriptor = directory_descriptor
         self._database_name = database_path.name
         self._owner_pid = os.getpid()
-        self._active = True
+        self._lifecycle = _LeaseLifecycle.ACTIVE
         self._engine_bound = False
         self._checked_out = 0
-        self._shutdown_sealed = False
+        self._maintenance_thread_id: int | None = None
+        self._maintenance_permit = False
+        self._maintenance_checkout_active = False
         self._checkout_lock = threading.Lock()
 
     @classmethod
@@ -431,7 +443,10 @@ class SQLiteWriterLease:
             raise SQLiteOwnershipError("SQLite writer-lease acquisition failed") from None
 
     def _assert_owned_unlocked(self, database_path: Path) -> None:
-        if not self._active or self._owner_pid != os.getpid():
+        if (
+            self._lifecycle not in {_LeaseLifecycle.ACTIVE, _LeaseLifecycle.SEALED}
+            or self._owner_pid != os.getpid()
+        ):
             raise SQLiteOwnershipError(
                 "SQLite writer lease is inactive or belongs to another process"
             )
@@ -447,7 +462,12 @@ class SQLiteWriterLease:
         """Verify that normal connection work remains admitted."""
         with self._checkout_lock:
             self._assert_owned_unlocked(database_path)
-            if self._shutdown_sealed:
+            if self._lifecycle is _LeaseLifecycle.ACTIVE:
+                return
+            maintenance_admitted = self._maintenance_thread_id == threading.get_ident() and (
+                self._maintenance_permit or self._maintenance_checkout_active
+            )
+            if not maintenance_admitted:
                 raise SQLiteOwnershipError("SQLite writer lease is sealed for shutdown")
 
     @property
@@ -468,8 +488,15 @@ class SQLiteWriterLease:
     def register_checkout(self) -> None:
         with self._checkout_lock:
             self._assert_owned_unlocked(self.database_path)
-            if self._shutdown_sealed:
+            if self._lifecycle is _LeaseLifecycle.ACTIVE:
+                self._checked_out += 1
+                return
+            if not (
+                self._maintenance_permit and self._maintenance_thread_id == threading.get_ident()
+            ):
                 raise SQLiteOwnershipError("SQLite writer lease is sealed for shutdown")
+            self._maintenance_permit = False
+            self._maintenance_checkout_active = True
             self._checked_out += 1
 
     def register_checkin(self) -> None:
@@ -477,6 +504,8 @@ class SQLiteWriterLease:
             if self._checked_out <= 0:
                 raise SQLiteOwnershipError("SQLite connection checkout accounting underflow")
             self._checked_out -= 1
+            if self._lifecycle is _LeaseLifecycle.SEALED and self._checked_out == 0:
+                self._maintenance_checkout_active = False
 
     def has_checked_out_connections(self) -> bool:
         with self._checkout_lock:
@@ -486,47 +515,91 @@ class SQLiteWriterLease:
         """Atomically deny future work only when no connection is checked out."""
         with self._checkout_lock:
             self._assert_owned_unlocked(self.database_path)
+            if self._lifecycle is not _LeaseLifecycle.ACTIVE:
+                raise SQLiteOwnershipError("SQLite writer lease is already sealed for shutdown")
             if self._checked_out != 0:
                 raise SQLiteOwnershipError(
                     "SQLite shutdown cannot seal with checked-out connections"
                 )
-            self._shutdown_sealed = True
+            self._lifecycle = _LeaseLifecycle.SEALED
+
+    @contextmanager
+    def shutdown_maintenance(self) -> Iterator[None]:
+        """Admit one checkout held for all privileged sealed validation."""
+        thread_id = threading.get_ident()
+        with self._checkout_lock:
+            self._assert_owned_unlocked(self.database_path)
+            if (
+                self._lifecycle is not _LeaseLifecycle.SEALED
+                or self._maintenance_thread_id is not None
+                or self._checked_out != 0
+            ):
+                raise SQLiteOwnershipError("SQLite shutdown maintenance is unavailable")
+            self._maintenance_thread_id = thread_id
+            self._maintenance_permit = True
+        try:
+            yield
+        finally:
+            with self._checkout_lock:
+                if self._maintenance_thread_id == thread_id:
+                    self._maintenance_thread_id = None
+                    self._maintenance_permit = False
+                    self._maintenance_checkout_active = False
 
     def unseal_after_failed_shutdown(self) -> bool:
         """Re-admit maintenance work only while this process still owns the lease."""
         with self._checkout_lock:
-            if not self._active or self._owner_pid != os.getpid():
+            if (
+                self._lifecycle is not _LeaseLifecycle.SEALED
+                or self._owner_pid != os.getpid()
+                or self._checked_out != 0
+            ):
                 return False
-            self._shutdown_sealed = False
+            self._maintenance_thread_id = None
+            self._maintenance_permit = False
+            self._maintenance_checkout_active = False
+            self._lifecycle = _LeaseLifecycle.ACTIVE
             return True
 
     def owned_by_current_process(self) -> bool:
         with self._checkout_lock:
-            return self._active and self._owner_pid == os.getpid()
+            return (
+                self._lifecycle
+                in {
+                    _LeaseLifecycle.ACTIVE,
+                    _LeaseLifecycle.SEALED,
+                }
+                and self._owner_pid == os.getpid()
+            )
 
     def release(self) -> None:
         with self._checkout_lock:
-            if not self._active:
+            if self._lifecycle is _LeaseLifecycle.INACTIVE:
                 return
             if self._owner_pid != os.getpid():
                 raise SQLiteOwnershipError(
                     "forked child cannot release its parent's SQLite writer lease"
                 )
+            if self._lifecycle is _LeaseLifecycle.RELEASING:
+                raise SQLiteOwnershipError("SQLite writer lease release is already in progress")
             if self._checked_out != 0:
                 raise SQLiteOwnershipError(
                     "SQLite writer lease cannot release with checked-out connections"
                 )
-            previously_sealed = self._shutdown_sealed
-            self._shutdown_sealed = True
+            previous_lifecycle = self._lifecycle
+            self._lifecycle = _LeaseLifecycle.RELEASING
+            self._maintenance_thread_id = None
+            self._maintenance_permit = False
+            self._maintenance_checkout_active = False
         try:
             fcntl.flock(self._descriptor, fcntl.LOCK_UN)
         except BaseException:
             with self._checkout_lock:
-                if self._active:
-                    self._shutdown_sealed = previously_sealed
+                if self._lifecycle is _LeaseLifecycle.RELEASING:
+                    self._lifecycle = previous_lifecycle
             raise
         with self._checkout_lock:
-            self._active = False
+            self._lifecycle = _LeaseLifecycle.INACTIVE
         with _ACTIVE_PATHS_LOCK:
             _ACTIVE_PATHS.discard(self.database_path)
         # LOCK_UN is the ownership boundary. close(2) may report an error even
@@ -695,16 +768,29 @@ def _remove_state_file(lease: SQLiteWriterLease, name: str, *, label: str) -> No
         raise SQLiteRecoveryError(f"cannot remove {label}") from None
 
 
-def _quick_check(engine: Engine, lease: SQLiteWriterLease) -> str:
-    lease.assert_active(lease.database_path)
-    with engine.connect() as connection:
-        rows = tuple(str(row[0]) for row in connection.execute(text("PRAGMA quick_check")))
+def _quick_check_connection(connection: Connection) -> str:
+    rows = tuple(str(row[0]) for row in connection.execute(text("PRAGMA quick_check")))
     if rows != ("ok",):
         raise SQLiteRecoveryError(
             "SQLite quick_check failed",
             operator_state=SQLiteOperatorState.INTEGRITY_FAILURE,
         )
     return rows[0]
+
+
+def _quick_check(engine: Engine, lease: SQLiteWriterLease) -> str:
+    lease.assert_active(lease.database_path)
+    with engine.connect() as connection:
+        return _quick_check_connection(connection)
+
+
+def _checkpoint_connection(connection: Connection, *, mode: str) -> SQLiteCheckpoint:
+    if mode not in {"PASSIVE", "TRUNCATE"}:  # pragma: no cover - internal invariant
+        raise ValueError("unsupported checkpoint mode")
+    row = connection.execute(text(f"PRAGMA wal_checkpoint({mode})")).one()
+    return SQLiteCheckpoint(
+        busy=int(row[0]), log_frames=int(row[1]), checkpointed_frames=int(row[2])
+    )
 
 
 def _checkpoint(
@@ -714,13 +800,8 @@ def _checkpoint(
     mode: str,
 ) -> SQLiteCheckpoint:
     lease.assert_active(lease.database_path)
-    if mode not in {"PASSIVE", "TRUNCATE"}:  # pragma: no cover - internal invariant
-        raise ValueError("unsupported checkpoint mode")
     with engine.connect() as connection:
-        row = connection.execute(text(f"PRAGMA wal_checkpoint({mode})")).one()
-    return SQLiteCheckpoint(
-        busy=int(row[0]), log_frames=int(row[1]), checkpointed_frames=int(row[2])
-    )
+        return _checkpoint_connection(connection, mode=mode)
 
 
 class SQLiteRuntime:
@@ -743,6 +824,7 @@ class SQLiteRuntime:
         self.startup = startup
         self.readiness = readiness
         self._closed = False
+        self._lifecycle_lock = threading.Lock()
         event.listen(self.engine, "handle_error", self._handle_driver_error)
 
     @property
@@ -789,7 +871,11 @@ class SQLiteRuntime:
         return SqlAlchemyUnitOfWork(
             _create_session_factory(self.engine),
             readiness_guard=self.assert_accepting_new_work,
+            cleanup_failure_handler=self._handle_uow_cleanup_failure,
         )
+
+    def _handle_uow_cleanup_failure(self) -> None:
+        self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
 
     def _handle_driver_error(self, context: ExceptionContext) -> None:
         self.record_driver_failure(context.original_exception)
@@ -903,15 +989,27 @@ class SQLiteRuntime:
 
     def close_cleanly(self) -> None:
         """Prove a clean close while retaining ownership on every failure."""
+        if not self._lifecycle_lock.acquire(blocking=False):
+            self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+            raise SQLiteRecoveryError("SQLite runtime lifecycle is already in progress")
+        try:
+            self._close_cleanly_exclusive()
+        finally:
+            self._lifecycle_lock.release()
+
+    def _close_cleanly_exclusive(self) -> None:
         if self._closed:
             return
         self.readiness.accepting_new_work = False
         try:
-            checkpoint = _checkpoint(self.engine, self.lease, mode="TRUNCATE")
-            if checkpoint != SQLiteCheckpoint(0, 0, 0):
-                raise SQLiteRecoveryError(f"clean-shutdown checkpoint incomplete: {checkpoint!r}")
-            _quick_check(self.engine, self.lease)
             self.lease.seal_for_shutdown()
+            with self.lease.shutdown_maintenance(), self.engine.connect() as connection:
+                checkpoint = _checkpoint_connection(connection, mode="TRUNCATE")
+                if checkpoint != SQLiteCheckpoint(0, 0, 0):
+                    raise SQLiteRecoveryError(
+                        f"clean-shutdown checkpoint incomplete: {checkpoint!r}"
+                    )
+                _quick_check_connection(connection)
         except BaseException:
             try:
                 self._preserve_recovery_state()
@@ -947,6 +1045,15 @@ class SQLiteRuntime:
 
     def abandon(self) -> None:
         """Release resources but leave the marker to force recovery next start."""
+        if not self._lifecycle_lock.acquire(blocking=False):
+            self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+            raise SQLiteRecoveryError("SQLite runtime lifecycle is already in progress")
+        try:
+            self._abandon_exclusive()
+        finally:
+            self._lifecycle_lock.release()
+
+    def _abandon_exclusive(self) -> None:
         if self._closed:
             return
         self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)

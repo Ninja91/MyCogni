@@ -353,6 +353,83 @@ def test_post_unlock_close_error_is_logically_released(
             real_close(descriptor)
 
 
+def test_release_is_non_reentrant_while_paused_after_unlock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.persistence import durability
+
+    settings = _settings(tmp_path / "release-transition.sqlite")
+    lease = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    real_flock = durability.fcntl.flock
+    unlocked = threading.Event()
+    finish_release = threading.Event()
+    failures: list[BaseException] = []
+
+    def pause_after_unlock(descriptor: int, operation: int) -> None:
+        real_flock(descriptor, operation)
+        if operation == durability.fcntl.LOCK_UN:
+            unlocked.set()
+            assert finish_release.wait(timeout=2)
+
+    monkeypatch.setattr(durability.fcntl, "flock", pause_after_unlock)
+
+    def release_lease() -> None:
+        try:
+            lease.release()
+        except BaseException as error:
+            failures.append(error)
+
+    releaser = threading.Thread(target=release_lease)
+    releaser.start()
+    assert unlocked.wait(timeout=2)
+    assert lease.owned_by_current_process() is False
+    with pytest.raises(SQLiteOwnershipError, match="inactive"):
+        lease.assert_active(settings.database_path)
+    with pytest.raises(SQLiteOwnershipError, match="already in progress"):
+        lease.release()
+    finish_release.set()
+    releaser.join(timeout=2)
+    assert not releaser.is_alive()
+    assert failures == []
+
+
+def test_unlock_failure_restores_sealed_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.persistence import durability
+
+    settings = _settings(tmp_path / "unlock-failure.sqlite")
+    lease = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    lease.seal_for_shutdown()
+    real_flock = durability.fcntl.flock
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        if operation == durability.fcntl.LOCK_UN:
+            raise OSError("synthetic unlock failure")
+        real_flock(descriptor, operation)
+
+    monkeypatch.setattr(durability.fcntl, "flock", fail_unlock)
+    with pytest.raises(OSError, match="synthetic unlock failure"):
+        lease.release()
+    assert lease.owned_by_current_process() is True
+    with pytest.raises(SQLiteOwnershipError, match="sealed for shutdown"):
+        lease.assert_active(settings.database_path)
+
+    monkeypatch.setattr(durability.fcntl, "flock", real_flock)
+    assert lease.unseal_after_failed_shutdown() is True
+    lease.release()
+
+
 def test_shutdown_seal_denies_checkout_without_accounting_underflow(tmp_path: Path) -> None:
     database_path = tmp_path / "sealed.sqlite"
     runtime = _open_runtime(database_path)
@@ -366,6 +443,35 @@ def test_shutdown_seal_denies_checkout_without_accounting_underflow(tmp_path: Pa
 
     with runtime.engine.connect() as connection:
         assert connection.scalar(text("SELECT 1")) == 1
+    runtime.close_cleanly()
+
+
+def test_shutdown_maintenance_admits_only_one_designated_checkout(tmp_path: Path) -> None:
+    database_path = tmp_path / "maintenance-permit.sqlite"
+    runtime = _open_runtime(database_path)
+    runtime.lease.seal_for_shutdown()
+    denied: list[bool] = []
+    try:
+        with runtime.lease.shutdown_maintenance():
+            with runtime.engine.connect() as maintenance:
+                assert maintenance.scalar(text("SELECT 1")) == 1
+
+                def attempt_non_designated_checkout() -> None:
+                    try:
+                        runtime.lease.register_checkout()
+                    except SQLiteOwnershipError:
+                        denied.append(True)
+
+                contender = threading.Thread(target=attempt_non_designated_checkout)
+                contender.start()
+                contender.join(timeout=2)
+                assert not contender.is_alive()
+            with pytest.raises(SQLiteOwnershipError, match="sealed for shutdown"):
+                runtime.engine.connect()
+        assert denied == [True]
+        assert runtime.lease.has_checked_out_connections() is False
+    finally:
+        assert runtime.lease.unseal_after_failed_shutdown() is True
     runtime.close_cleanly()
 
 
@@ -717,6 +823,140 @@ def test_checkout_race_at_shutdown_preserves_marker_and_latch(
     assert not contender.is_alive()
 
     runtime.close_cleanly()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_completed_checkout_before_seal_is_validated_and_wal_is_truncated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "completed-checkout.sqlite"
+    runtime = _open_runtime(database_path)
+    with runtime.engine.begin() as connection:
+        connection.execute(text("CREATE TABLE synthetic_late_write (id INTEGER PRIMARY KEY)"))
+
+    begin_write = threading.Event()
+    write_completed = threading.Event()
+    failures: list[BaseException] = []
+    real_seal = runtime.lease.seal_for_shutdown
+
+    def seal_after_completed_write() -> None:
+        begin_write.set()
+        assert write_completed.wait(timeout=2)
+        real_seal()
+
+    monkeypatch.setattr(runtime.lease, "seal_for_shutdown", seal_after_completed_write)
+
+    def complete_checkout_and_write() -> None:
+        assert begin_write.wait(timeout=2)
+        try:
+            with runtime.engine.begin() as connection:
+                connection.execute(text("INSERT INTO synthetic_late_write VALUES (1)"))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            write_completed.set()
+
+    writer = threading.Thread(target=complete_checkout_and_write)
+    writer.start()
+    runtime.close_cleanly()
+    writer.join(timeout=2)
+    assert not writer.is_alive()
+    assert failures == []
+    assert runtime.marker_path.exists() is False
+    assert runtime.recovery_latch_path.exists() is False
+    wal_path = Path(f"{database_path}-wal")
+    assert not wal_path.exists() or wal_path.stat().st_size == 0
+
+    restarted = _open_runtime(database_path)
+    try:
+        assert restarted.startup.previous_shutdown is ShutdownState.CLEAN
+        assert restarted.startup.requires_reconciliation is False
+        with restarted.engine.connect() as connection:
+            assert connection.scalar(text("SELECT count(*) FROM synthetic_late_write")) == 1
+    finally:
+        restarted.close_cleanly()
+
+
+def test_concurrent_abandon_cannot_race_close_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "close-abandon-lifecycle.sqlite"
+    runtime = _open_runtime(database_path)
+    close_entered = threading.Event()
+    finish_close = threading.Event()
+    real_seal = runtime.lease.seal_for_shutdown
+    failures: list[BaseException] = []
+
+    def blocking_seal() -> None:
+        close_entered.set()
+        assert finish_close.wait(timeout=2)
+        real_seal()
+
+    monkeypatch.setattr(runtime.lease, "seal_for_shutdown", blocking_seal)
+
+    def close_runtime() -> None:
+        try:
+            runtime.close_cleanly()
+        except BaseException as error:
+            failures.append(error)
+
+    closer = threading.Thread(target=close_runtime)
+    closer.start()
+    assert close_entered.wait(timeout=2)
+    with pytest.raises(SQLiteRecoveryError, match="lifecycle is already in progress"):
+        runtime.abandon()
+    finish_close.set()
+    closer.join(timeout=2)
+    assert not closer.is_alive()
+    assert failures == []
+    assert runtime.marker_path.exists() is False
+    assert runtime.recovery_latch_path.exists() is True
+
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_concurrent_close_cannot_race_abandon_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "abandon-close-lifecycle.sqlite"
+    runtime = _open_runtime(database_path)
+    abandon_entered = threading.Event()
+    finish_abandon = threading.Event()
+    real_preserve = runtime._preserve_recovery_state
+    failures: list[BaseException] = []
+
+    def blocking_preserve() -> None:
+        abandon_entered.set()
+        assert finish_abandon.wait(timeout=2)
+        real_preserve()
+
+    monkeypatch.setattr(runtime, "_preserve_recovery_state", blocking_preserve)
+
+    def abandon_runtime() -> None:
+        try:
+            runtime.abandon()
+        except BaseException as error:
+            failures.append(error)
+
+    abandoner = threading.Thread(target=abandon_runtime)
+    abandoner.start()
+    assert abandon_entered.wait(timeout=2)
+    with pytest.raises(SQLiteRecoveryError, match="lifecycle is already in progress"):
+        runtime.close_cleanly()
+    finish_abandon.set()
+    abandoner.join(timeout=2)
+    assert not abandoner.is_alive()
+    assert failures == []
+    assert runtime.marker_path.exists() is True
+    assert runtime.recovery_latch_path.exists() is True
+
     recovered = _open_runtime(database_path)
     assert recovered.startup.requires_reconciliation is True
     recovered.close_cleanly()
