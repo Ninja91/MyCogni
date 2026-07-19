@@ -449,6 +449,47 @@ def test_reprovision_ceremony_capacity_expiry_counts_and_bounded_tombstones() ->
     )
 
 
+def test_operator_wrong_purpose_and_capacity_guidance_is_exact_and_non_destructive() -> None:
+    service, _clock, _source, _store, setup = _service()
+    _actor, _profile, roots, initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+
+    wrong_purpose_tty = PseudoTty()
+    assert (
+        exchange_bootstrap_on_tty(
+            service,
+            submitted_code=bootstrap.operator_code(),
+            operator_tty=wrong_purpose_tty,
+        ).denial
+        is AuthDenial.WRONG_PURPOSE
+    )
+    assert (
+        "use the dedicated reprovision ceremony; no authority was consumed"
+        in wrong_purpose_tty.getvalue()
+    )
+
+    operator = setup.reprovision_operator_authority
+    for _ in range(service.policy.reprovision_ceremony_capacity):
+        _allowed(service.authorize_reprovision_ceremony(bootstrap, operator))
+    capacity_tty = PseudoTty()
+    assert (
+        exchange_reprovision_on_tty(
+            service,
+            submitted_code=bootstrap.operator_code(),
+            operator_tty=capacity_tty,
+            operator_authority=operator,
+        ).denial
+        is AuthDenial.CAPACITY_EXHAUSTED
+    )
+    transcript = capacity_tty.getvalue()
+    assert "no authority was consumed" in transcript
+    assert "wait for the 60-second ceremony TTL" in transcript
+    assert "allow trusted composition garbage collection" in transcript
+    assert "retry the dedicated reprovision ceremony" in transcript
+    assert bootstrap.operator_code() not in (wrong_purpose_tty.getvalue() + transcript)
+    assert service.authenticate_session(initial.session).value == initial.session.handle
+
+
 def test_reprovision_ceremony_replay_survives_only_its_finite_horizon() -> None:
     policy = AuthPolicy(reprovision_ceremony_replay_seconds=2)
     service, clock, _source, _store, setup = _service(policy=policy)

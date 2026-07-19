@@ -56,6 +56,10 @@ DENIAL_GUIDANCE: dict[AuthDenial, str] = {
         "secret output did not complete; follow the displayed redisplay or restart instructions; "
         "never resubmit a consumed code"
     ),
+    AuthDenial.CAPACITY_EXHAUSTED: (
+        "no authority was consumed; wait for the finite ceremony TTL or allow trusted "
+        "composition garbage collection, then retry the dedicated reprovision ceremony"
+    ),
 }
 
 
@@ -90,8 +94,15 @@ class OperatorBootstrapResult:
     displayed: bool
 
 
-def _deny(operator_tty: OperatorTty, prefix: str, denial: AuthDenial) -> None:
-    guidance = DENIAL_GUIDANCE.get(denial, "follow the reviewed recovery procedure")
+def _deny(
+    operator_tty: OperatorTty,
+    prefix: str,
+    denial: AuthDenial,
+    *,
+    guidance: str | None = None,
+) -> None:
+    if guidance is None:
+        guidance = DENIAL_GUIDANCE.get(denial, "follow the reviewed recovery procedure")
     operator_tty.write_public(f"{prefix}-denied: {denial.value}; {guidance}\n")
 
 
@@ -103,7 +114,12 @@ def begin_bootstrap_on_tty(
 ) -> AuthOutcome[OpaqueId]:
     """Issue/disclose bootstrap only after root authorization and confirmation."""
     if root.purpose is RootPurpose.REPROVISION:
-        _deny(operator_tty, "bootstrap", AuthDenial.WRONG_PURPOSE)
+        _deny(
+            operator_tty,
+            "bootstrap",
+            AuthDenial.WRONG_PURPOSE,
+            guidance="use the dedicated reprovision ceremony; no authority was consumed",
+        )
         return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
     if not operator_tty.isatty():
         _deny(operator_tty, "bootstrap", AuthDenial.NON_INTERACTIVE)
@@ -289,7 +305,24 @@ def _exchange_bootstrap_on_tty(
             outcome = service.exchange_bootstrap(credential)
     if outcome.denial is not None:
         prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
-        _deny(operator_tty, prefix, outcome.denial)
+        guidance = None
+        if outcome.denial is AuthDenial.CAPACITY_EXHAUSTED:
+            guidance = (
+                "no authority was consumed; wait for the "
+                f"{service.policy.reprovision_ceremony_ttl_seconds}-second ceremony TTL or "
+                "allow trusted composition garbage collection, then retry the dedicated "
+                "reprovision ceremony"
+            )
+        elif outcome.denial is AuthDenial.WRONG_PURPOSE:
+            if reprovision:
+                guidance = (
+                    "submitted code is not a reprovision bootstrap; the short-lived ceremony "
+                    "authorization was consumed, but no root, session, or recovery authority "
+                    "was changed; use the dedicated reprovision ceremony with the current route"
+                )
+            else:
+                guidance = "use the dedicated reprovision ceremony; no authority was consumed"
+        _deny(operator_tty, prefix, outcome.denial, guidance=guidance)
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
     displayed = _display_bootstrap_handoff(outcome.value, operator_tty)
