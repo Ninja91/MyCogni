@@ -12,16 +12,16 @@ A subprocess inside the core container inherits too much authority. Domain allow
 
 Package every connector release as a separate digest-pinned OCI or constrained WASI artifact. The core never imports connector code or includes connector runtimes in its image. An action runs rootless/non-root with a read-only root filesystem, tmpfs workspace, dropped Linux capabilities, `no-new-privileges`, syscall policy, PID/CPU/RAM/time bounds, and no core/host volumes, Docker socket, host network, reusable credentials, or unrelated session state.
 
-Force connector/browser egress through a mandatory gateway. Before the first byte and every redirect/connection, it validates action token, monotonic fence, authorization epoch, global/profile/broker pause, connector digest/capability, method, origin, resolved public IP, protocol, disclosure plan, and byte/time budget. Private, loopback, link-local, metadata, rebinding, WebSocket, QUIC, DoH, downloads, and undeclared destinations are denied by default.
+Force connector/browser egress through a mandatory fail-closed transport gateway. A gateway-owned declarative HTTP client or trusted mailer originates the exact typed request/message. For opaque browser TLS, the gateway validates the online action token, installation dispatch epoch/fence, authorization epoch, global/profile/broker pause, connector digest/capability, origin, resolved public IP, port, protocol, new redirect connections, and byte/time budget; it cannot inspect encrypted method, path, body, or response semantics. Private, loopback, link-local, metadata, rebinding, proxy bypass, WebSocket, QUIC, DoH, downloads, and undeclared destinations are denied by default.
 
-Browser automation uses a dedicated user with the Chromium sandbox enabled and ephemeral storage. Higher-assurance cloud deployment may require gVisor, Kata, or VM isolation. Local shared-kernel limits remain documented.
+Browser automation uses a project-owned image, dedicated non-root user, verified Chromium sandbox, private shared memory, pinned seccomp and ephemeral storage without host IPC or `SYS_ADMIN`. Local shared-kernel and allowed-origin exfiltration limits remain documented.
 
 ## Consequences
 
 - Connector development/build/promotion becomes more complex.
 - A local runtime may not provide the same isolation strength as a cloud sandbox.
 - The gateway becomes security-critical and highly tested.
-- An allowed broker can still misuse legitimately disclosed data; the ledger remains necessary.
+- An allowed broker can still misuse legitimately disclosed data, and a malicious browser connector can misuse its minimum bundle inside an allowed origin; the ledger remains necessary.
 
 ## Alternatives
 

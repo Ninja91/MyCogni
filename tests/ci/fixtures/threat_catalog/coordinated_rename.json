@@ -1,0 +1,1 @@
+{"mutations":[{"operation":"set","document":"catalog","path":["threats",0,"id"],"value":"THR-AUTH-002"},{"operation":"set","document":"registry","path":["tests",0,"threats",0],"value":"THR-AUTH-002"}],"expected":"ID is not allocated in immutable history"}

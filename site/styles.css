@@ -59,6 +59,15 @@ a { color: inherit; }
   outline-offset: 4px;
 }
 
+.architecture-section :focus-visible,
+.phase-panel:focus-visible,
+.phase-panel :focus-visible,
+.project-status :focus-visible,
+.deployment-status > div:last-child :focus-visible,
+footer :focus-visible {
+  outline-color: var(--lime);
+}
+
 .reading-progress {
   position: fixed;
   inset: 0 0 auto;
@@ -251,6 +260,7 @@ h1 em {
 
 .console-bar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
@@ -261,6 +271,7 @@ h1 em {
   letter-spacing: 0.08em;
 }
 
+.console-demo-badge { padding: 0.12rem 0.38rem; color: var(--ink); background: var(--lime); font-weight: 800; letter-spacing: 0.05em; }
 .console-live { color: var(--lime); }
 .console-live i { display: inline-block; width: 0.4rem; height: 0.4rem; margin-right: 0.3rem; background: var(--lime); border-radius: 50%; }
 .console-body { padding: 1.5rem; }
@@ -427,7 +438,7 @@ code { padding: 0.12rem 0.3rem; background: rgba(91, 56, 255, 0.1); border-radiu
 .scenario-answer dt { font-size: 0.64rem; font-weight: 760; letter-spacing: 0.08em; text-transform: uppercase; }
 .scenario-answer dd { margin: 0.3rem 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; }
 
-.roadmap-track { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem; margin-bottom: 1rem; }
+.roadmap-track { position: relative; display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.5rem; margin-bottom: 1rem; }
 .roadmap-track::before { position: absolute; z-index: -1; top: 1.4rem; right: 0; left: 0; height: 2px; background: var(--line); content: ""; }
 .roadmap-track button { display: grid; gap: 0.6rem; min-width: 0; padding: 0; color: var(--muted); border: 0; background: transparent; text-align: left; cursor: pointer; }
 .roadmap-track button span { display: grid; width: 3rem; height: 3rem; place-items: center; border: 1px solid var(--ink); border-radius: 50%; background: var(--paper); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.6rem; }
@@ -441,6 +452,14 @@ code { padding: 0.12rem 0.3rem; background: rgba(91, 56, 255, 0.1); border-radiu
 .phase-gates > span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.64rem; font-weight: 760; letter-spacing: 0.1em; }
 .phase-gates ul { margin: 0.8rem 0 0; padding-left: 1.2rem; font-size: 0.83rem; }
 .roadmap-note { padding: 1rem 0; color: var(--muted); font-size: 0.83rem; }
+.deployment-status { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.2rem; }
+.deployment-status > div { padding: 1.35rem; border: 1px solid var(--ink); border-radius: 0.8rem; background: var(--white); }
+.deployment-status > div:last-child { color: var(--white); background: var(--ink); }
+.deployment-status span, .project-status > span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.64rem; font-weight: 780; letter-spacing: 0.1em; }
+.deployment-status h3 { margin: 0.55rem 0; font-size: 1.35rem; letter-spacing: -0.035em; }
+.deployment-status p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.deployment-status > div:last-child p { color: #a9bbb7; }
+.deployment-status a { display: inline-block; margin-top: 1rem; color: var(--lime); font-size: 0.82rem; font-weight: 720; text-underline-offset: 0.2rem; }
 
 .review-list { border-top: 1px solid var(--ink); }
 .review-list details { border-bottom: 1px solid var(--ink); }
@@ -455,6 +474,9 @@ code { padding: 0.12rem 0.3rem; background: rgba(91, 56, 255, 0.1); border-radiu
 
 .next-section { width: 100%; max-width: none; padding-right: max(1.5rem, calc((100% - var(--max)) / 2)); padding-left: max(1.5rem, calc((100% - var(--max)) / 2)); background: var(--blue); }
 .next-section > h2 { max-width: 980px; margin: 0 0 4rem; font-size: clamp(3rem, 7vw, 6.8rem); line-height: 0.92; letter-spacing: -0.075em; }
+.project-status { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1.2rem; margin: -1.5rem 0 2rem; padding: 1.2rem; color: var(--white); border-radius: 0.8rem; background: var(--ink); }
+.project-status p { margin: 0; color: #d9e3df; font-size: 0.86rem; }
+.project-status a { color: var(--lime); font-size: 0.8rem; font-weight: 720; text-underline-offset: 0.2rem; }
 .path-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
 .path-grid > a { position: relative; min-height: 300px; padding: 1.5rem; border: 1px solid var(--ink); border-radius: var(--radius); background: var(--paper); text-decoration: none; transition: transform 180ms ease, box-shadow 180ms ease; }
 .path-grid > a:hover { transform: translate(-3px, -3px); box-shadow: 7px 7px 0 var(--ink); }
@@ -471,11 +493,23 @@ footer p { margin: 0; text-align: center; }
 footer > div:last-child { display: flex; justify-content: flex-end; gap: 1rem; }
 footer a { text-underline-offset: 0.2rem; }
 .footer-brand { color: var(--white); }
-.noscript-note { position: fixed; right: 1rem; bottom: 1rem; z-index: 100; max-width: 430px; padding: 1rem; color: var(--white); background: var(--purple); border-radius: 0.5rem; box-shadow: var(--shadow); }
+.noscript-story { width: min(var(--max), calc(100% - 3rem)); margin: 4rem auto; padding: clamp(2rem, 5vw, 4rem); border: 1px solid var(--ink); border-radius: var(--radius); background: var(--white); box-shadow: 8px 8px 0 var(--lime); }
+.noscript-story > h2 { margin: 0; font-size: clamp(2.4rem, 6vw, 5rem); line-height: 0.95; letter-spacing: -0.06em; }
+.noscript-story details { border-top: 1px solid var(--ink); }
+.noscript-story details:last-of-type { border-bottom: 1px solid var(--ink); }
+.noscript-story summary { padding: 1.1rem 0; font-size: 1.15rem; font-weight: 760; cursor: pointer; }
+.noscript-story details > ol, .noscript-story details > ul, .noscript-story details > p { margin: 0 0 1.5rem; }
+.noscript-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding-bottom: 1.5rem; }
+.noscript-grid article { padding: 1rem; border: 1px solid var(--line); border-radius: 0.65rem; }
+.noscript-grid h3 { margin: 0 0 0.4rem; }
+.noscript-grid p { margin: 0; color: var(--muted); font-size: 0.86rem; }
+.noscript-note { position: fixed; right: 1rem; bottom: 1rem; z-index: 100; max-width: 430px; padding: 1rem; color: var(--ink); background: var(--lime); border: 1px solid var(--ink); border-radius: 0.5rem; box-shadow: var(--shadow); }
 
 @media (max-width: 1000px) {
-  .chapter-nav { display: none; }
-  .site-header { grid-template-columns: 1fr auto; }
+  html { scroll-padding-top: 8.5rem; }
+  .site-header { grid-template-columns: 1fr auto; padding-top: 0.55rem; padding-bottom: 0.55rem; }
+  .chapter-nav { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; padding: 0.45rem 0 0.3rem; scrollbar-width: thin; }
+  .chapter-nav a { flex: 0 0 auto; }
   .hero { grid-template-columns: 1fr; min-height: auto; }
   .hero-copy { max-width: 850px; }
   .hero-console { width: min(600px, calc(100% - 1rem)); margin: 1rem auto 0; }
@@ -489,12 +523,13 @@ footer a { text-underline-offset: 0.2rem; }
   .scenario-list button:last-child { grid-column: 1 / -1; }
   .path-grid { grid-template-columns: 1fr; }
   .path-grid > a { min-height: 230px; }
+  .project-status { grid-template-columns: 1fr; }
   footer { grid-template-columns: 1fr auto; }
   footer p { display: none; }
 }
 
 @media (max-width: 760px) {
-  html { scroll-padding-top: 5.5rem; }
+  html { scroll-padding-top: 8rem; }
   .site-header { min-height: 64px; padding: 0 1rem; }
   .header-link { font-size: 0.66rem; }
   .chapter { width: min(100% - 2rem, var(--max)); padding-top: 5rem; padding-bottom: 5rem; }
@@ -526,6 +561,7 @@ footer a { text-underline-offset: 0.2rem; }
   .scenario-list { grid-template-columns: 1fr; }
   .scenario-list button:last-child { grid-column: auto; }
   .scenario-answer dl { grid-template-columns: 1fr; }
+  .deployment-status { grid-template-columns: 1fr; }
   .roadmap-track { display: flex; overflow-x: auto; padding-bottom: 0.8rem; scroll-snap-type: x mandatory; }
   .roadmap-track::before { display: none; }
   .roadmap-track button { min-width: 120px; scroll-snap-align: start; }
@@ -537,6 +573,7 @@ footer a { text-underline-offset: 0.2rem; }
   .review-list details > div { margin-left: 0; }
   .next-section { width: 100%; }
   .final-cta { align-items: flex-start; flex-direction: column; }
+  .noscript-grid { grid-template-columns: 1fr; }
   footer { grid-template-columns: 1fr; }
   footer > div:last-child { justify-content: flex-start; }
 }

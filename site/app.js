@@ -5,7 +5,7 @@ const promiseStories = {
     number: "01",
     label: "LOCAL CUSTODY",
     heading: "Your identity profile is not another SaaS dossier.",
-    copy: "Sensitive attributes stay encrypted on infrastructure the user controls. Each profile has an independently random wrapped key, making per-profile cryptographic deletion possible without keeping a reproducible master-derived key.",
+    copy: "Stored source attributes remain encrypted under infrastructure the user controls. Only exact values shown in an authorized plan may leave for a displayed destination; each profile uses an independently random wrapped key.",
     points: ["Encrypted state and evidence", "External wrapping key", "Explicit backup-expiry semantics"]
   },
   proof: {
@@ -19,7 +19,7 @@ const promiseStories = {
     number: "03",
     label: "HANDS-OFF WHERE EARNED",
     heading: "Automation receives a narrow grant, not blanket trust.",
-    copy: "A fresh connector can act only inside the user's setup authorization, confirmed-match policy, destination allowlist, and disclosure ceiling. Drift, challenges, stale authority, and unknown outcomes stop the path.",
+    copy: "External actions start globally paused. After a separate non-preselected step-up ceremony, a fresh capability can act only inside that exact per-capability authorization. Drift, challenges, stale authority, and unknown outcomes stop the path.",
     points: ["Capability-specific maturity", "Mandatory egress fence", "Global and per-broker pause"]
   },
   clarity: {
@@ -35,10 +35,10 @@ const caseStages = {
   observe: {
     step: "STEP 1 OF 6",
     heading: "A candidate record appears.",
-    copy: "A read-only connector finds a possible public profile. The system records how the match was made without deciding that the record belongs to the user.",
+    copy: "After a separate scan-disclosure preview and consent, a read-only connector may query an approved source for a possible public profile. The system records how the match was made without deciding that the record belongs to the user.",
     callout: "name-only candidates can never become automatic confirmed matches.",
     state: "candidate",
-    disclosure: "none",
+    disclosure: "exact approved search values",
     owner: "user or match policy",
     next: "review attribute explanation",
     progress: "16.666%"
@@ -79,7 +79,7 @@ const caseStages = {
   submit: {
     step: "STEP 5 OF 6",
     heading: "The first outbound byte crosses a fence.",
-    copy: "A digest-pinned connector receives one sealed bundle. The gateway rechecks the current fence and allowed origin, records dispatch start, and transmits only the authorized payload.",
+    copy: "A verified connector receives one sealed minimum bundle. The gateway obtains an online first-byte decision and records dispatch start. Typed HTTP and mail are originated exactly; browser TLS retains a disclosed allowed-origin content risk.",
     callout: "a timeout after dispatch becomes outcome_unknown; it is never permission for a blind retry.",
     state: "transport_proven",
     disclosure: "2 authorized fields",
@@ -93,7 +93,7 @@ const caseStages = {
     copy: "An independent read-only check runs after the policy delay. One clean observation is labeled exactly that. Only a later corroborating method or time-separated check can satisfy verified removal.",
     callout: "blocks, CAPTCHAs, access denial, personalization uncertainty, and ambiguous searches remain inconclusive.",
     state: "verified_removed",
-    disclosure: "none during verification",
+    disclosure: "approved recheck values",
     owner: "versioned verification policy",
     next: "monitor for resurfacing",
     progress: "100%"
@@ -104,7 +104,7 @@ const architectureStories = {
   control: {
     label: "AUTHENTICATED USER CONTROL",
     heading: "The user establishes intent and exceptions.",
-    copy: "The CLI or local web interface authenticates the actor, records setup authorization, previews disclosures, and demands step-up authentication for dangerous changes.",
+    copy: "The CLI or local web interface authenticates the actor, records separate scan consent, previews exact disclosures, and requires a dedicated step-up per-capability ceremony before automation can leave global pause.",
     can: "Authorize bounded actions, pause, revoke, export, delete.",
     cannot: "Turn an ambiguous identity match into a safe automatic request."
   },
@@ -192,40 +192,46 @@ const safetyStories = {
 
 const phases = {
   foundation: {
-    label: "WEEKS 0–2",
+    label: "WEEKS 0–4",
     heading: "Build the foundation that can say “no.”",
-    copy: "Land the P0 decisions in code contracts, stand up a synthetic broker simulator, and create an authenticated control-plane skeleton without real PII or traffic.",
-    gates: ["P0 ADRs accepted", "Synthetic-only test path", "Threat-to-requirement traceability"]
+    copy: "Land locked project boundaries, a deterministic simulator, hermetic network-deny CI, stable threat IDs, and executable auth, key, backup, egress, runner, and browser spikes.",
+    gates: ["P0 spikes dispositioned", "Synthetic-only test path", "Threat-to-test traceability"]
+  },
+  kernel: {
+    label: "WEEKS 4–9",
+    heading: "Make the local kernel durable before it sees the web.",
+    copy: "Implement authentication, encrypted identity, jobs and evidence, online backup/restore, and the generic journal, pause epoch, restore epoch, and fail-closed gateway required even for live scans.",
+    gates: ["Auth/key/restore tests pass", "Outbound action base fails closed", "Separate discovery consent exists"]
   },
   preview: {
-    label: "WEEKS 3–6",
+    label: "WEEKS 9–14",
     heading: "Make exposure visible before asking for trust.",
-    copy: "Create the encrypted single-adult profile, alias model, read-only exposure preview, evidence viewer, and local-lite package.",
-    gates: ["Authenticated local control plane", "≥95% confirmed-match precision", "Backup dry-run succeeds"]
+    copy: "Run separately authorized read-only searches, explain candidates, expose evidence and case state, and learn from a preregistered preview cohort without sending a removal request.",
+    gates: ["Exact scan disclosure", "Preview precision denominators", "Zero removal submissions"]
   },
   guided: {
-    label: "WEEKS 7–10",
+    label: "WEEKS 14–19",
     heading: "Turn exact plans into understandable guided work.",
     copy: "Add immutable request plans, disclosure ledgers, manual and email-draft flows, policy provenance, export, deletion, and restore.",
     gates: ["Proof comprehension passes", "Every field disclosure understood", "Restore and deletion reports are honest"]
   },
   automation: {
-    label: "WEEKS 11–14",
+    label: "WEEKS 19–26",
     heading: "Automate only the narrow path that earned it.",
-    copy: "Ship separate connector artifacts, mandatory egress enforcement, fenced external-intent journaling, quarantine controls, and 2–5 reviewed connectors.",
-    gates: ["Qualified second review", "Zero unexplained pilot cases", "Kill switches and reconciliation pass"]
+    copy: "Ship signed update and artifact verification, restore-safe journaling, transport-specific gateways, and 2–5 trusted automatic capabilities only after shared and capability human reviews.",
+    gates: ["Shared + capability reviews", "Per-capability authority/match gate", "Kill switches and reconciliation pass"]
   },
   v1: {
-    label: "WEEKS 15–18",
-    heading: "Harden a small local product into stable v1.",
+    label: "WEEKS 26–32",
+    heading: "Harden a small local product into a release candidate.",
     copy: "Add corroborated verification, resurfacing, signed multi-architecture images, SBOM and provenance, restore drills, accessibility, and usability gates.",
-    gates: ["Security and legal findings triaged", "12-week beta gates pass", "Signed release and restore drill"]
+    gates: ["Zero P0; no enabled P1", "Signed release-candidate artifacts", "Restore and resilience drills"]
   },
-  cloud: {
-    label: "WEEKS 19–24",
-    heading: "Earn a separate cloud-small conformance claim.",
-    copy: "Validate PostgreSQL, object storage, cloud KMS, TLS and authentication, disaster recovery, cost, and operations on a single-tenant small host.",
-    gates: ["No local/cloud parity overclaim", "Disaster drill passes", "Operator deployment is self-service"]
+  stable: {
+    label: "WEEKS 32–40+",
+    heading: "Earn—or fail—the stable automatic-remover claim.",
+    copy: "Maintain separate preview, guided, and automatic cohorts. Automatic behavior must accumulate at least twelve weeks and a mature day-90 denominator before stable eligibility.",
+    gates: ["Automatic cohort ≥12 weeks", "Day-90 denominator mature", "Every safety + viability gate passes"]
   }
 };
 
@@ -354,7 +360,10 @@ if ("IntersectionObserver" in window) {
       .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
     if (!visible) return;
     document.querySelectorAll("[data-nav]").forEach((link) => {
-      link.classList.toggle("is-active", link.dataset.nav === visible.target.dataset.chapter);
+      const active = link.dataset.nav === visible.target.dataset.chapter;
+      link.classList.toggle("is-active", active);
+      if (active) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
     });
   }, { rootMargin: "-25% 0px -55%", threshold: [0.05, 0.2, 0.5] });
   chapterSections.forEach((section) => observer.observe(section));

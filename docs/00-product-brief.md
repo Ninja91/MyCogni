@@ -31,11 +31,11 @@ A technically comfortable adult in the United States who can run Docker locally,
 
 ### Baseline cleanup
 
-The user creates an encrypted identity profile, reviews aliases and historical addresses, and grants a jurisdiction- and capability-specific setup authorization. MyCogni scans, explains likely matches, and automatically submits supported requests when a trusted connector, fresh policy, match threshold, destination, and disclosure all fit that authorization. Exceptions become explicit review or guided tasks.
+The user creates an encrypted identity profile, reviews aliases and historical addresses, and separately consents to exact scan disclosures. MyCogni explains likely matches and prepares exact plans. External actions remain globally paused until the user completes a dedicated, non-preselected, step-up per-capability automation ceremony; only then may a trusted capability act when fresh policy, authority, match, destination, disclosure and pause checks still fit. Exceptions become explicit review or guided tasks.
 
 ### Recurring maintenance
 
-The scheduler wakes after a configured interval, rechecks high-value brokers, detects resurfaced records, and either resubmits under the active setup authorization or asks for exception review. A digest shows verified removals, asserted removals, resurfacing, deadlines, and manual actions.
+The scheduler wakes after a configured interval, rechecks separately authorized sources, detects resurfaced records, and either acts under a current dedicated automation authorization or asks for review. A digest shows verified removals, asserted removals, resurfacing, deadlines, and manual actions.
 
 ### Custom removal
 

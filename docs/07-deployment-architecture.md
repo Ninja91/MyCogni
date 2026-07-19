@@ -4,7 +4,7 @@
 
 MyCogni will publish one minimal, non-root, multi-architecture core OCI image containing the API/UI, CLI, worker, scheduler, and migrations. It contains no connector implementation, browser, model runtime, or model weight. Each connector is a separate digest-pinned OCI or constrained WASI artifact. A separate browser-runner image contains Playwright/Chromium for approved workflows. Browser sessions remain ephemeral and stop for CAPTCHA, MFA, terms/disclosure drift, or unexpected account controls.
 
-Images are reproducible where practical, pinned by digest in examples, signed, and accompanied by SBOM and provenance attestations.
+Images are repeatable, digest-pinned, signed, and accompanied by SBOM and provenance attestations. “Reproducible” is reserved for artifacts with demonstrated bit-for-bit rebuild evidence.
 
 ## Profile A: local-lite
 
@@ -13,7 +13,7 @@ Audience: one consenting adult on a laptop, NAS, or small home server for stable
 - one `mycogni all-in-one` container;
 - encrypted SQLite metadata on a persistent volume;
 - encrypted filesystem evidence store on the same volume;
-- installation KEK supplied from the host, never stored in data/evidence volumes; wrapped profile-key catalog protected and backed up separately;
+- installation KEK/recovery material supplied from the host and excluded from data/evidence archives; wrapped profile-key catalog included in the managed consistent encrypted-state archive;
 - loopback binding by default plus authenticated bootstrap/session, strict Host/Origin/CSRF policy, and a permissioned CLI channel;
 - built-in durable scheduler and one worker;
 - browser runner started only for a reviewed task;
@@ -42,14 +42,14 @@ This is still single-tenant. Multi-tenant SaaS is explicitly out of scope becaus
 
 Inbound:
 
-- local-lite listens on `127.0.0.1` unless the user explicitly configures LAN access;
+- the core server binds its isolated container interface and Compose publishes explicitly to host `127.0.0.1`; wildcard/LAN publication is unsupported in stable V1;
 - cloud-small accepts HTTPS only through authenticated ingress;
 - no connector worker accepts public inbound traffic.
 
 Outbound:
 
 - core: database, evidence store, configured mail provider, update sources;
-- connector/browser runner: no direct path; all connections traverse the gateway, which validates fence/authority/origin/resolved public IP/redirect/protocol/method/disclosure/budget;
+- connector/browser runner: no direct path; typed HTTP/mail are gateway-originated, while browser TLS is limited to online permit/fence/authority/origin/resolved public IP/port/redirect-connection/protocol/budget enforcement with an explicit opaque-content residual risk;
 - assistant gateway: no arbitrary callbacks by default;
 - private, loopback, link-local, and cloud metadata destinations are denied for custom URLs.
 - WebSocket, QUIC, DoH, downloads, and undeclared protocols are denied in the default connector/browser profile.
@@ -67,7 +67,7 @@ Example files contain names, never real values. Startup refuses default keys, wo
 
 ## Backup and recovery
 
-A data backup contains encrypted database export, encrypted evidence objects, manifest/policy versions, submission-journal boundary, and restore metadata. It excludes the installation/cloud KEK and normal data backup does not silently include the recoverable wrapped-profile-key catalog. Operators back up KEK and key catalog separately with clear recovery/deletion warnings.
+A managed data backup contains an online-consistent encrypted database export, encrypted evidence objects, the wrapped profile-DEK catalog, schema and object manifests, policy versions, a signed checkpoint statement, submission/gateway high-water boundaries, and restore metadata. It excludes the KEK/recovery secret, checkpoint signing key, live installation dispatch epoch, unwrapped keys, and plaintext temporaries. Recovery material is protected separately. Deletion reports cover live state and known managed backups and warn that filesystem snapshots, Time Machine and operator copies are outside MyCogni's inventory.
 
 Recovery objectives for cloud-small:
 
@@ -76,9 +76,9 @@ Recovery objectives for cloud-small:
 - quarterly automated restore into an isolated environment;
 - integrity verification of event chains and evidence hashes;
 - connectors remain paused until restore validation and external-intent reconciliation complete;
-- every intent newer than the trusted journal/backup boundary is `outcome_unknown` until receipts/portals/mail prove its state.
+- restore rotates the external dispatch epoch and every restored nonterminal external intent is `reconciliation_required` until authoritative evidence resolves it.
 
-Local-lite provides a `backup create`, `backup verify`, and `backup restore --dry-run` flow. A backup that has never passed verification is shown as unverified.
+Local-lite provides `backup create`, integrity-only `backup verify-integrity`, and isolated decrypting `backup restore-test` flows. Integrity verification without KEK is never labeled recoverable.
 
 ## Upgrade and rollback
 

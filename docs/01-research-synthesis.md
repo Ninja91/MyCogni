@@ -54,7 +54,7 @@ Optery's official reports use before/after screenshots when public profiles can 
 | Custom requests stall without explanation | reason code, dependency, deadline, retry/reconciliation history, and manual escalation path |
 | Same-name false matches | attribute-level explanation, high auto threshold, explicit ambiguity, never name-only auto-confirm |
 | Past names/addresses are awkward | first-class aliases and validity/provenance ranges |
-| Blind outreach may confirm/enrich identity | observe-before-disclose default, no blanket mode, minimum bundle, permanent disclosure ledger |
+| Blind outreach may confirm/enrich identity | separately consented observation, no blanket mode, minimum bundle, durable disclosure ledger under deletion/retention policy |
 | Coverage is inflated | generated support matrix by capability/maturity/freshness/evidence rather than one count |
 | Subscription creates dependency | self-hosted recurrence, export/pause/uninstall/key deletion, no artificial request quota |
 | Spam impact is impossible to attribute | no spam-reduction promise; measure exposure outcomes rather than anecdotes |
@@ -64,7 +64,7 @@ Optery's official reports use before/after screenshots when public profiles can 
 
 ## Product-market implications
 
-The wedge is not “free Incogni.” It is proof-first local custody for a technical U.S. self-hoster. V1 narrows to one adult, a small public preview set, guided flows, and 2–5 trusted automatic connectors. It competes with DIY on recurring burden and with SaaS on trust—not on breadth.
+The wedge is not “free Incogni.” It is proof-first local custody for a technical U.S. self-hoster. V1 narrows to one adult, a small public preview set, guided flows, and 2–5 trusted automatic capabilities. It competes with DIY on recurring burden and with SaaS on trust—not on breadth.
 
 Commercial custom removals often hide human work. A volunteer open-source project cannot promise unlimited arbitrary takedowns. V1 custom intake safely classifies a URL and builds a guided draft; automatic arbitrary-site action is deferred.
 

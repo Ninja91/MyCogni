@@ -1,0 +1,211 @@
+{
+  "$defs": {
+    "Capability": {
+      "description": "Independently granted connector capability.",
+      "enum": [
+        "observe",
+        "prepare",
+        "submit",
+        "poll",
+        "verify"
+      ],
+      "title": "Capability",
+      "type": "string"
+    },
+    "DisclosureDeclaration": {
+      "additionalProperties": false,
+      "description": "One attribute category a release may disclose to one destination.",
+      "properties": {
+        "attribute_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Attribute Type",
+          "type": "string"
+        },
+        "destination": {
+          "maxLength": 253,
+          "minLength": 4,
+          "title": "Destination",
+          "type": "string"
+        },
+        "purpose": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute_type",
+        "destination",
+        "purpose"
+      ],
+      "title": "DisclosureDeclaration",
+      "type": "object"
+    },
+    "RuntimeBoundary": {
+      "additionalProperties": false,
+      "description": "Required deny-by-default properties; not a sandbox implementation.",
+      "properties": {
+        "direct_network": {
+          "const": false,
+          "default": false,
+          "title": "Direct Network",
+          "type": "boolean"
+        },
+        "docker_socket": {
+          "const": false,
+          "default": false,
+          "title": "Docker Socket",
+          "type": "boolean"
+        },
+        "host_mounts": {
+          "default": [],
+          "maxItems": 0,
+          "minItems": 0,
+          "title": "Host Mounts",
+          "type": "array"
+        },
+        "host_network": {
+          "const": false,
+          "default": false,
+          "title": "Host Network",
+          "type": "boolean"
+        },
+        "privileged": {
+          "const": false,
+          "default": false,
+          "title": "Privileged",
+          "type": "boolean"
+        }
+      },
+      "title": "RuntimeBoundary",
+      "type": "object"
+    },
+    "Transport": {
+      "description": "Declared transport family; declaration does not provide egress.",
+      "enum": [
+        "declarative_http",
+        "mail",
+        "browser",
+        "guided_manual",
+        "protocol_api"
+      ],
+      "title": "Transport",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable identity, provenance, and capability declaration for a release.",
+  "properties": {
+    "allowed_origins": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Allowed Origins",
+      "type": "array"
+    },
+    "artifact_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Artifact Digest",
+      "type": "string"
+    },
+    "broker_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+      "title": "Broker Id",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "$ref": "#/$defs/Capability"
+      },
+      "maxItems": 5,
+      "minItems": 1,
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "connector_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+      "title": "Connector Id",
+      "type": "string"
+    },
+    "disclosures": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DisclosureDeclaration"
+      },
+      "maxItems": 64,
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "expires_at_utc": {
+      "format": "date-time",
+      "title": "Expires At Utc",
+      "type": "string"
+    },
+    "release_version": {
+      "maxLength": 128,
+      "minLength": 5,
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "title": "Release Version",
+      "type": "string"
+    },
+    "reviewed_at_utc": {
+      "format": "date-time",
+      "title": "Reviewed At Utc",
+      "type": "string"
+    },
+    "runtime_boundary": {
+      "$ref": "#/$defs/RuntimeBoundary",
+      "default": {
+        "direct_network": false,
+        "docker_socket": false,
+        "host_mounts": [],
+        "host_network": false,
+        "privileged": false
+      }
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "source_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Source Digest",
+      "type": "string"
+    },
+    "transports": {
+      "items": {
+        "$ref": "#/$defs/Transport"
+      },
+      "maxItems": 5,
+      "minItems": 1,
+      "title": "Transports",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "connector_id",
+    "release_version",
+    "broker_id",
+    "source_digest",
+    "artifact_digest",
+    "capabilities",
+    "transports",
+    "allowed_origins",
+    "reviewed_at_utc",
+    "expires_at_utc"
+  ],
+  "title": "ConnectorManifest",
+  "type": "object"
+}

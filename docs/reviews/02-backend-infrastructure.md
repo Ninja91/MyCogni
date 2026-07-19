@@ -36,7 +36,7 @@ Loopback is not authentication. Local requires a random bootstrap ceremony, auth
 - **Verification confidence:** one clean lookup can be a rate limit, CAPTCHA, geolocation/personalization difference, or temporary absence. Record `observed_absent_once`; reserve `verified_removed` for policy-defined corroboration across time or method. Blocks are inconclusive.
 - **Registry freshness:** signing without rollback/freeze protection is insufficient. Use versioned expiring metadata, delegated capability roles, threshold root keys, persisted monotonic versions, artifact verification, and provenance.
 - **Diagnostics:** generic HTTP instrumentation can capture query strings, headers, IPs, exception text, or URLs. Permit hand-authored safe spans or enforce an allowlist before storage/export.
-- **Restore:** a 24-hour database RPO can lose proof of an already sent request. External actions remain paused after restore; intents newer than the backup boundary become `outcome_unknown` until reconciled.
+- **Restore:** a database RPO can lose proof of an already sent request. Restore rotates the external dispatch epoch, invalidates mailboxes, pauses actions, and requires reconciliation of every restored nonterminal intent regardless of creation time.
 - **Profile parity:** SQLite/filesystem/host secrets and PostgreSQL/object store/KMS have different failure and security behavior. Publish a conformance matrix, not a blanket parity claim.
 - **U.S. policy:** distinguish voluntary opt-outs, state rights, agent authority, and official portals. DROP remains guided; eligibility and verification are user-completed.
 

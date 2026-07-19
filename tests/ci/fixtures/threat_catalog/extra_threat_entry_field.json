@@ -1,0 +1,1 @@
+{"operation":"add","document":"catalog","path":["threats",0,"unexpected"],"value":true,"expected":"fields must exactly match schema v1"}

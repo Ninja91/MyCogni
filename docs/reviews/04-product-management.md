@@ -16,7 +16,7 @@ Anonymous reviews are hypotheses. The supplied Reddit thread includes both detai
 
 ## V1 recommendation
 
-Support one consenting adult per installation while retaining an isolated multi-profile domain model. Deliver current/historical aliases; a read-only exposure preview over a small public set; attribute-level match explanations; guided/manual flows; 2–5 trusted automatic connectors; exact disclosure preview/ledger; reason/owner/next-date on every case; independently corroborated outcomes; resurfacing; kill switches; backup/export/delete; and a generated capability support matrix.
+Support one consenting adult per installation while retaining an isolated multi-profile domain model. Deliver current/historical aliases; a separately authorized read-only exposure preview over a small public set; attribute-level match explanations; guided/manual flows; 2–5 trusted automatic capabilities; exact disclosure preview/ledger; reason/owner/next-date on every case; independently corroborated outcomes; resurfacing; kill switches; backup/export/delete; and a generated capability support matrix.
 
 Custom URL intake may produce a safe guided draft in v1. It may not automatically remove arbitrary content. Family/guardian administration, hundreds of heuristic connectors, blanket private-broker outreach, hosted SaaS, non-U.S. claims, mobile, insurance/breach bundles, and model dependency are deferred.
 
@@ -30,7 +30,7 @@ Do not initially target people in acute stalking/activist/journalist danger as t
 
 ## Required experiments
 
-1. **Exposure-preview pilot (10–15 people):** 80% setup within 15 minutes; at least 95% user-confirmed precision; at least 70% find one useful accurate exposure; zero external sends.
+1. **Exposure-preview pilot (10–15 people):** preregistered setup, precision and usefulness denominators; zero removal submissions. Real scans still require separate consent and disclosure.
 2. **Proof comprehension:** no participant mistakes acknowledgement for verified deletion; at least 80% state the next action unaided.
 3. **Switching interviews:** at least five users each of commercial/DIY paths; test whether custody, proof, broker specificity, recurrence, or price drives switching; hypothesis: 40% of target users will install Docker.
 4. **Twelve-week beta:** track day-30/day-90 scheduler retention, manual minutes, verified outcome rate, resurfacing response, connector quarantine, and fields disclosed; hypotheses: under 10 manual minutes/month and at least 60% day-90 scheduler retention.

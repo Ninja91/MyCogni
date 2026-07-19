@@ -24,7 +24,7 @@ After the independent role reviews, a role-based decision council re-evaluated e
 | Loopback/private network is not authentication | Accepted, P0 | bootstrap auth, Host/Origin/CSRF/session controls, cloud passkey/OIDC, step-up, revocation epochs; ADR-0010 | engineer + architect |
 | “Optional AI” can become implicit authority | Accepted, P0 before any AI | typed `IntelligencePort`, no-op default, `UntrustedSuggestion`, no tools/vault/network/state mutation; ADR-0011 | scientist + architect |
 | One absence observation is not removal proof | Accepted, P1 | evidence ladder adds `observed_absent_once`, `inconclusive`, policy-defined corroboration for `verified_removed` | product + scientist |
-| Product scope is too broad | Accepted, P1 | stable v1 is one consenting adult, small public set, guided flows, 2–5 automatic connectors | product |
+| Product scope is too broad | Accepted, P1 | stable v1 is one consenting adult, small public set, guided flows, 2–5 automatic capabilities | product |
 | Coverage count creates bad incentives | Accepted, P1 | generated per-capability support matrix; precision/proof/burden/disclosure metrics | product + OSS |
 | Product reviews have promotional/astroturf risk | Accepted, P1 | source grading A/B/C; community evidence remains hypothesis input | scientist + product |
 | Browser and inference can exhaust a small host | Accepted, P1 | shared `ResourceBudgetManager`; one heavy-work lease; deterministic work priority | engineer + scientist |

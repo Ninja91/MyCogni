@@ -1,0 +1,1 @@
+{"operation":"add","document":"history","path":["allocations",0,"unexpected"],"value":true,"expected":"fields must exactly match history schema v1"}

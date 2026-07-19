@@ -1,0 +1,220 @@
+{
+  "$defs": {
+    "DisclosureRecord": {
+      "additionalProperties": false,
+      "description": "Typed summary of an attribute category disclosed by this action.",
+      "properties": {
+        "attribute_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Attribute Type",
+          "type": "string"
+        },
+        "destination": {
+          "maxLength": 253,
+          "minLength": 4,
+          "title": "Destination",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute_type",
+        "destination"
+      ],
+      "title": "DisclosureRecord",
+      "type": "object"
+    },
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "description": "Reference to a bounded untrusted sensitive payload uploaded to the mailbox.\n\n``payload_digest`` is an integrity binding, not a claim that the connector\nencrypted the payload. The mailbox storage adapter is responsible for\nauthenticated wrapping before persistence.",
+      "properties": {
+        "byte_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mailbox_object_id": {
+          "format": "uuid4",
+          "title": "Mailbox Object Id",
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "mailbox_object_id",
+        "payload_digest",
+        "byte_count"
+      ],
+      "title": "EvidenceReference",
+      "type": "object"
+    },
+    "NextStep": {
+      "additionalProperties": false,
+      "description": "Declarative handoff; never an executable command.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/NextStepKind"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "NextStep",
+      "type": "object"
+    },
+    "NextStepKind": {
+      "description": "Finite handoff requested from the trusted core or user.",
+      "enum": [
+        "none",
+        "user_review",
+        "retry_later",
+        "reauthorize"
+      ],
+      "title": "NextStepKind",
+      "type": "string"
+    },
+    "ReasonCode": {
+      "description": "Finite machine reason vocabulary for protocol version 1.",
+      "enum": [
+        "no_candidate",
+        "name_address_match",
+        "exact_match",
+        "partial_match",
+        "multiple_candidates",
+        "insufficient_match",
+        "preparation_complete",
+        "transport_accepted",
+        "broker_accepted",
+        "broker_pending",
+        "broker_assertion",
+        "partial_completion",
+        "request_denied",
+        "identity_not_accepted",
+        "exemption_asserted",
+        "captcha_required",
+        "mfa_required",
+        "login_required",
+        "manual_review_required",
+        "timeout",
+        "rate_limited",
+        "schema_drift",
+        "evidence_unavailable",
+        "unexpected_response",
+        "invalid_action",
+        "revoked_authority",
+        "stale_fence",
+        "budget_exceeded",
+        "connector_error"
+      ],
+      "title": "ReasonCode",
+      "type": "string"
+    },
+    "ResultCode": {
+      "description": "Finite attempt facts; none is a core removal-verification claim.",
+      "enum": [
+        "no_candidate",
+        "candidate_observed",
+        "ambiguous_candidates",
+        "payload_prepared",
+        "transport_receipt",
+        "broker_acknowledged",
+        "broker_processing",
+        "broker_asserted_complete",
+        "partial_response",
+        "broker_denied",
+        "challenge",
+        "inconclusive",
+        "failed"
+      ],
+      "title": "ResultCode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Structured attempt fact without core outcome or verification inference.",
+  "properties": {
+    "action_id": {
+      "format": "uuid4",
+      "title": "Action Id",
+      "type": "string"
+    },
+    "attempt_id": {
+      "format": "uuid4",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "disclosures": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DisclosureRecord"
+      },
+      "maxItems": 64,
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 64,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "external_reference": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "External Reference"
+    },
+    "next": {
+      "$ref": "#/$defs/NextStep",
+      "default": {
+        "kind": "none"
+      }
+    },
+    "protocol_version": {
+      "const": 1,
+      "title": "Protocol Version",
+      "type": "integer"
+    },
+    "reason_code": {
+      "$ref": "#/$defs/ReasonCode"
+    },
+    "result": {
+      "$ref": "#/$defs/ResultCode"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "action_id",
+    "attempt_id",
+    "result",
+    "reason_code"
+  ],
+  "title": "ResultEnvelope",
+  "type": "object"
+}

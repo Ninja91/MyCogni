@@ -1,0 +1,1 @@
+{"operation":"set","document":"registry","path":["tests",0,"id"],"value":"VFY-AUTH-002","expected":"unknown verification test ID VFY-AUTH-001"}

@@ -45,6 +45,7 @@ Confidentiality, integrity, and availability all matter. A compromise can expose
 | Wrong-person removal | attribute explanation; high connector-specific threshold; no name-only automatic confirmation; ambiguity review | precision by connector; incident/rollback; user correction |
 | Stale or unauthorized submit | immutable plan; actor/profile/scope/epoch; final dispatch recheck; monotonic fence; kill switches | journal/fence audit; revoke grants; no retry after start |
 | Crash creates duplicate send | immutable intent, separate attempts, `dispatch_started` and `outcome_unknown` | receipt/portal/mail reconciliation; kill-at-every-edge tests |
+| SQLite duplicate writer, unsafe mount or dirty resume | one owning process/Engine/connection; shared application/migration kernel lock; `BEGIN IMMEDIATE`; storage eligibility; fsynced dirty marker | PRAGMA readback, `quick_check`, WAL checkpoint, typed readiness/pause, lock/WAL/SIGKILL/full-disk tests; host conformance remains required |
 | Restore replays old work | external actions paused; journal boundary; restore-time unknown marking and reconciliation | restore drill from pre-send backup; explicit resume step-up |
 | False proof | assertion/one-absence/corroborated/inconclusive ladder; independent timed policy | resurfacing; method-specific evidence; proof-comprehension test |
 | Event history rewritten | keyed/signed event chain; monotonic checkpoint outside primary DB | checkpoint mismatch alert; projection rebuild; disclose assurance limit |
@@ -57,12 +58,12 @@ Confidentiality, integrity, and availability all matter. A compromise can expose
 
 - Generate a random installation/cloud key-encryption key (KEK) at setup and hold it in OS keychain, mounted secret, or KMS—not application data/evidence backups.
 - Generate an independent random profile data-encryption key (DEK) per profile; never derive it from the KEK.
-- Wrap each profile DEK with the KEK; classify and separately back up the wrapped-key catalog.
+- Wrap each profile DEK with the KEK; classify the wrapped-key catalog and include it in the managed online-consistent encrypted-state archive while keeping KEK/recovery material separate.
 - Derive field, evidence, blind-index, session, and event-authentication keys below the profile DEK with context-bound HKDF.
 - Encrypt with a reviewed authenticated-encryption library/algorithm selected during implementation review; AES-256-GCM with unique nonces is the portability baseline, XChaCha20-Poly1305 a candidate.
 - Bind ciphertext to tenant/install, table/object, record, profile, schema version, field/purpose, and key version as associated data.
 - Rotation rewraps profile DEKs first; purpose/algorithm changes may re-encrypt. Interrupted rotation is resumable and versioned.
-- Profile deletion destroys the live wrapped DEK and indexes/session keys. It is reported incomplete while any key-catalog backup can recover that DEK.
+- Profile deletion destroys the live wrapped DEK and indexes/session keys only after external-action reconciliation. Reports cover live state and known managed archives that can recover the DEK, plus an external-copy caveat.
 
 Do not invent cryptography. Use reviewed libraries/test vectors and obtain independent review before live submission.
 
@@ -78,7 +79,7 @@ A fully compromised host remains outside the protection claim.
 
 Connectors are not plugins. They are separate digest-pinned artifacts with no core imports/mounts/network. The runtime is non-root/rootless, read-only except tmpfs, capability/syscall constrained, resource/time bounded, and cannot access DB/vault/key catalog/Docker socket/host metadata/other sessions.
 
-The mandatory egress gateway is the only connector path to the network. It verifies the current action token/fence, authority epoch, all pause states, connector digest/capability, allowed method/protocol/origin/public IP, redirect, byte/time budget, and authorized disclosure before first and subsequent connections. Browser challenge/terms/disclosure drift stops.
+The mandatory fail-closed transport gateway is the only connector path to the network. A gateway-owned declarative HTTP client or trusted mailer originates exact typed content. For opaque browser TLS, the gateway verifies the online action permit, installation dispatch epoch/fence, authority epoch, all pause states, connector digest/capability, protocol/origin/public IP/port, new redirect connections, and byte/time budget; it cannot inspect method/path/body/response semantics. The core minimizes connector plaintext and the product discloses allowed-origin exfiltration risk. Browser challenge/terms/disclosure drift stops.
 
 Local container isolation shares the host kernel and is lower assurance than a properly configured VM/gVisor/Kata tier; documentation and support matrix must state this.
 
@@ -107,7 +108,7 @@ Before any live automatic submission:
 - incident, emergency disable, unknown-outcome, and registry rollback runbooks;
 - qualified U.S. legal/authorized-agent review for the claimed connectors/policies.
 
-Before stable v1: accessibility, proof/disclosure comprehension, local deployment hardening, signed images, registry rollback protection, one 12-week user study, and no unresolved P0/P1 without public expiring acceptance.
+Before stable v1: accessibility, exact-value proof/disclosure comprehension, local deployment hardening, signed images, registry rollback protection, a twelve-week/day-90-mature automatic cohort, zero unresolved P0 findings, and no unresolved P1 on an enabled capability.
 
 ## Legal and abuse boundary
 

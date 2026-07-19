@@ -1,0 +1,1 @@
+{"operation":"set","document":"registry","path":["tests",1,"implementation"],"value":{"type":"SOURCE_DOCUMENT","ref":"docs/05-security-privacy-threat-model.md"},"expected":"IMPLEMENTED requires executable typed evidence"}

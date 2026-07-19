@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "source_sha256": {
+    "tests/simulator/test_network_guard_simulator.py": "309f468c69dcc1d935691a28f2e71327ce1deb67c9f53d40682cdfaffccd68e8",
+    "tests/simulator/test_web_mail_safety.py": "2c496d2d04f88ca9cb6d207c9448846c63afef62648bf8df80c0834e0d5265f7"
+  },
+  "callable_provenance": {
+    "tests/simulator/test_network_guard_simulator.py::test_external_redirect_is_denied_before_second_transport": {
+      "ast_sha256": "d5457d42cdf5026b32fb3073beedffed6955cbb895b5d1cc23f7c6a3d5b053c5",
+      "ast_lineno": 83,
+      "code_firstlineno": 82,
+      "qualname": "test_external_redirect_is_denied_before_second_transport"
+    },
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail": {
+      "ast_sha256": "87babfacb85ec55646e5125d6ed3374501e110c0eb196bcac9d8de3bec3edec4",
+      "ast_lineno": 77,
+      "code_firstlineno": 65,
+      "qualname": "test_ip_family_alias_and_unix_socket_escapes_fail"
+    },
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport": {
+      "ast_sha256": "e13f9d1b59898c857f27ddce77294978f4abceb1854349f1b898810bc735b850",
+      "ast_lineno": 54,
+      "code_firstlineno": 18,
+      "qualname": "test_noncanonical_local_http_urls_fail_before_transport"
+    },
+    "tests/simulator/test_network_guard_simulator.py::test_proxy_environment_names_are_case_insensitive_and_forbidden": {
+      "ast_sha256": "84a8c92cd03c6a4c3a61a8e9d954e3d5832d42e02a80bd1efced3a2146f2e39f",
+      "ast_lineno": 120,
+      "code_firstlineno": 114,
+      "qualname": "test_proxy_environment_names_are_case_insensitive_and_forbidden"
+    },
+    "tests/simulator/test_network_guard_simulator.py::test_valid_local_http_policy_is_exact": {
+      "ast_sha256": "a556086a3f12e4a30ce858bb46e02dd8a30b5242d00c3350b8b743813168fc26",
+      "ast_lineno": 105,
+      "code_firstlineno": 104,
+      "qualname": "test_valid_local_http_policy_is_exact"
+    },
+    "tests/simulator/test_web_mail_safety.py::test_incomplete_raw_request_is_closed_by_read_timeout": {
+      "ast_sha256": "44a50ecd59e23ac8a198afbb2b5e5908a7ab805d433afddbf5b5e287a477009b",
+      "ast_lineno": 475,
+      "code_firstlineno": 474,
+      "qualname": "test_incomplete_raw_request_is_closed_by_read_timeout"
+    },
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_concurrency_is_bounded": {
+      "ast_sha256": "fa43ce4b899604a11dd349e19fcd6f8606cbc91b939bb2c00e07746b5d12cc18",
+      "ast_lineno": 448,
+      "code_firstlineno": 447,
+      "qualname": "test_raw_http_concurrency_is_bounded"
+    },
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed": {
+      "ast_sha256": "1d041c6a015d835dd8ae948fed27ffb3d38276c402ca6465608f00e5ce865962",
+      "ast_lineno": 437,
+      "code_firstlineno": 369,
+      "qualname": "test_raw_http_mutations_fail_closed"
+    },
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_success_has_deterministic_headers_without_date": {
+      "ast_sha256": "010b4595ac07310bea6846052ceee8fff362141a7521e5502f3bddb3273b3985",
+      "ast_lineno": 359,
+      "code_firstlineno": 358,
+      "qualname": "test_raw_http_success_has_deterministic_headers_without_date"
+    }
+  },
+  "authorized_nodes": [
+    "tests/simulator/test_network_guard_simulator.py::test_external_redirect_is_denied_before_second_transport",
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail[alternate-ipv4]",
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail[ipv6]",
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail[mapped-ipv6]",
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail[unix-path]",
+    "tests/simulator/test_network_guard_simulator.py::test_ip_family_alias_and_unix_socket_escapes_fail[wildcard-ipv4]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[alternate-loopback]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[default-port]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[encoded-ip]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[file]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[ftp]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[hex-ip]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[https]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[integer-ip]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[ipv6]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[localhost]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[mapped-ipv6]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[overflow-port]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[userinfo]",
+    "tests/simulator/test_network_guard_simulator.py::test_noncanonical_local_http_urls_fail_before_transport[zero-port]",
+    "tests/simulator/test_network_guard_simulator.py::test_proxy_environment_names_are_case_insensitive_and_forbidden[all]",
+    "tests/simulator/test_network_guard_simulator.py::test_proxy_environment_names_are_case_insensitive_and_forbidden[http]",
+    "tests/simulator/test_network_guard_simulator.py::test_proxy_environment_names_are_case_insensitive_and_forbidden[https]",
+    "tests/simulator/test_network_guard_simulator.py::test_proxy_environment_names_are_case_insensitive_and_forbidden[no-proxy]",
+    "tests/simulator/test_network_guard_simulator.py::test_valid_local_http_policy_is_exact",
+    "tests/simulator/test_web_mail_safety.py::test_incomplete_raw_request_is_closed_by_read_timeout",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_concurrency_is_bounded",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[duplicate-content-length]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[duplicate-host]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[external-host]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[external-origin]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[http10]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[method]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[missing-content-length]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[missing-host]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[missing-origin]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_mutations_fail_closed[transfer-encoding]",
+    "tests/simulator/test_web_mail_safety.py::test_raw_http_success_has_deterministic_headers_without_date"
+  ]
+}

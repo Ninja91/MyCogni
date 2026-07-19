@@ -1,0 +1,1 @@
+{"operation":"set","document":"history","path":["allocations",0,"state"],"value":"RETIRED","expected":"retired ID cannot be recycled as an active row"}

@@ -2,7 +2,18 @@
 
 MyCogni welcomes product, legal-research, connector, security, testing, documentation, and accessibility contributions.
 
-The repository is an architecture/specification pack. Until a development toolchain exists, the most valuable work is improving requirement traceability, synthetic simulator scenarios, threat cases, evidence semantics, accessibility, and sourced broker-procedure facts.
+The repository is an architecture/specification pack entering M0 implementation. The locked Python toolchain exists, but no remover runtime, Docker image, simulator, or live connector is complete. The most valuable early work follows the dependency-gated packages in `docs/v1/WORK_PACKAGES.md`.
+
+## Local development
+
+Install exact `uv 0.9.26`, then use the committed environment exactly:
+
+```bash
+make bootstrap
+make check
+```
+
+`make bootstrap` is frozen to `uv.lock`, the reference interpreter is pinned to CPython 3.12.12, and isolated builds are constrained by `build-constraints.txt`. Dependency changes require the explicit `make lock-update` target and review. Python 3.13 remains a separately tested compatibility target; it is not the reference lock-update environment. Do not use real PII or contact a real broker while developing or testing.
 
 ## Ground rules
 

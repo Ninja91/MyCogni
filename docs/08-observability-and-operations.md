@@ -4,7 +4,9 @@
 
 Operators need to know whether privacy work is progressing without turning diagnostics into a shadow identity database. Telemetry uses opaque per-installation IDs, broker IDs where safe, connector versions, state/reason codes, durations, and counts. It excludes profile identifiers that correlate across exports, identity values, URLs containing search terms, page titles, message bodies, selectors containing PII, screenshots, and authorization text.
 
-No remote telemetry is enabled by default.
+No remote telemetry is enabled by default. TEL-001 implements the initial typed, local-only
+contract described in [the V1 diagnostics specification](v1/TEL-001-DIAGNOSTICS.md); it does not
+yet compose a production server, browser, proxy, mailer, retention system, or support bundle.
 
 Generic HTTP auto-instrumentation is disabled unless an allowlist processor proves that query strings, headers, peer IPs, exception text, URLs, page titles, and request/response bodies are removed before any exporter or local store. Prefer hand-authored safe spans at domain boundaries.
 
@@ -17,7 +19,14 @@ time, level, component, action, result_code, connector_id,
 connector_version, duration_ms, retry_number, job_id, trace_id
 ```
 
-The log API does not accept arbitrary domain objects. Sensitive values implement a type that renders as `[REDACTED:<category>]`. CI seeds canary names/emails/phones and fails if they appear in logs, traces, metrics, error pages, or diagnostic bundles.
+The log API does not accept arbitrary domain objects. Its action/result values and exception
+categories are finite, event fields and enum combinations are catalog-bound, and job/action/trace
+correlations require distinct factory-only diagnostic UUIDv4 types. Sensitive values implement a
+type that renders as `[REDACTED:<category>]`, but even redacted
+domain values are not accepted as diagnostic fields. CI seeds synthetic canary names, emails,
+phones, URLs, headers, HTML, mail, proxy/browser content, and secrets and fails if they appear in
+the local JSON sink. Uvicorn access/default logs and future proxy/browser/mail automatic logs are
+deny-by-default; a later composition package must prove it applies those settings.
 
 ## Metrics
 
@@ -88,11 +97,11 @@ Quarantine changed capabilities, preserve observe only if its contract passes, c
 
 ### Key loss
 
-Stop all actions. Restore the key from the separate operator backup. If unavailable, encrypted PII/evidence is unrecoverable by design. Do not reset the key and attempt to continue against old ciphertext.
+Stop all actions. Restore KEK/recovery material from the separate operator source; the wrapped catalog comes from the managed archive. If recovery material is unavailable, encrypted PII/evidence is unrecoverable by design. Do not reset the key and attempt to continue against old ciphertext.
 
 ### Database restore
 
-Restore into isolation, supply KEK and key catalog separately, run migrations in dry-run, verify event/evidence hashes against the last external checkpoint, rebuild projections, keep external actions disabled, mark intents after the trusted backup/journal boundary unknown, reconcile receipts/mail/portals, review active leases/cases, then step-up and explicitly resume.
+Restore into isolation, supply separate KEK/recovery material, load the archive's wrapped catalog, run migrations in dry-run, verify event/evidence integrity against the checkpoint statement, and rebuild projections. Before any connector/gateway starts, rotate the external installation dispatch epoch, invalidate all mailboxes/permits, keep actions disabled, mark every restored nonterminal external intent `reconciliation_required` regardless of creation time, reconcile gateway facts/receipts/mail/portals, review leases/cases, then step up and explicitly resume.
 
 ### Optional assist failure
 

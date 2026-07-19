@@ -1,0 +1,1 @@
+{"operation":"set","document":"catalog","path":["threats",0,"sources",0],"value":"docs/05-security-privacy-threat-model.md#threat:not-a-real-row","expected":"broken or noncanonical source anchor"}

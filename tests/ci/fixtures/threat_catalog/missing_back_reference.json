@@ -1,0 +1,1 @@
+{"operation":"set","document":"registry","path":["tests",0,"threats",0],"value":"THR-DISPATCH-001","expected":"missing registry back-reference VFY-AUTH-001 -> THR-AUTH-001"}

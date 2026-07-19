@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "registry_version": "1.1.0",
+  "tests": [
+    {
+      "id": "VFY-AUTH-001",
+      "purpose": "control plane actor authority verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-AUTH-001"]
+    },
+    {
+      "id": "VFY-CATALOG-001",
+      "purpose": "threat catalog integrity verification",
+      "implementation": {
+        "type": "PYTEST_NODE",
+        "ref": "tests/ci/test_threat_catalog.py::test_threat_catalog_integrity_evidence"
+      },
+      "status": "IMPLEMENTED",
+      "threats": ["THR-GOV-001"]
+    },
+    {
+      "id": "VFY-DISPATCH-001",
+      "purpose": "external dispatch fencing and reconciliation verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-DISPATCH-001"]
+    },
+    {
+      "id": "VFY-EGRESS-001",
+      "purpose": "connector egress policy verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-EGRESS-001"]
+    },
+    {
+      "id": "VFY-KEYS-001",
+      "purpose": "profile key and deletion truth verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-KEYS-001"]
+    },
+    {
+      "id": "VFY-LOGS-001",
+      "purpose": "diagnostic personal data exclusion verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-LOGS-001"]
+    },
+    {
+      "id": "VFY-RUNNER-001",
+      "purpose": "connector runtime isolation verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-RUNNER-001"]
+    },
+    {
+      "id": "VFY-VERIFY-001",
+      "purpose": "removal assurance state verification",
+      "implementation": null,
+      "status": "PLANNED",
+      "threats": ["THR-VERIFY-001"]
+    }
+  ]
+}

@@ -59,7 +59,7 @@ SQLite/PostgreSQL, filesystem/object store, host keychain/KMS, connector runtime
 
 A UI/CLI/assistant request becomes a domain command containing authenticated actor, represented profile, scope, revocation epoch, intent, and idempotency key. Local browser sessions require bootstrap authentication, Host/Origin/CSRF checks, secure cookies/session rotation, and step-up for high-risk actions. Cloud-small uses TLS plus passkeys/WebAuthn or narrowly configured OIDC. CLI uses a permissioned authenticated local channel, never direct database access.
 
-Policy returns allow, deny, or require-review. A plan eligible for automatic submission must fit the current setup authorization, exact destination/disclosure, match threshold, connector digest/capability/freshness, jurisdiction fact, and all pause states. Authorization binds the immutable plan hash and is rechecked at dispatch, not only at enqueue time.
+Policy returns allow, deny, or require-review. A plan eligible for automatic submission must fit a dedicated default-off step-up per-capability automation authorization, exact destination/disclosure, authority method, match threshold, connector digest/capability/freshness, jurisdiction fact, and all pause states. General setup/preview consent cannot enable send. Authorization binds the immutable plan hash and is rechecked at dispatch, not only at enqueue time.
 
 ## Durable jobs and external side effects
 
@@ -72,9 +72,9 @@ External transmission uses a separate model:
 - a monotonically increasing fence proves the current dispatch claim;
 - journal states are `ready`, `dispatch_claimed`, `dispatch_started`, `transport_proven`, `outcome_unknown`, and `failed_before_send`.
 
-The final dispatch transaction revalidates actor/profile authority, revocation epoch, plan/authorization hash, match, connector digest/freshness, destination/disclosure, and global/profile/broker pause. The egress gateway checks the fence before accepting the first outbound byte. A crash/timeout/cancel after `dispatch_started` is `outcome_unknown`; no automatic retry occurs until a non-mutating reconciliation path proves no send.
+The final dispatch transaction revalidates actor/profile authority, revocation epoch, plan/authorization hash, match, connector digest/freshness, destination/disclosure, and global/profile/broker pause. Immediately before dialing, the gateway calls online `authorize_and_start`; the core durably records `dispatch_started` under the current installation dispatch epoch before permission is returned. Verifier or persistence uncertainty fails closed. A crash/timeout/cancel after `dispatch_started` is `outcome_unknown`; no automatic retry occurs until authoritative reconciliation proves no send. Restore rotates the external dispatch epoch, invalidates mailboxes and reconciles every nonterminal external intent.
 
-After downtime the scheduler calculates one bounded catch-up decision per broker/profile instead of replaying missed intervals. Restores leave all external actions paused and reconcile intents newer than the trusted journal/backup boundary.
+After downtime the scheduler calculates one bounded catch-up decision per broker/profile instead of replaying missed intervals. Restore rotates the external installation dispatch epoch, invalidates mailboxes/permits, leaves all external actions paused, and reconciles every restored nonterminal external intent regardless of creation time.
 
 ## Connector artifact and network boundary
 

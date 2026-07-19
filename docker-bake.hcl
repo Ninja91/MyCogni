@@ -1,0 +1,27 @@
+variable "BUILD_CREATED" {
+  default = "1970-01-01T00:00:00Z"
+}
+
+variable "VERSION" {
+  default = "0.0.0"
+}
+
+variable "VCS_REF" {
+  default = "unknown"
+}
+
+group "default" {
+  targets = ["core"]
+}
+
+target "core" {
+  context    = "."
+  dockerfile = "docker/Dockerfile"
+  platforms  = ["linux/amd64", "linux/arm64"]
+  tags       = ["mycogni/core:${VERSION}"]
+  args = {
+    BUILD_CREATED = BUILD_CREATED
+    VERSION       = VERSION
+    VCS_REF       = VCS_REF
+  }
+}

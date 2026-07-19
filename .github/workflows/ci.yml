@@ -1,0 +1,65 @@
+name: M0 safety and architecture checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # PRs use the protected base tree; pushes use the exact pre-push tree.
+  THREAT_CATALOG_BASE_REF: ${{ vars.MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA != '' && '0000000000000000000000000000000000000000' || (github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before) }}
+  MYCOGNI_GOVERNANCE_CI: "1"
+  # Repository-admin variables are outside branch control. Empty means no authority.
+  MYCOGNI_GOVERNANCE_GENESIS_SHA: ${{ vars.MYCOGNI_GOVERNANCE_GENESIS_SHA }}
+  MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA: ${{ vars.MYCOGNI_GOVERNANCE_RECOVERY_BASE_SHA }}
+  MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA: ${{ vars.MYCOGNI_GOVERNANCE_TRUST_ROOT_SHA }}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.26"
+          enable-cache: false
+      - name: Install pinned Python
+        run: uv python install 3.12.12
+      - name: Bootstrap frozen workspace
+        run: make bootstrap
+      - name: Record optional Linux network-namespace support
+        run: make network-namespace-probe
+      - name: Run workspace checks
+        run: make check
+
+  python-313-compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.26"
+          enable-cache: false
+      - name: Install compatibility Python
+        run: uv python install 3.13.11
+      - name: Run compatibility checks
+        run: make check-python-313

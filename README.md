@@ -2,7 +2,7 @@
 
 MyCogni is a planned local-first, open-source system for recurring U.S. personal-data removal with auditable evidence and minimum necessary disclosure. It is for technically comfortable people who would rather self-host than give another SaaS a complete identity dossier.
 
-> **Status — architecture only.** This repository does not yet contain a runnable remover, Docker image, or live broker connector. It must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
+> **Status — architecture and synthetic fixtures only.** This repository does not yet contain a runnable remover, accepted Docker image, or live broker connector. Its deterministic local simulator cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
 
 MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 
@@ -12,12 +12,12 @@ MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security,
 
 The first supported product is intentionally narrow: one consenting U.S. adult, one self-hosted installation, a small disclosed set of high-impact people-search workflows, and proof that distinguishes activity from outcomes.
 
-- **Local custody:** sensitive identity data stays encrypted on infrastructure the user controls.
+- **Local custody:** stored source data remains encrypted under user-controlled infrastructure; only the exact minimum values shown in an authorized plan may leave for a displayed destination.
 - **Proof before claims:** `submitted`, `acknowledged`, `broker_asserted_removed`, `observed_absent_once`, `verified_removed`, `inconclusive`, and `resurfaced` are different states.
-- **Minimum disclosure:** every released field, purpose, destination, and authorization is visible in a permanent disclosure ledger.
-- **Hands-off where earned:** fresh, trusted connectors may act automatically inside the user's setup authorization; ambiguity, drift, identity challenges, and unknown outcomes stop.
+- **Minimum disclosure:** every released value, purpose, destination, and authorization is visible in a durable exportable ledger retained under the user's deletion and retention policy.
+- **Hands-off where earned:** external actions start globally paused. After a separate, non-preselected, step-up per-capability ceremony, fresh trusted capabilities may act only inside that exact authorization; ambiguity, drift, identity challenges, and unknown outcomes stop.
 - **No mystery queues:** every case exposes its state, reason, owner, last evidence, next action, and next date.
-- **Sporadic operation:** the same core can wake periodically on a laptop or run continuously on a small single-tenant cloud host.
+- **Sporadic operation:** local-lite can wake periodically on a laptop; a small single-tenant cloud profile is a separate post-v1 conformance target.
 - **Governed extensions:** connectors expire, are promoted per capability, run outside the core, and have no vault or arbitrary-network access.
 
 The project will not optimize headline broker counts, requests sent, GitHub stars, or a blended “completion” score. It will measure confirmed-match precision, verified outcomes, time and disclosure cost, resurfacing, manual burden, and connector freshness.
@@ -27,12 +27,12 @@ The project will not optimize headline broker counts, requests sent, GitHub star
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |
 | Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |
-| Runtime | architecture and acceptance criteria | signed amd64/arm64 OCI images | broader platform packaging |
+| Runtime | architecture, executable skeleton, and synthetic-only simulator | signed amd64/arm64 OCI images | broader platform packaging |
 | Discovery | synthetic registry example | small read-only exposure set with explainable matching | larger governed registry |
-| Removal | lifecycle and authorization design | guided flows plus 2–5 trusted automatic connectors | broader/custom automation |
+| Removal | lifecycle and authorization design | guided flows plus 2–5 trusted automatic capabilities | broader/custom automation |
 | Evidence | normative semantics and diagrams | encrypted evidence, disclosure ledger, independent rechecks | additional attestation methods |
-| Deployment | local-lite and cloud-small specifications | local-lite; cloud-small after conformance testing | no multi-tenant SaaS plan |
-| Assistants | bounded integration design | metadata-only integration surface | optional OpenClaw workflows |
+| Deployment | local-lite plus future cloud-small specifications | local-lite only | cloud-small after separate post-v1 conformance; no multi-tenant SaaS plan |
+| Assistants | bounded integration design | no V1 integration surface | optional post-v1 metadata-only OpenClaw workflows |
 | Local AI | advisory architecture and null adapter plan | no model dependency or bundled weights | opt-in shadow-tested assist, never decision authority |
 
 The public support matrix is deliberately empty until connectors earn a maturity state; see [SUPPORTED_BROKERS.md](SUPPORTED_BROKERS.md).
@@ -55,7 +55,7 @@ flowchart LR
     broker["Approved broker endpoint"]
     assist["Optional local intelligence<br/>untrusted suggestions only"]
 
-    user -->|"setup authorization and exceptions"| core
+    user -->|"separate scan/automation authorization + exceptions"| core
     core <-->|"field/object encryption"| state
     core -->|"sealed minimum bundle + intent fence"| runner
     runner -->|"all outbound bytes"| egress
@@ -87,14 +87,15 @@ The optional intelligence seam returns only an `UntrustedSuggestion`. It has no 
 
 The delivery plan is milestone- and evidence-gated rather than a promise of dates:
 
-- **Weeks 0–2 — Foundation:** governance, P0 ADRs, synthetic simulator, secure control-plane skeleton.
-- **Weeks 3–6 — Preview alpha:** encrypted single-adult profile, aliases, read-only exposure preview, evidence UI, local-lite packaging.
-- **Weeks 7–10 — Guided beta:** request plans, disclosure ledger, guided/email drafts, export/delete/restore.
-- **Weeks 11–14 — Controlled automation:** isolated connector artifacts, mandatory egress gateway, 2–5 reviewed connectors, unknown-outcome journal.
-- **Weeks 15–18 — Local v1 hardening:** corroborated verification, resurfacing, signed images, SBOM, restore and usability gates.
-- **Weeks 19–24 — Cloud-small and experiments:** PostgreSQL/object storage profile, conformance matrix, optional local-assist shadow evaluation.
+- **Weeks 0–4 — Executable foundation:** locked project, synthetic simulator, network-deny CI, secure skeleton, and P0 spikes.
+- **Weeks 4–9 — Secure local kernel:** authentication, encrypted identity, durable jobs/evidence, backup/restore proof, and a generic fail-closed outbound-action boundary.
+- **Weeks 9–14 — Preview alpha:** separately authorized read-only exposure preview, explainable matching, evidence/case UI, and zero removal submissions.
+- **Weeks 14–19 — Guided beta:** exact request plans/values, disclosure ledger, guided/manual drafts, proof vocabulary, digest, and pre-submit offboarding.
+- **Weeks 19–26 — Controlled automation:** restore-safe journal, typed transport gateway, signed revocation/update metadata, human review, and 2–5 trusted automatic capabilities.
+- **Weeks 26–32 — Release candidate:** corroborated verification, resurfacing, signed artifacts/SBOM/provenance, restore drills, accessibility, resilience, and external review.
+- **Weeks 32–40 or later — Stable evidence gate:** the automatic cohort must mature for at least twelve weeks and day 90; only then can the project earn or fail stable V1. Cloud-small and optional intelligence remain post-v1.
 
-Stable v1 is not reached by elapsed time. All P0 architecture gates, qualified legal review, external security review, accessibility checks, restore drills, and the product-comprehension experiment must pass. The detailed plan is in [ROADMAP.md](ROADMAP.md) and [docs/10-execution-plan.md](docs/10-execution-plan.md).
+Stable v1 is not reached by elapsed time. It requires zero unresolved P0 findings, no unresolved P1 on an enabled capability, qualified legal/security reviews, accessibility and restore drills, and at least twelve weeks plus a mature day-90 denominator for the automatic cohort. The issue-ready control pack is in [docs/v1](docs/v1/README.md); release-level context remains in [ROADMAP.md](ROADMAP.md) and [docs/10-execution-plan.md](docs/10-execution-plan.md).
 
 ## Documentation map
 
@@ -111,6 +112,7 @@ Stable v1 is not reached by elapsed time. All P0 architecture gates, qualified l
 | [Operations](docs/08-observability-and-operations.md) | PII-safe diagnostics, runbooks, restore, and incident handling |
 | [Testing](docs/09-testing-and-quality.md) | synthetic, adversarial, security, and release gates |
 | [Execution plan](docs/10-execution-plan.md) | workstreams, dependencies, and acceptance criteria |
+| [Stable V1 control pack](docs/v1/README.md) | issue-ready implementation plan, work packages, orchestration, reviews, and completion evidence |
 | [Adversarial review](docs/11-adversarial-review.md) | review method, P0 findings, and applied changes |
 | [Maintainer decisions](docs/12-decisions-and-interview.md) | confirmed choices and remaining interview prompts |
 | [Independent role reviews](docs/reviews/README.md) | ML, backend/infra, edge, product, and OSS critiques |
@@ -130,7 +132,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md), [SUPPOR
 
 Removal cannot erase public records at their source, downstream copies, breach data, unlawful brokers, or future recollection. Some private databases cannot be independently checked. Browser workflows remain brittle. Self-hosting shifts key, backup, and operations risk to the user. Open-source maintainers cannot promise legal representation, emergency response, or service-level guarantees.
 
-California DROP is an official path for eligible residents. MyCogni will guide users through it and record completion; it will not automate around residency or identity verification or claim access to the broker-side processing API.
+California DROP is an official path for eligible residents and a candidate for separately reviewed guidance. MyCogni will not represent it as implemented, automate around residency or identity verification, or claim access to the broker-side processing API.
 
 ## License and project identity
 

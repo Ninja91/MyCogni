@@ -1,0 +1,1 @@
+{"operation":"set","document":"catalog","path":["threats",0,"severity"],"value":"CRITICAL","expected":"unknown severity"}

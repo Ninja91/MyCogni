@@ -10,15 +10,15 @@ Deriving every profile key from one persistent installation root allows a delete
 
 ## Decision
 
-Generate a random profile DEK for every profile. Wrap it under an install/cloud KEK held outside the application data and evidence backups. Derive separate field, evidence, blind-index, and event-authentication keys from the profile DEK with context-bound HKDF. Never derive the profile DEK from the install KEK.
+Generate a random profile DEK for every profile. Wrap it under an install/local KEK held outside application data/evidence archives. Derive separate field, evidence, blind-index, and event-authentication keys from the profile DEK with context-bound HKDF. Never derive the profile DEK from the install KEK.
 
-Keep the wrapped-key catalog as a separately classified recovery asset. Profile deletion destroys the live wrapped DEK, cancels work, deletes blind indexes/session keys, and records a non-sensitive tombstone. The UI reports deletion as pending until every recoverable key-catalog backup containing that DEK passes its retention horizon or is sanitized. Evidence/data ciphertext may then be deleted asynchronously but is already inaccessible through live keys.
+Keep the wrapped-key catalog as a separately classified recovery asset included in each managed consistent encrypted-state archive; never include the KEK/recovery secret, unwrapped keys or checkpoint signing secret. Profile deletion first pauses and reconciles external actions, then destroys the live wrapped DEK, cancels work, deletes blind indexes/session keys, and records a non-sensitive tombstone. The UI reports managed-backup horizons until every known archive containing that wrapped DEK expires or is sanitized and warns that external snapshots/copies are outside MyCogni's inventory.
 
 Relationship metadata and case projections receive encryption/pseudonymization proportional to sensitivity; field encryption alone is not a dossier boundary.
 
 ## Consequences
 
-- Recovery needs both data backup and key-catalog recovery material.
+- Recovery needs the managed archive (including wrapped catalog) plus separately protected KEK/recovery material.
 - Users can permanently lose a profile.
 - Backup inventory and expiry become part of deletion truth.
 - Rotation rewraps profile DEKs; purpose-key changes may require data re-encryption.
@@ -26,7 +26,7 @@ Relationship metadata and case projections receive encryption/pseudonymization p
 
 ## Alternatives
 
-Root-derived profile keys were rejected because they can be recreated. One install-wide DEK was rejected because a single key compromise/deletion affects all profiles. Keeping the key catalog inside normal backups was rejected because it collapses separation.
+Root-derived profile keys were rejected because they can be recreated. One install-wide DEK was rejected because a single key compromise/deletion affects all profiles. Keeping the KEK, recovery secret, unwrapped keys or checkpoint signing key inside managed data archives was rejected because it collapses separation; keeping the wrapped catalog outside the consistency protocol was rejected because it can make apparently valid backups unrecoverable.
 
 ## Security and privacy impact
 

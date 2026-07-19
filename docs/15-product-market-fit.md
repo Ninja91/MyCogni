@@ -67,7 +67,7 @@ Hypothesis: at least 40% of the technical target segment will install Docker for
 
 ### E4 — Disclosure comprehension
 
-For every automatic-action pilot, ask the participant to identify destination, purpose, and released field categories before enabling setup authorization. Gate: 100% comprehension; a miss forces onboarding redesign.
+For every automatic-action pilot, ask the participant to identify destination/transport, every exact current/historical value, message/attachment, purpose and change from prior authorization before the dedicated automation ceremony. Gate: 100% comprehension; a miss blocks automation enablement and forces redesign.
 
 ### E5 — Twelve-week recurring beta
 

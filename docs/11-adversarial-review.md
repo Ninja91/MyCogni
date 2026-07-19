@@ -44,7 +44,7 @@ These are AI-assisted adversarial reviews, not external human security/cryptogra
 | --- | --- |
 | One clean search is called proof | add assertion → one absence → corroborated verification → inconclusive ladder; blocks/ambiguity never imply absence |
 | Unkeyed event hash chain is called append-only | keyed/signed events and external monotonic checkpoint; claim only tamper evidence relative to checkpoint |
-| Product tries to cover too much | stable v1 becomes one adult, small public preview, guided flows, 2–5 trusted automatic connectors |
+| Product tries to cover too much | stable v1 becomes one adult, small public preview, guided flows, 2–5 trusted automatic capabilities |
 | Coverage count hides capability gaps | generated support matrix by capability, maturity, expiry, disclosure, human steps, evidence, recent tests |
 | Stalled cases create opaque trust | reason, owner, last evidence, next action, and next date are mandatory |
 | Browser and inference collide on small host | shared heavy-work lease/resource preflight; deterministic deadline work has priority |

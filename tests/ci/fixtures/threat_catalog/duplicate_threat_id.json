@@ -1,0 +1,1 @@
+{"operation":"append_copy","document":"catalog","path":["threats"],"source":["threats",0],"expected":"duplicate threat ID"}
