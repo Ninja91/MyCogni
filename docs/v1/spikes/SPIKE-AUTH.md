@@ -54,7 +54,10 @@ entrypoint warns and confirms before consuming that offline route. Rotated repro
 copied opaque code alone: `begin_reprovision_on_tty` parses the no-echo input, and the store resolves its
 canonical installation, actor, profile, and fixed `reprovision` purpose from handle plus digest. That port
 accepts no caller-supplied authority binding. The ordinary operator exchange rejects a reprovision bootstrap,
-so it cannot bypass the purpose-specific destructive confirmation.
+so it cannot bypass the purpose-specific destructive confirmation. After confirmation, the owned operator
+boundary mints a random service-registered authorization bound to that exact bootstrap. The service burns the
+authorization before attempting the destructive store decision; forged, cross-bootstrap, replayed, and
+concurrent uses fail closed. There is no public Boolean that asserts confirmation.
 
 Every secret contains at least 256 bits from the injected token source. The spike adapter uses
 `secrets.token_bytes`; state stores only fixed SHA-256 `SecretDigest` values and compares them with
@@ -137,7 +140,7 @@ warning and requires an explicit confirmation. The warning states that old sessi
 be revoked, the current route will be consumed, the replacement must be saved, and interruption or process
 loss before handoff can leave no route. Declining occurs before consumption and preserves the route. The
 ordinary bootstrap exchange rejects this route as `wrong_purpose`; only the reprovision ceremony can consume
-it.
+it. The confirmed path additionally requires the boundary's opaque, bootstrap-bound, one-use authorization.
 
 Input uses the port's `read_secret_no_echo`; there is no command-line argument, URL, query string, or ordinary
 stdout/stderr secret path. The test proves only that the injected channel does not echo. A production adapter
@@ -199,9 +202,10 @@ Focused regressions cover:
 - canonical store-side recovery binding, immutable adapter boundaries, structural digest-only state, constant-
   time comparison, and exact mutable-state validation;
 - confirmation refusal before offline consume, non-TTY refusal, interrupted bootstrap handoff/recovery
-  redisplay, purpose-fixed code-only reprovision, generic-exchange rejection, destructive decline preservation,
-  interrupted reprovision redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted
-  traceback/rendering, no URL/argv path, typed diagnostics, and the executable transcript.
+  redisplay, purpose-fixed code-only reprovision, generic-exchange rejection, forged ceremony denial,
+  destructive decline preservation, one-use/replay/concurrent ceremony authorization, interrupted reprovision
+  redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted traceback/rendering, no
+  URL/argv path, typed diagnostics, and the executable transcript.
 
 These tests are spike evidence, not canonical `VFY-AUTH-001`. That verification remains `PLANNED` until
 governance acceptance and independent review authorize an exact criterion/evidence mapping.

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from threading import RLock
 from typing import Protocol, runtime_checkable
 
 from mycogni.application.ports import Clock
@@ -34,6 +37,28 @@ from mycogni.domain.auth import (
 )
 
 TOKEN_BYTES = 32
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ReprovisionCeremonyAuthorization:
+    """Opaque one-use proof that the owned operator boundary confirmed destruction.
+
+    Callers can construct values of this type, but only this service can register
+    their random proof.  The authorization is bound to one bootstrap and is
+    consumed before the destructive store decision is attempted.
+    """
+
+    credential: OpaqueCredential
+    bootstrap_handle: OpaqueId
+
+    def __post_init__(self) -> None:
+        if type(self.credential) is not OpaqueCredential:
+            raise TypeError("ceremony authorization requires an opaque credential")
+        if type(self.bootstrap_handle) is not OpaqueId:
+            raise TypeError("ceremony authorization requires an opaque bootstrap handle")
+
+    def __repr__(self) -> str:
+        return "ReprovisionCeremonyAuthorization([REDACTED])"
 
 
 @runtime_checkable
@@ -184,6 +209,8 @@ class AuthService:
         self._token_source = token_source
         self._store = store
         self._policy = policy if policy is not None else AuthPolicy()
+        self._reprovision_ceremony_lock = RLock()
+        self._reprovision_ceremonies: dict[OpaqueId, tuple[SecretDigest, OpaqueId, bool]] = {}
 
     def _now(self) -> datetime:
         now = self._clock.now()
@@ -278,22 +305,70 @@ class AuthService:
         self._store.cancel_bootstrap(handle, self._now())
 
     def exchange_bootstrap(self, bootstrap: OpaqueCredential) -> AuthOutcome[BootstrapExchange]:
-        """Consume bootstrap once and atomically issue opaque session/recovery state."""
+        """Exchange only non-destructive initial/authenticated bootstraps."""
         return self._exchange_bootstrap(
             bootstrap,
-            frozenset({None, RootPurpose.INITIAL_BOOTSTRAP, RootPurpose.REPROVISION}),
+            frozenset({None, RootPurpose.INITIAL_BOOTSTRAP}),
         )
 
-    def exchange_operator_bootstrap(
-        self, bootstrap: OpaqueCredential, *, reprovision: bool
+    def _authorize_confirmed_reprovision(
+        self, bootstrap: OpaqueCredential
+    ) -> ReprovisionCeremonyAuthorization:
+        """Mint authority for the owned TTY boundary after it confirms the warning.
+
+        This is deliberately not a public application operation.  The operator
+        entrypoint owns the call position: it invokes this only after interactive
+        confirmation, never from a caller-provided Boolean.
+        """
+        credential, digest = self._credential()
+        authorization = ReprovisionCeremonyAuthorization(
+            credential=credential,
+            bootstrap_handle=bootstrap.handle,
+        )
+        with self._reprovision_ceremony_lock:
+            self._reprovision_ceremonies[credential.handle] = (
+                digest,
+                bootstrap.handle,
+                False,
+            )
+        return authorization
+
+    def exchange_confirmed_reprovision(
+        self,
+        bootstrap: OpaqueCredential,
+        authorization: object,
     ) -> AuthOutcome[BootstrapExchange]:
-        """Consume only the route selected by the reviewed operator ceremony."""
-        allowed: frozenset[RootPurpose | None]
-        if reprovision:
-            allowed = frozenset({RootPurpose.REPROVISION})
-        else:
-            allowed = frozenset({None, RootPurpose.INITIAL_BOOTSTRAP})
-        return self._exchange_bootstrap(bootstrap, allowed)
+        """Consume reprovision only with a registered, bound, one-use ceremony proof."""
+        if type(bootstrap) is not OpaqueCredential:
+            return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
+        if type(authorization) is not ReprovisionCeremonyAuthorization:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        with self._reprovision_ceremony_lock:
+            registered = self._reprovision_ceremonies.get(authorization.credential.handle)
+            if registered is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            expected_digest, expected_bootstrap, used = registered
+            if used:
+                return AuthOutcome.denied(AuthDenial.REPLAYED)
+            if (
+                expected_bootstrap != bootstrap.handle
+                or authorization.bootstrap_handle != bootstrap.handle
+                or not self._matches_digest(expected_digest, authorization.credential)
+            ):
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            # Burn before entering the destructive store decision so exception,
+            # denial, replay, and concurrent calls cannot reuse confirmation.
+            self._reprovision_ceremonies[authorization.credential.handle] = (
+                expected_digest,
+                expected_bootstrap,
+                True,
+            )
+        return self._exchange_bootstrap(bootstrap, frozenset({RootPurpose.REPROVISION}))
+
+    @staticmethod
+    def _matches_digest(expected: SecretDigest, credential: OpaqueCredential) -> bool:
+        presented = hashlib.sha256(credential.secret.reveal()).digest()
+        return hmac.compare_digest(expected.value, presented)
 
     def _exchange_bootstrap(
         self,

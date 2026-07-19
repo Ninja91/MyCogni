@@ -146,7 +146,7 @@ def exchange_bootstrap_code(
         credential = OpaqueCredential.parse_operator_code(submitted_code)
     except ValueError:
         return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
-    return service.exchange_operator_bootstrap(credential, reprovision=False)
+    return service.exchange_bootstrap(credential)
 
 
 def begin_reprovision_on_tty(
@@ -275,7 +275,11 @@ def _exchange_bootstrap_on_tty(
             AuthDenial.MALFORMED_CREDENTIAL
         )
     else:
-        outcome = service.exchange_operator_bootstrap(credential, reprovision=reprovision)
+        if reprovision:
+            authorization = service._authorize_confirmed_reprovision(credential)
+            outcome = service.exchange_confirmed_reprovision(credential, authorization)
+        else:
+            outcome = service.exchange_bootstrap(credential)
     if outcome.denial is not None:
         prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
         _deny(operator_tty, prefix, outcome.denial)

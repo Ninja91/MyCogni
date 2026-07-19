@@ -21,7 +21,7 @@ from mycogni.adapters.auth import (
     SyntheticCrash,
     VolatileAuthDecisionStore,
 )
-from mycogni.application.auth import AuthService
+from mycogni.application.auth import AuthService, ReprovisionCeremonyAuthorization
 from mycogni.application.diagnostics import (
     DiagnosticComponent,
     DiagnosticEvent,
@@ -324,6 +324,63 @@ def test_bootstrap_is_short_lived_attempt_bounded_and_concurrently_one_use() -> 
         thread.join()
     assert sum(item.value is not None for item in outcomes) == 1
     assert [item.denial for item in outcomes if item.denial] == [AuthDenial.REPLAYED]
+
+
+def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> None:
+    service, _clock, source, _store, setup = _service()
+    _actor, _profile, roots, initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+
+    # No generic or caller-asserted path may reach the destructive decision.
+    assert service.exchange_bootstrap(bootstrap).denial is AuthDenial.WRONG_PURPOSE
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, None).denial is AuthDenial.INVALID_PROOF
+    )
+    assert not hasattr(service, "exchange_operator_bootstrap")
+    forged = ReprovisionCeremonyAuthorization(
+        credential=OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32)),
+        bootstrap_handle=bootstrap.handle,
+    )
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, forged).denial is AuthDenial.INVALID_PROOF
+    )
+    assert service.authenticate_session(initial.session).value == initial.session.handle
+
+    # Declining the owned operator ceremony issues no capability and preserves
+    # both the bootstrap and all current authority.
+    declined_tty = PseudoTty(confirmed=False)
+    assert (
+        exchange_reprovision_on_tty(
+            service,
+            submitted_code=bootstrap.operator_code(),
+            operator_tty=declined_tty,
+        ).denial
+        is AuthDenial.OPERATOR_DECLINED
+    )
+    assert service.authenticate_session(initial.session).value == initial.session.handle
+
+    authorization = service._authorize_confirmed_reprovision(bootstrap)
+    barrier = threading.Barrier(3)
+    outcomes: list[AuthOutcome[BootstrapExchange]] = []
+
+    def consume() -> None:
+        barrier.wait()
+        outcomes.append(service.exchange_confirmed_reprovision(bootstrap, authorization))
+
+    threads = [threading.Thread(target=consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert sum(item.value is not None for item in outcomes) == 1
+    assert [item.denial for item in outcomes if item.denial] == [AuthDenial.REPLAYED]
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, authorization).denial
+        is AuthDenial.REPLAYED
+    )
+    assert service.authenticate_session(initial.session).denial is AuthDenial.STALE_EPOCH
 
 
 def test_post_consume_crashes_burn_bootstrap_step_up_and_recovery() -> None:
@@ -830,7 +887,8 @@ def test_store_copies_mutable_records_and_retains_only_structural_digests() -> N
     exchange = _allowed(service.exchange_bootstrap(bootstrap))
     _grant(service, actor, profile, exchange.session, AuthPurpose.PROFILE_DELETION)
     reprovision = _allowed(service.begin_bootstrap(roots.reprovision))
-    reprovisioned = _allowed(service.exchange_bootstrap(reprovision))
+    authorization = service._authorize_confirmed_reprovision(reprovision)
+    reprovisioned = _allowed(service.exchange_confirmed_reprovision(reprovision, authorization))
     assert reprovisioned.replacement_reprovision is not None
     digest = SecretDigest(hashlib.sha256(reprovisioned.session.secret.reveal()).digest())
     returned = _allowed(store.authenticate_session(reprovisioned.session, digest, clock.now()))
