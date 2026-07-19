@@ -5,7 +5,8 @@ second target `b74afdb` was rejected for an incomplete AES-key nonce domain; thi
 `4f6f0ca` was rejected for an incomplete authenticated-sentinel nonce ledger; fourth target
 `211c9ee` was rejected for late authenticated-record accounting and provider/source validation
 gaps; fifth target `a0ae32a` was rejected for a record-to-activation race and concurrent handle
-state. The current remediation candidate passes its expanded focused local suite, but a clean new exact-target
+state; sixth target `89baaa3` was rejected for missing in-flight publication checks. The current
+remediation candidate passes its expanded focused local suite, but a clean new exact-target
 review is still pending; no rejected or unreviewed result is acceptance.
 macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
 backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
@@ -76,7 +77,9 @@ a different authenticated record at the same nonce latches reuse. Authentication
 immediately before fixed-value comparison, source post-validation and subsequent
 live-provider/configuration rejection; final provider activation is separate and atomically
 rechecks the exact commitment plus the domain latch. A later latch denies both wrap and unwrap on
-an already-active provider. Durable accounting across
+an already-active provider. Wrap and unwrap recheck the latch after AEAD/source post-validation
+under the domain lock before publishing a record or handle; outstanding handles consult the same
+recovery state. Durable accounting across
 processes/restarts is deferred to KEY-001 and is a production blocker, not an implied property of
 the spike.
 
@@ -142,7 +145,7 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The current remediation candidate's 104-test focused suite covers strict construction and rendering, a
+The current remediation candidate's 106-test focused suite covers strict construction and rendering, a
 hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
@@ -153,13 +156,14 @@ rejected-concurrent-provider nonce reservation, reserved sentinel/profile nonces
 same-material provider activation with barrier-controlled contention, concurrent wrap-cap
 enforcement, record-to-activation collision races, later-latch unwrap denial, combined
 bookkeeping/source-failure precedence, raw-fork provider/handle use with inherited held locks,
+in-flight wrap/unwrap latch refusal and outstanding-handle invalidation,
 corrupted/wrong-purpose/identity-substituted sentinels, injected backend failure mapping,
 invalid backend result shapes, authenticated unexpected-plaintext and post-use-failure accounting,
 post-use source-latch precedence, synchronized concurrent handle entry/use/close, 32 randomized round trips,
 symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive overlap,
 foreign-owned intermediate ancestors, configured-directory rename/replacement and typed post-use
 syscall failures. Test values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the
-focused launcher reports `104 passed`;
+focused launcher reports `106 passed`;
 Ruff and strict source mypy also pass. New exact review and both locked CI runtimes remain required.
 
 Reproduce the focused lane from the repository root using a private temporary directory whose

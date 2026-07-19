@@ -5,14 +5,16 @@ Second target: `b74afdb67a435d5a4cc37bd78b30917e5e72a944`.
 Third target: `4f6f0ca5f5b445660e85e0fcf24bc36a38e1a4cc`.
 Fourth target: `211c9ee53c0300af2ee8ee970351dca82fb6a3fc`.
 Fifth target: `a0ae32ab7e6076fa8e9683ea06f8869f04fca8c8`.
+Sixth target: `89baaa31e0540196a669509ed77e193e78afdf64`.
 
 Current verdict: **REJECT**. The initial target had one P0 plus overlapping P1/P2 findings. The
 second target closed those findings but introduced an incomplete AES-key nonce/accounting domain.
 The third target closed that split-domain issue but retained an incomplete authenticated-sentinel
 nonce ledger. The fourth target completed record commitments but accounted authenticated records
 too late and retained source-validation/evidence gaps. The fifth target closed those paths but
-retained an activation race and unsynchronized handle state. All five were rejected and none may
-be described as code-level accepted. The next
+retained an activation race and unsynchronized handle state. The sixth target closed those
+findings but lacked an in-flight publication check. All six were rejected and none may be
+described as code-level accepted. The next
 candidate remains unreviewed until a new exact commit and three clean verdicts are recorded.
 
 This is an AI-assisted source review, not independent human cryptographic certification. Three
@@ -250,15 +252,35 @@ both wrap and unwrap for an already-active provider.
   receive a key view despite the one-callback contract. Synchronize enter/use/close, hold coherent
   state through the callback, and check PID before inherited locks.
 
-## Sixth candidate before new exact review
+## Sixth exact target `89baaa3` — REJECT
 
-The next remediation makes activation recheck the exact record and domain latch atomically,
+The sixth target makes activation recheck the exact record and domain latch atomically,
 invalidates all active-provider key use after a later latch, preserves simultaneous post-use
 source failure, and implements a synchronized one-callback handle with fork-before-lock behavior.
 Barrier-controlled tests cover record-to-activation collision, later-latch unwrap denial,
 combined bookkeeping/source failure, concurrent handle entry/use/close and a forked child facing
 an inherited held handle lock.
 
-The focused key lane reports `104 passed`; the combined key plus site-guard lane reports `119
+The focused key lane reported `104 passed`; the combined key plus site-guard lane reported `119
+passed`. Code/specification and product/OSS lanes returned **ACCEPT** with P0 0, P1 0, P2 0. The
+backend/infra lane returned **REJECT** with P0 0, P1 1, P2 0.
+
+### Sixth-target P1
+
+Wrap and unwrap checked the domain latch before AEAD but not after it. A conflicting authenticated
+record could latch the domain while encrypt/decrypt was paused, yet the in-flight call could still
+publish ciphertext or a plaintext handle. Required remediation: after AEAD and source
+post-validation, recheck the latch under the domain lock immediately before publication and define
+that check as the operation linearization point. Add barrier-controlled in-flight wrap and unwrap
+tests; invalidate an outstanding handle if its provider/domain later enters recovery.
+
+## Seventh candidate before new exact review
+
+The next remediation performs the final domain-locked check after full source post-validation and
+constructs the wrapped record or handle within that critical section. Outstanding handles consult
+provider/domain recovery state before activation. Barrier-controlled tests latch the domain while
+encrypt/decrypt is paused and prove no record or handle is returned.
+
+The focused key lane reports `106 passed`; the combined key plus site-guard lane reports `121
 passed`. The candidate remains unreviewed until committed and inspected independently by three
 new reviewers.

@@ -973,6 +973,7 @@ def test_later_domain_nonce_latch_invalidates_active_provider_unwrap(
 
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"e" * 12)
     wrapped = provider.create_profile_key(BINDING)
+    issued_handle = provider.unwrap_profile_key(wrapped, BINDING)
 
     other_key_directory = key_path.parent.parent / "latched-other-keys"
     other_key_directory.mkdir(mode=0o700)
@@ -1002,6 +1003,157 @@ def test_later_domain_nonce_latch_invalidates_active_provider_unwrap(
     with pytest.raises(SecretProviderError) as caught:
         provider.unwrap_profile_key(wrapped, BINDING)
     assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
+    with pytest.raises(RuntimeError, match="not available"):
+        issued_handle.__enter__()
+
+
+def test_inflight_wrap_is_not_published_after_domain_latch(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    key_path, managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    shared_nonce = b"g" * 12
+    provider = _provider(
+        provider_paths,
+        readiness_sentinel=_sentinel(material, nonce=shared_nonce),
+    )
+    _ready(provider)
+
+    other_key_directory = key_path.parent.parent / "inflight-wrap-other-keys"
+    other_key_directory.mkdir(mode=0o700)
+    other_key_path = other_key_directory / "installation.kek"
+    _EXPECTED_KEY_MATERIAL[other_key_path] = material
+    _provision(other_key_path, material)
+    other_managed = managed_root.parent / "inflight-wrap-other-managed"
+    other_managed.mkdir(mode=0o700)
+    other_installation = _id("20000000-0000-4000-8000-000000000102")
+    other_sentinel_id = _id("20000000-0000-4000-8000-000000000104")
+    other = OwnerFileSecretProvider(
+        key_path=other_key_path,
+        active_kek=ACTIVE_KEK,
+        installation_id=other_installation,
+        catalog_id=CATALOG_ID,
+        sentinel_id=other_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            installation_id=other_installation,
+            sentinel_id=other_sentinel_id,
+            nonce=shared_nonce,
+        ),
+        managed_roots=(other_managed,),
+    )
+    encryption_started = threading.Event()
+    release_encryption = threading.Event()
+
+    class PausingCipher:
+        def __init__(self, key: object) -> None:
+            self._delegate = AESGCM(bytes(key))  # type: ignore[arg-type]
+
+        def encrypt(self, nonce: bytes, plaintext: object, aad: bytes) -> bytes:
+            encryption_started.set()
+            assert release_encryption.wait(timeout=2)
+            return self._delegate.encrypt(nonce, plaintext, aad)  # type: ignore[arg-type]
+
+        def decrypt(self, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+            return self._delegate.decrypt(nonce, ciphertext, aad)
+
+    monkeypatch.setattr(owner_file, "AESGCM", PausingCipher)
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"h" * 12)
+    outcomes: list[str] = []
+
+    def wrap() -> None:
+        try:
+            provider.create_profile_key(BINDING)
+            outcomes.append("returned")
+        except SecretProviderError as error:
+            outcomes.append(error.code.value)
+
+    wrap_thread = threading.Thread(target=wrap)
+    wrap_thread.start()
+    assert encryption_started.wait(timeout=2)
+    assert other.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+    release_encryption.set()
+    wrap_thread.join(timeout=2)
+
+    assert not wrap_thread.is_alive(), "in-flight wrap latch test deadlocked"
+    assert outcomes == [SecretFailureCode.RECOVERY_REQUIRED.value]
+
+
+def test_inflight_unwrap_is_not_published_after_domain_latch(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    key_path, managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    shared_nonce = b"i" * 12
+    provider = _provider(
+        provider_paths,
+        readiness_sentinel=_sentinel(material, nonce=shared_nonce),
+    )
+    _ready(provider)
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"j" * 12)
+    wrapped = provider.create_profile_key(BINDING)
+
+    other_key_directory = key_path.parent.parent / "inflight-unwrap-other-keys"
+    other_key_directory.mkdir(mode=0o700)
+    other_key_path = other_key_directory / "installation.kek"
+    _EXPECTED_KEY_MATERIAL[other_key_path] = material
+    _provision(other_key_path, material)
+    other_managed = managed_root.parent / "inflight-unwrap-other-managed"
+    other_managed.mkdir(mode=0o700)
+    other_installation = _id("20000000-0000-4000-8000-000000000112")
+    other_sentinel_id = _id("20000000-0000-4000-8000-000000000114")
+    other = OwnerFileSecretProvider(
+        key_path=other_key_path,
+        active_kek=ACTIVE_KEK,
+        installation_id=other_installation,
+        catalog_id=CATALOG_ID,
+        sentinel_id=other_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            installation_id=other_installation,
+            sentinel_id=other_sentinel_id,
+            nonce=shared_nonce,
+        ),
+        managed_roots=(other_managed,),
+    )
+    decryption_started = threading.Event()
+    release_decryption = threading.Event()
+
+    class PausingCipher:
+        def __init__(self, key: object) -> None:
+            self._delegate = AESGCM(bytes(key))  # type: ignore[arg-type]
+
+        def decrypt(self, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+            if ciphertext == wrapped.ciphertext:
+                decryption_started.set()
+                assert release_decryption.wait(timeout=2)
+            return self._delegate.decrypt(nonce, ciphertext, aad)
+
+    monkeypatch.setattr(owner_file, "AESGCM", PausingCipher)
+    outcomes: list[str] = []
+
+    def unwrap() -> None:
+        try:
+            provider.unwrap_profile_key(wrapped, BINDING)
+            outcomes.append("returned")
+        except SecretProviderError as error:
+            outcomes.append(error.code.value)
+
+    unwrap_thread = threading.Thread(target=unwrap)
+    unwrap_thread.start()
+    assert decryption_started.wait(timeout=2)
+    assert other.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+    release_decryption.set()
+    unwrap_thread.join(timeout=2)
+
+    assert not unwrap_thread.is_alive(), "in-flight unwrap latch test deadlocked"
+    assert outcomes == [SecretFailureCode.RECOVERY_REQUIRED.value]
 
 
 def test_nonce_collision_preserves_simultaneous_post_use_source_failure(

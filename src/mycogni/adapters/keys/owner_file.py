@@ -303,12 +303,15 @@ class OwnerFileSecretProvider:
                     _fail(SecretFailureCode.UNAVAILABLE)
                 finally:
                     profile_material[:] = b"\x00" * len(profile_material)
-        return WrappedProfileKey(
-            kek_ref=self._active_kek,
-            binding=binding,
-            nonce=nonce,
-            ciphertext=ciphertext,
-        )
+            state = self._require_ready_state()
+            with state.lock:
+                self._assert_domain_unlatched_locked(state)
+                return WrappedProfileKey(
+                    kek_ref=self._active_kek,
+                    binding=binding,
+                    nonce=nonce,
+                    ciphertext=ciphertext,
+                )
 
     def unwrap_profile_key(
         self,
@@ -348,30 +351,51 @@ class OwnerFileSecretProvider:
                 _fail(SecretFailureCode.CATALOG_KEY_MISMATCH)
             except Exception:
                 _fail(SecretFailureCode.UNAVAILABLE)
-        return ProfileDekHandle(
-            plaintext,
-            _issuer_token=self._handle_issuer,
-            _issuer_check=self._handle_is_current,
-            _pid=self._pid,
-        )
+            state = self._require_ready_state()
+            with state.lock:
+                self._assert_domain_unlatched_locked(state)
+                return ProfileDekHandle(
+                    plaintext,
+                    _issuer_token=self._handle_issuer,
+                    _issuer_check=self._handle_is_current,
+                    _pid=self._pid,
+                )
 
     def _assert_process(self) -> None:
         if os.getpid() != self._pid:
             _fail(SecretFailureCode.FORKED_PROCESS)
 
     def _handle_is_current(self, token: object, pid: int) -> bool:
-        return token is self._handle_issuer and pid == self._pid and os.getpid() == self._pid
+        if token is not self._handle_issuer or pid != self._pid or os.getpid() != self._pid:
+            return False
+        with self._state_lock:
+            if self._recovery_latched:
+                return False
+            state = self._wrap_state
+            if state is None:
+                return False
+            with state.lock:
+                return not state.nonce_reuse_latched
+
+    def _require_ready_state(self) -> _ProcessWrapState:
+        state = self._wrap_state
+        if state is None:
+            _fail(SecretFailureCode.READINESS_REQUIRED)
+        return state
+
+    def _assert_domain_unlatched_locked(self, state: _ProcessWrapState) -> None:
+        if state.nonce_reuse_latched:
+            self._latch_recovery(SourceStatus.READABLE)
+            _fail(SecretFailureCode.RECOVERY_REQUIRED)
 
     def _require_ready(self) -> _SourcePin:
         if self._recovery_latched:
             _fail(SecretFailureCode.RECOVERY_REQUIRED)
-        state = self._wrap_state
-        if self._source_pin is None or state is None:
+        state = self._require_ready_state()
+        if self._source_pin is None:
             _fail(SecretFailureCode.READINESS_REQUIRED)
         with state.lock:
-            if state.nonce_reuse_latched:
-                self._latch_recovery(SourceStatus.READABLE)
-                _fail(SecretFailureCode.RECOVERY_REQUIRED)
+            self._assert_domain_unlatched_locked(state)
         return self._source_pin
 
     def _record_authenticated_sentinel(self, snapshot: _SourcePin) -> None:

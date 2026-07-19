@@ -104,6 +104,10 @@ only after post-validation succeeds; activation atomically rechecks the record c
 domain latch. A later domain nonce-reuse latch invalidates both wrap and unwrap on an already-live
 provider. It never retries after an ambiguous
 cryptographic/provider failure.
+Wrap and unwrap recheck the domain latch under its lock after AEAD plus source post-validation and
+before publishing a wrapped record or plaintext handle. This is the operation linearization point;
+a latch completed during the in-flight operation prevents publication. Outstanding handles also
+consult provider/domain recovery state before activation.
 Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
 KEY-001/KEY-002 and remain prerequisites for production wrapping.
 
