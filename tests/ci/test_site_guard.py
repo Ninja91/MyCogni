@@ -62,9 +62,7 @@ def test_superseded_net_remediation_claim_fails_closed(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert any(
-        "stale project-status phrase" in error for error in validate_repository(root)
-    )
+    assert any("stale project-status phrase" in error for error in validate_repository(root))
 
 
 def test_incomplete_no_script_story_fails_closed(tmp_path: Path) -> None:
