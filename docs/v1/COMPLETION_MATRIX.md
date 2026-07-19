@@ -36,7 +36,7 @@ Documentation describing a future component is not implementation evidence for t
 | Root locked toolchain | PF-001 | `IN_PROGRESS` | `7602e59`, `50c57b9`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Trusted-core boundaries | PF-CORE | `IN_PROGRESS` | `8980735`, `50c57b9`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Connector protocol boundary | PF-BOUNDARY | `IN_PROGRESS` | `5c51d23`, `cef7b0b`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
-| Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`; pinned indexes, semantic hardening/shebang checks and build-attempt record | Docker engine must produce successful amd64/arm64 build and runtime-inspection logs before `COMPLETE` |
+| Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`, `docs/v1/PF-002-BUILD-EVIDENCE.md`; successful pinned amd64/arm64 OCI index `sha256:816ace6f26ac...`, native arm64 and emulated amd64 hardened runtime smokes on 2026-07-18 | build/runtime evidence is present; canonical `COMPLETE` still requires the externally rooted authenticated semantic-review attestation enforced by GOV-001 |
 | PR CI, frozen inputs and safety/claim guards | CI-001 | `IN_PROGRESS` | `73c097a`, `56f40e6`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Typed local diagnostics | TEL-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization before package completion |
 | Selected threat/test catalog | THREAT-CATALOG-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization; selected catalog remains non-exhaustive |
@@ -144,8 +144,8 @@ simulator and network-deny foundations:
    product/operator and backend/concurrency dispositions;
 2. finish the pure SPIKE-RUNNER mailbox/protocol slice and independently review its
    state, identity, replay, cleanup and secret-retention boundaries;
-3. restore a responsive Docker engine and capture PF-002 amd64/arm64 build and
-   runtime-inspection logs before making any OCI-isolation acceptance claim;
+3. obtain the externally rooted authenticated PF-002 semantic-review
+   attestation now that amd64/arm64 build and hardened runtime evidence exists;
 4. start SQLITE-DUR-001 and SPIKE-KEY after the active spike contracts stabilize;
 5. retain SPIKE-EGRESS and SPIKE-BROWSER behind the accepted NET boundary, and add
    connector SDK minimum/latest Pydantic coverage before any public SDK release.
