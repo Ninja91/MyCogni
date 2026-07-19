@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import io
 import secrets
 import threading
@@ -47,11 +48,14 @@ from mycogni.domain.auth import (
     BootstrapRecord,
     OpaqueCredential,
     RecoveryIssue,
+    RecoveryRecord,
     RootAuthorityBundle,
+    RootCapabilityIssue,
     RootCapabilityRecord,
     RootPurpose,
     SecretDigest,
     SessionIssue,
+    SessionRecord,
 )
 from mycogni.entrypoints.auth_spike import (
     begin_bootstrap_on_tty,
@@ -160,6 +164,7 @@ def _service(
         reprovision_operator_authority=setup.reprovision_operator_authority,
         policy=policy,
     )
+    setup.bind_auth_service(service)
     return (
         service,
         clock,
@@ -281,6 +286,12 @@ def test_installation_requires_exactly_three_unique_roots_before_any_store_mutat
         )
 
     valid = tuple(record(purpose) for purpose in RootPurpose)
+    operator_authority = RootCapabilityIssue(
+        OpaqueId.new(), SecretDigest(hashlib.sha256(b"operator").digest())
+    )
+    service_identity = RootCapabilityIssue(
+        OpaqueId.new(), SecretDigest(hashlib.sha256(b"service").digest())
+    )
     duplicate_handle = replace(valid[1], handle=valid[0].handle)
     duplicate_purpose = replace(valid[1], purpose=RootPurpose.INITIAL_BOOTSTRAP)
     invalid_sets = (
@@ -297,6 +308,8 @@ def test_installation_requires_exactly_three_unique_roots_before_any_store_mutat
                 actor_id=actor,
                 represented_profile_id=profile,
                 records=invalid,
+                operator_authority=operator_authority,
+                service_identity=service_identity,
                 now=NOW,
             )
         assert store.record_counts()["roots"] == 0
@@ -305,6 +318,8 @@ def test_installation_requires_exactly_three_unique_roots_before_any_store_mutat
             actor_id=actor,
             represented_profile_id=profile,
             records=valid,
+            operator_authority=operator_authority,
+            service_identity=service_identity,
             now=NOW,
         )
         assert store.record_counts()["roots"] == 3
@@ -366,6 +381,7 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
         is AuthDenial.INVALID_PROOF
     )
     assert service.authenticate_session(initial.session).value == initial.session.handle
+    assert service.reprovision_ceremony_counts()["total"] == 0
 
     # Declining the owned operator ceremony issues no capability and preserves
     # both the bootstrap and all current authority.
@@ -380,6 +396,7 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
         is AuthDenial.OPERATOR_DECLINED
     )
     assert service.authenticate_session(initial.session).value == initial.session.handle
+    assert service.reprovision_ceremony_counts()["total"] == 0
 
     authorization = _allowed(
         service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
@@ -405,6 +422,129 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
         is AuthDenial.REPLAYED
     )
     assert service.authenticate_session(initial.session).denial is AuthDenial.STALE_EPOCH
+
+
+def test_store_generic_exchange_has_no_reprovision_purpose_override() -> None:
+    service, clock, source, store, setup = _service()
+    actor, profile, roots, _initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+    parameters = inspect.signature(store.exchange_bootstrap).parameters
+    assert "allowed_root_purposes" not in parameters
+
+    session = OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32))
+    recovery = OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32))
+    replacement = OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32))
+    assert (
+        store.exchange_bootstrap(
+            bootstrap.handle,
+            SecretDigest(hashlib.sha256(bootstrap.secret.reveal()).digest()),
+            clock.now(),
+            SessionRecord(
+                handle=session.handle,
+                actor_id=actor,
+                represented_profile_id=profile,
+                digest=SecretDigest(hashlib.sha256(session.secret.reveal()).digest()),
+                epoch=1,
+                not_before_utc=clock.now(),
+                expires_at_utc=clock.now() + timedelta(minutes=5),
+            ),
+            RecoveryRecord(
+                handle=recovery.handle,
+                actor_id=actor,
+                represented_profile_id=profile,
+                digest=SecretDigest(hashlib.sha256(recovery.secret.reveal()).digest()),
+                epoch=1,
+                not_before_utc=clock.now(),
+                expires_at_utc=clock.now() + timedelta(days=30),
+                attempts_remaining=5,
+            ),
+            RootCapabilityIssue(
+                replacement.handle,
+                SecretDigest(hashlib.sha256(replacement.secret.reveal()).digest()),
+            ),
+        ).denial
+        is AuthDenial.WRONG_PURPOSE
+    )
+
+
+def test_foreign_service_operator_and_store_cannot_rebind_reprovision() -> None:
+    service, clock, source, store, setup = _service()
+    _actor, _profile, roots, _initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+
+    foreign_setup = TrustedLocalAuthSetup(clock=clock, token_source=source, store=store)
+    foreign = AuthService(
+        clock=clock,
+        token_source=source,
+        store=store,
+        reprovision_operator_authority=foreign_setup.reprovision_operator_authority,
+    )
+    foreign_setup.bind_auth_service(foreign)
+    assert (
+        foreign.authorize_reprovision_ceremony(
+            bootstrap, foreign_setup.reprovision_operator_authority
+        ).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    rebound = AuthService(
+        clock=clock,
+        token_source=source,
+        store=store,
+        reprovision_operator_authority=setup.reprovision_operator_authority,
+    )
+    assert (
+        rebound.authorize_reprovision_ceremony(
+            bootstrap, setup.reprovision_operator_authority
+        ).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    other_service, _other_clock, _other_source, _other_store, other_setup = _service()
+    assert (
+        other_service.authorize_reprovision_ceremony(
+            bootstrap, other_setup.reprovision_operator_authority
+        ).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+    _foreign_actor, _foreign_profile, foreign_roots, _foreign_initial = _exchange(
+        foreign, foreign_setup
+    )
+    foreign_bootstrap = _allowed(foreign.begin_reprovision(foreign_roots.reprovision.credential))
+    local_authorization = _allowed(
+        service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
+    )
+    cross_installation = ReprovisionCeremonyAuthorization(
+        credential=local_authorization.credential,
+        bootstrap_handle=foreign_bootstrap.handle,
+    )
+    assert (
+        foreign.exchange_confirmed_reprovision(foreign_bootstrap, cross_installation).denial
+        is AuthDenial.INVALID_PROOF
+    )
+
+
+def test_crash_after_store_proof_consumption_is_fail_closed() -> None:
+    service, _clock, _source, store, setup = _service()
+    _actor, _profile, roots, initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+    authorization = _allowed(
+        service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
+    )
+    store.arm_crash_once(CrashPoint.REPROVISION_PROOF)
+    with pytest.raises(SyntheticCrash):
+        service.exchange_confirmed_reprovision(bootstrap, authorization)
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, authorization).denial
+        is AuthDenial.REPLAYED
+    )
+    assert service.authenticate_session(initial.session).value == initial.session.handle
+
+    retry_authorization = _allowed(
+        service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
+    )
+    _allowed(service.exchange_confirmed_reprovision(bootstrap, retry_authorization))
 
 
 def test_reprovision_ceremony_capacity_expiry_counts_and_bounded_tombstones() -> None:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
-from dataclasses import replace
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from enum import StrEnum
 from threading import RLock
 
@@ -24,6 +25,7 @@ from mycogni.domain.auth import (
     OpaqueCredential,
     RecoveryIssue,
     RecoveryRecord,
+    ReprovisionCeremonyIssue,
     RootCapability,
     RootCapabilityBinding,
     RootCapabilityIssue,
@@ -43,10 +45,32 @@ class CrashPoint(StrEnum):
     BOOTSTRAP = "bootstrap"
     STEP_UP = "step_up"
     RECOVERY = "recovery"
+    REPROVISION_PROOF = "reprovision_proof"
 
 
 class SyntheticCrash(RuntimeError):
     """Non-secret fault injected after authority material becomes one-use."""
+
+
+@dataclass(frozen=True, slots=True)
+class _CompositionBinding:
+    operator_handle: OpaqueId
+    operator_digest: SecretDigest
+    service_handle: OpaqueId
+    service_digest: SecretDigest
+
+
+@dataclass(slots=True)
+class _ReprovisionCeremonyRecord:
+    handle: OpaqueId
+    digest: SecretDigest
+    bootstrap_handle: OpaqueId
+    installation_id: OpaqueId
+    service_handle: OpaqueId
+    expires_at_utc: datetime
+    replay_seconds: int
+    terminal_at_utc: datetime | None = None
+    terminal_denial: AuthDenial | None = None
 
 
 class OsTokenSource:
@@ -76,6 +100,8 @@ class VolatileAuthDecisionStore:
         self._recoveries: dict[OpaqueId, RecoveryRecord] = {}
         self._step_ups: dict[OpaqueId, StepUpRecord] = {}
         self._grant_provenance: dict[OpaqueId, GrantProvenanceRecord] = {}
+        self._composition_bindings: dict[OpaqueId, _CompositionBinding] = {}
+        self._reprovision_ceremonies: dict[OpaqueId, _ReprovisionCeremonyRecord] = {}
         self._crash_once: CrashPoint | None = None
 
     def arm_crash_once(self, point: CrashPoint) -> None:
@@ -130,6 +156,8 @@ class VolatileAuthDecisionStore:
         actor_id: OpaqueId,
         represented_profile_id: OpaqueId,
         records: tuple[RootCapabilityRecord, ...],
+        operator_authority: RootCapabilityIssue,
+        service_identity: RootCapabilityIssue,
         now: datetime,
     ) -> None:
         """Called only by trusted local composition before application startup."""
@@ -156,6 +184,18 @@ class VolatileAuthDecisionStore:
                 for record in records
             ):
                 raise ValueError("root capability bindings do not match trusted setup")
+            if (
+                type(operator_authority) is not RootCapabilityIssue
+                or type(service_identity) is not RootCapabilityIssue
+                or operator_authority.handle == service_identity.handle
+            ):
+                raise ValueError("trusted setup requires distinct composition authority identities")
+            if any(
+                binding.operator_handle == operator_authority.handle
+                or binding.service_handle == service_identity.handle
+                for binding in self._composition_bindings.values()
+            ):
+                raise ValueError("composition authority identity is already bound")
             self._installation_actors[installation_id] = actor_id
             self._actors[actor_id] = ActorRecord(
                 actor_id=actor_id,
@@ -164,6 +204,12 @@ class VolatileAuthDecisionStore:
                 last_observed_utc=now,
             )
             self._roots.update({record.handle: replace(record) for record in records})
+            self._composition_bindings[installation_id] = _CompositionBinding(
+                operator_handle=operator_authority.handle,
+                operator_digest=operator_authority.digest,
+                service_handle=service_identity.handle,
+                service_digest=service_identity.digest,
+            )
 
     def _validate_root_locked(
         self,
@@ -327,6 +373,127 @@ class VolatileAuthDecisionStore:
         record.consumed = True
         record.retired_at_utc = now
 
+    def _gc_reprovision_ceremonies_locked(self, now: datetime) -> int:
+        for record in self._reprovision_ceremonies.values():
+            if record.terminal_at_utc is None and now >= record.expires_at_utc:
+                record.terminal_at_utc = record.expires_at_utc
+                record.terminal_denial = AuthDenial.EXPIRED
+        doomed = [
+            handle
+            for handle, record in self._reprovision_ceremonies.items()
+            if record.terminal_at_utc is not None
+            and now >= record.terminal_at_utc + timedelta(seconds=record.replay_seconds)
+        ]
+        for handle in doomed:
+            del self._reprovision_ceremonies[handle]
+        return len(doomed)
+
+    def _trim_reprovision_tombstones_locked(
+        self, service_handle: OpaqueId, tombstone_capacity: int
+    ) -> None:
+        terminal = sorted(
+            (
+                (record.terminal_at_utc, handle)
+                for handle, record in self._reprovision_ceremonies.items()
+                if record.service_handle == service_handle and record.terminal_at_utc is not None
+            ),
+            key=lambda item: (item[0], str(item[1])),
+        )
+        overflow = len(terminal) - tombstone_capacity
+        for _terminal_at, handle in terminal[: max(0, overflow)]:
+            del self._reprovision_ceremonies[handle]
+
+    def create_reprovision_ceremony(
+        self,
+        service_identity: OpaqueCredential,
+        service_digest: SecretDigest,
+        operator_identity: OpaqueCredential,
+        operator_digest: SecretDigest,
+        bootstrap_handle: OpaqueId,
+        issue: ReprovisionCeremonyIssue,
+        now: datetime,
+        *,
+        active_capacity: int,
+        tombstone_capacity: int,
+        replay_seconds: int,
+    ) -> AuthOutcome[OpaqueId]:
+        """Atomically register proof only for this installation's exact composition."""
+        if (
+            type(service_identity) is not OpaqueCredential
+            or type(operator_identity) is not OpaqueCredential
+            or type(issue) is not ReprovisionCeremonyIssue
+        ):
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        if (
+            type(active_capacity) is not int
+            or active_capacity < 1
+            or type(tombstone_capacity) is not int
+            or tombstone_capacity < 1
+            or type(replay_seconds) is not int
+            or replay_seconds < 0
+        ):
+            raise ValueError("ceremony retention policy is invalid")
+        require_utc(now, "ceremony registration time")
+        with self._lock:
+            bootstrap = self._bootstraps.get(bootstrap_handle)
+            if bootstrap is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if bootstrap.root_purpose is not RootPurpose.REPROVISION:
+                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+            if bootstrap.root_capability_id is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            root = self._roots.get(bootstrap.root_capability_id)
+            if root is None:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            binding = self._composition_bindings.get(root.installation_id)
+            if binding is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if (
+                service_identity.handle != binding.service_handle
+                or not self._matches(service_digest, binding.service_digest)
+                or not self._matches(service_digest, self._digest_credential(service_identity))
+                or operator_identity.handle != binding.operator_handle
+                or not self._matches(operator_digest, binding.operator_digest)
+                or not self._matches(operator_digest, self._digest_credential(operator_identity))
+            ):
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            self._gc_reprovision_ceremonies_locked(now)
+            active = sum(
+                record.service_handle == binding.service_handle
+                and record.installation_id == root.installation_id
+                and record.terminal_at_utc is None
+                for record in self._reprovision_ceremonies.values()
+            )
+            if active >= active_capacity:
+                return AuthOutcome.denied(AuthDenial.CAPACITY_EXHAUSTED)
+            if issue.handle in self._reprovision_ceremonies:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            self._reprovision_ceremonies[issue.handle] = _ReprovisionCeremonyRecord(
+                handle=issue.handle,
+                digest=issue.digest,
+                bootstrap_handle=bootstrap_handle,
+                installation_id=root.installation_id,
+                service_handle=binding.service_handle,
+                expires_at_utc=issue.expires_at_utc,
+                replay_seconds=replay_seconds,
+            )
+            self._trim_reprovision_tombstones_locked(binding.service_handle, tombstone_capacity)
+            return AuthOutcome.allowed(issue.handle)
+
+    @staticmethod
+    def _digest_credential(credential: OpaqueCredential) -> SecretDigest:
+        return SecretDigest(hashlib.sha256(credential.secret.reveal()).digest())
+
+    def reprovision_ceremony_counts(self, service_handle: OpaqueId) -> dict[str, int]:
+        with self._lock:
+            records = [
+                record
+                for record in self._reprovision_ceremonies.values()
+                if record.service_handle == service_handle
+            ]
+            active = sum(record.terminal_at_utc is None for record in records)
+            return {"active": active, "tombstones": len(records) - active, "total": len(records)}
+
     def exchange_bootstrap(
         self,
         handle: OpaqueId,
@@ -335,12 +502,15 @@ class VolatileAuthDecisionStore:
         session: SessionRecord,
         recovery: RecoveryRecord,
         replacement_reprovision: RootCapabilityIssue,
-        allowed_root_purposes: frozenset[RootPurpose | None],
     ) -> AuthOutcome[BootstrapDecision]:
         with self._lock:
             record = self._bootstraps.get(handle)
             if record is None:
                 return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            # Generic exchange has no reprovision authority and must not even
+            # mutate its attempt/time state before rejecting the purpose.
+            if record.root_purpose is RootPurpose.REPROVISION:
+                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
             clock_denial = self._observe(record.actor_id, now)
             if clock_denial is not None:
                 return AuthOutcome.denied(clock_denial)
@@ -359,35 +529,14 @@ class VolatileAuthDecisionStore:
                 return AuthOutcome.denied(time_denial)
             if not self._matches(record.digest, presented_digest):
                 return AuthOutcome.denied(self._wrong_proof(record, now))
-            if record.root_purpose not in allowed_root_purposes:
-                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
             actor = self._actors[record.actor_id]
-            replacement_root_record: RootCapabilityRecord | None = None
             if record.root_capability_id is not None:
                 root = self._roots.get(record.root_capability_id)
                 if root is None or root.consumed or root.purpose is not record.root_purpose:
                     return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
                 if root.purpose is RootPurpose.INITIAL_BOOTSTRAP and actor.initialized:
                     return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
-                if root.purpose is RootPurpose.REPROVISION and not actor.initialized:
-                    return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
-                if (
-                    root.purpose is RootPurpose.REPROVISION
-                    and replacement_reprovision.handle in self._roots
-                ):
-                    return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
                 self._consume_root(root, now)
-                if root.purpose is RootPurpose.REPROVISION:
-                    actor.epoch += 1
-                    self._retire_actor_authority(actor.actor_id, now)
-                    replacement_root_record = RootCapabilityRecord(
-                        handle=replacement_reprovision.handle,
-                        installation_id=root.installation_id,
-                        actor_id=root.actor_id,
-                        represented_profile_id=root.represented_profile_id,
-                        purpose=RootPurpose.REPROVISION,
-                        digest=replacement_reprovision.digest,
-                    )
                 actor.initialized = True
             record.consumed = True
             record.retired_at_utc = now
@@ -406,22 +555,138 @@ class VolatileAuthDecisionStore:
             )
             self._sessions[issued_session.handle] = issued_session
             self._recoveries[issued_recovery.handle] = issued_recovery
-            replacement_binding = None
-            if replacement_root_record is not None:
-                self._roots[replacement_root_record.handle] = replacement_root_record
-                replacement_binding = RootCapabilityBinding(
-                    handle=replacement_root_record.handle,
-                    installation_id=replacement_root_record.installation_id,
-                    actor_id=replacement_root_record.actor_id,
-                    represented_profile_id=replacement_root_record.represented_profile_id,
-                    purpose=replacement_root_record.purpose,
-                )
             return AuthOutcome.allowed(
                 BootstrapDecision(
                     actor_id=issued_session.actor_id,
                     represented_profile_id=issued_session.represented_profile_id,
                     epoch=issued_session.epoch,
-                    replacement_reprovision=replacement_binding,
+                )
+            )
+
+    def exchange_reprovision_bootstrap(
+        self,
+        handle: OpaqueId,
+        presented_digest: SecretDigest,
+        service_identity: OpaqueCredential,
+        service_digest: SecretDigest,
+        ceremony: OpaqueCredential,
+        ceremony_digest: SecretDigest,
+        now: datetime,
+        session: SessionRecord,
+        recovery: RecoveryRecord,
+        replacement_reprovision: RootCapabilityIssue,
+        *,
+        tombstone_capacity: int,
+        replay_seconds: int,
+    ) -> AuthOutcome[BootstrapDecision]:
+        """Atomically consume store-owned ceremony proof before reprovision authority."""
+        if type(service_identity) is not OpaqueCredential or type(ceremony) is not OpaqueCredential:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        with self._lock:
+            proof = self._reprovision_ceremonies.get(ceremony.handle)
+            if proof is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            binding = self._composition_bindings.get(proof.installation_id)
+            if (
+                binding is None
+                or proof.service_handle != binding.service_handle
+                or proof.bootstrap_handle != handle
+                or service_identity.handle != binding.service_handle
+                or not self._matches(service_digest, binding.service_digest)
+                or not self._matches(service_digest, self._digest_credential(service_identity))
+                or not self._matches(proof.digest, ceremony_digest)
+                or not self._matches(ceremony_digest, self._digest_credential(ceremony))
+            ):
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            self._gc_reprovision_ceremonies_locked(now)
+            proof = self._reprovision_ceremonies.get(ceremony.handle)
+            if proof is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if proof.terminal_at_utc is not None:
+                return AuthOutcome.denied(proof.terminal_denial or AuthDenial.REPLAYED)
+            record = self._bootstraps.get(handle)
+            if record is None or record.root_capability_id is None:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            root = self._roots.get(record.root_capability_id)
+            if root is None or record.root_purpose is not RootPurpose.REPROVISION:
+                return AuthOutcome.denied(AuthDenial.WRONG_PURPOSE)
+            if root.installation_id != proof.installation_id:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if now >= proof.expires_at_utc:
+                proof.terminal_at_utc = now
+                proof.terminal_denial = AuthDenial.EXPIRED
+                self._trim_reprovision_tombstones_locked(binding.service_handle, tombstone_capacity)
+                return AuthOutcome.denied(AuthDenial.EXPIRED)
+            # The proof is authoritative store state and burns before any root
+            # transition. A crash here therefore fails closed.
+            proof.terminal_at_utc = now
+            proof.terminal_denial = AuthDenial.REPLAYED
+            proof.replay_seconds = replay_seconds
+            self._trim_reprovision_tombstones_locked(binding.service_handle, tombstone_capacity)
+            self._crash_if_armed(CrashPoint.REPROVISION_PROOF)
+
+            clock_denial = self._observe(record.actor_id, now)
+            if clock_denial is not None:
+                return AuthOutcome.denied(clock_denial)
+            if record.consumed:
+                return AuthOutcome.denied(AuthDenial.REPLAYED)
+            time_denial = self._time_denial(now, record.not_before_utc, record.expires_at_utc)
+            if time_denial is not None:
+                if time_denial is AuthDenial.EXPIRED:
+                    record.consumed = True
+                    record.retired_at_utc = now
+                return AuthOutcome.denied(time_denial)
+            if not self._matches(record.digest, presented_digest):
+                return AuthOutcome.denied(self._wrong_proof(record, now))
+            actor = self._actors[record.actor_id]
+            if root.consumed or root.purpose is not RootPurpose.REPROVISION:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            if not actor.initialized:
+                return AuthOutcome.denied(AuthDenial.STALE_EPOCH)
+            if replacement_reprovision.handle in self._roots:
+                return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+
+            self._consume_root(root, now)
+            actor.epoch += 1
+            self._retire_actor_authority(actor.actor_id, now)
+            replacement_root_record = RootCapabilityRecord(
+                handle=replacement_reprovision.handle,
+                installation_id=root.installation_id,
+                actor_id=root.actor_id,
+                represented_profile_id=root.represented_profile_id,
+                purpose=RootPurpose.REPROVISION,
+                digest=replacement_reprovision.digest,
+            )
+            record.consumed = True
+            record.retired_at_utc = now
+            self._crash_if_armed(CrashPoint.BOOTSTRAP)
+            issued_session = replace(
+                session,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                epoch=actor.epoch,
+            )
+            issued_recovery = replace(
+                recovery,
+                actor_id=actor.actor_id,
+                represented_profile_id=actor.represented_profile_id,
+                epoch=actor.epoch,
+            )
+            self._sessions[issued_session.handle] = issued_session
+            self._recoveries[issued_recovery.handle] = issued_recovery
+            self._roots[replacement_root_record.handle] = replacement_root_record
+            return AuthOutcome.allowed(
+                BootstrapDecision(
+                    actor_id=issued_session.actor_id,
+                    represented_profile_id=issued_session.represented_profile_id,
+                    epoch=issued_session.epoch,
+                    replacement_reprovision=RootCapabilityBinding(
+                        handle=replacement_root_record.handle,
+                        installation_id=replacement_root_record.installation_id,
+                        actor_id=replacement_root_record.actor_id,
+                        represented_profile_id=replacement_root_record.represented_profile_id,
+                        purpose=replacement_root_record.purpose,
+                    ),
                 )
             )
 
@@ -829,6 +1094,7 @@ class VolatileAuthDecisionStore:
             for evidence_id in expired_grants:
                 del self._grant_provenance[evidence_id]
             removed += len(expired_grants)
+            removed += self._gc_reprovision_ceremonies_locked(now)
             return removed
 
     def record_counts(self) -> dict[str, int]:
@@ -841,4 +1107,5 @@ class VolatileAuthDecisionStore:
                 "recoveries": len(self._recoveries),
                 "step_ups": len(self._step_ups),
                 "grant_provenance": len(self._grant_provenance),
+                "reprovision_ceremonies": len(self._reprovision_ceremonies),
             }

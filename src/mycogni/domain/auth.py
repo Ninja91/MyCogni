@@ -419,6 +419,20 @@ class BootstrapIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class ReprovisionCeremonyIssue:
+    """Unbound ceremony proof material registered only by the owning store."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+    expires_at_utc: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.handle) is not OpaqueId or type(self.digest) is not SecretDigest:
+            raise TypeError("ceremony issue requires an opaque handle and digest")
+        require_utc(self.expires_at_utc, "ceremony issue expiry")
+
+
+@dataclass(frozen=True, slots=True)
 class RootCapabilityBinding:
     """Non-secret canonical binding returned after replacement root registration."""
 

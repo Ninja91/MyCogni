@@ -56,15 +56,19 @@ canonical installation, actor, profile, and fixed `reprovision` purpose from han
 accepts no caller-supplied authority binding. The ordinary operator exchange rejects a reprovision bootstrap,
 so it cannot bypass the purpose-specific destructive confirmation. After confirmation, the owned operator
 boundary presents a separate high-entropy identity issued and retained by trusted local composition. The
-service retains only that identity's handle and digest; ordinary service callers and alternate adapters do not
-receive it. A valid boundary mints a random service-registered authorization bound to that exact bootstrap.
-The service burns the authorization before attempting the destructive store decision; missing/forged boundary
-identity, forged/cross-bootstrap authorization, replay, and concurrent uses fail closed. There is no public
-Boolean or confirmation-shaped port that asserts confirmation.
+trusted setup registers the exact operator identity and exact service-instance identity against one
+installation; the store retains only their handles and digests and refuses overwrite/rebinding. Ordinary
+service callers and alternate adapters do not receive the operator identity. A valid boundary asks the owning
+store to register a random authorization bound to that exact bootstrap, service, and installation. Only the
+store's dedicated reprovision operation can verify and burn that proof atomically before consuming the root.
+The generic store exchange has no caller-selected purpose set and rejects reprovision unconditionally.
+Missing/forged/foreign boundary identity, foreign service, cross-store/cross-installation authorization, replay,
+and concurrent uses fail closed. There is no public Boolean or confirmation-shaped port that asserts
+confirmation.
 
 Ceremony authorizations have a 60-second default TTL, a 16-active-record default capacity, a 64-tombstone hard
 cap, and a five-minute replay horizon. Saturation denies before registration. Expired and used records become
-non-secret tombstones; explicit service GC and authorization operations remove them after the replay horizon,
+non-secret store-owned tombstones; explicit service GC and store authorization operations remove them after the replay horizon,
 while oldest tombstones are evicted at the hard cap. Non-secret counts expose active/tombstone/total retention
 for operations and tests without exposing credentials.
 
@@ -214,9 +218,10 @@ Focused regressions cover:
 - confirmation refusal before offline consume, non-TTY refusal, interrupted bootstrap handoff/recovery
   redisplay, purpose-fixed code-only reprovision, generic-exchange rejection, forged ceremony denial,
   forged/missing operator-boundary denial, destructive decline preservation, one-use/replay/concurrent ceremony
-  authorization, expiry/saturation/counts/bounded tombstones/replay-horizon GC, interrupted reprovision
-  redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted traceback/rendering, no
-  URL/argv path, typed diagnostics, and the executable transcript.
+  authorization, store-generic purpose-set impossibility, foreign service/operator and cross-store/installation
+  denial, post-proof crash closure, expiry/saturation/counts/bounded tombstones/replay-horizon GC, interrupted
+  reprovision redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted
+  traceback/rendering, no URL/argv path, typed diagnostics, and the executable transcript.
 
 These tests are spike evidence, not canonical `VFY-AUTH-001`. That verification remains `PLANNED` until
 governance acceptance and independent review authorize an exact criterion/evidence mapping.

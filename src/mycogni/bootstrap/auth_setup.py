@@ -7,6 +7,7 @@ import hashlib
 from mycogni.adapters.auth import VolatileAuthDecisionStore
 from mycogni.application.auth import (
     TOKEN_BYTES,
+    AuthService,
     ReprovisionOperatorAuthority,
     TokenSource,
 )
@@ -17,6 +18,7 @@ from mycogni.domain.auth import (
     OpaqueCredential,
     RootAuthorityBundle,
     RootCapability,
+    RootCapabilityIssue,
     RootCapabilityRecord,
     RootPurpose,
     SecretDigest,
@@ -47,6 +49,15 @@ class TrustedLocalAuthSetup:
                 handle=OpaqueId.new(),
                 secret=Sensitive(material, category=AUTH_SECRET_CATEGORY),
             )
+        )
+        self._service_identity: OpaqueCredential | None = None
+
+    def bind_auth_service(self, service: AuthService) -> None:
+        """Bind exactly one service instance to this store and operator authority."""
+        if self._service_identity is not None:
+            raise ValueError("trusted setup is already bound to an auth service")
+        self._service_identity = service._composition_identity_for_setup(
+            self._store, self._reprovision_operator_authority
         )
 
     @property
@@ -95,6 +106,8 @@ class TrustedLocalAuthSetup:
         """Provision exactly once before any actor bootstrap."""
         now = self._clock.now()
         require_utc(now, "trusted setup time")
+        if self._service_identity is None:
+            raise ValueError("trusted setup must bind the exact auth service before provisioning")
         issued = [
             self._capability(
                 installation_id=installation_id,
@@ -109,6 +122,20 @@ class TrustedLocalAuthSetup:
             actor_id=actor_id,
             represented_profile_id=represented_profile_id,
             records=tuple(record for _capability, record in issued),
+            operator_authority=RootCapabilityIssue(
+                handle=self._reprovision_operator_authority.credential.handle,
+                digest=SecretDigest(
+                    hashlib.sha256(
+                        self._reprovision_operator_authority.credential.secret.reveal()
+                    ).digest()
+                ),
+            ),
+            service_identity=RootCapabilityIssue(
+                handle=self._service_identity.handle,
+                digest=SecretDigest(
+                    hashlib.sha256(self._service_identity.secret.reveal()).digest()
+                ),
+            ),
             now=now,
         )
         by_purpose = {capability.purpose: capability for capability, _record in issued}
