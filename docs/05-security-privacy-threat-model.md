@@ -45,6 +45,7 @@ Confidentiality, integrity, and availability all matter. A compromise can expose
 | Wrong-person removal | attribute explanation; high connector-specific threshold; no name-only automatic confirmation; ambiguity review | precision by connector; incident/rollback; user correction |
 | Stale or unauthorized submit | immutable plan; actor/profile/scope/epoch; final dispatch recheck; monotonic fence; kill switches | journal/fence audit; revoke grants; no retry after start |
 | Crash creates duplicate send | immutable intent, separate attempts, `dispatch_started` and `outcome_unknown` | receipt/portal/mail reconciliation; kill-at-every-edge tests |
+| SQLite duplicate writer, unsafe mount or dirty resume | one owning process/Engine/connection; shared application/migration kernel lock; `BEGIN IMMEDIATE`; storage eligibility; fsynced dirty marker | PRAGMA readback, `quick_check`, WAL checkpoint, typed readiness/pause, lock/WAL/SIGKILL/full-disk tests; host conformance remains required |
 | Restore replays old work | external actions paused; journal boundary; restore-time unknown marking and reconciliation | restore drill from pre-send backup; explicit resume step-up |
 | False proof | assertion/one-absence/corroborated/inconclusive ladder; independent timed policy | resurfacing; method-specific evidence; proof-comprehension test |
 | Event history rewritten | keyed/signed event chain; monotonic checkpoint outside primary DB | checkpoint mismatch alert; projection rebuild; disclose assurance limit |

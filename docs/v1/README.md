@@ -10,6 +10,7 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 | [Work packages](WORK_PACKAGES.md) | issue-sized backlog with dependencies, estimates, acceptance evidence, and ownership lane |
 | [Orchestration and review](ORCHESTRATION.md) | agent roles, three-worktree ceiling, integration protocol, and adversarial review loop |
 | [Completion matrix](COMPLETION_MATRIX.md) | living milestone/deliverable status with evidence and explicit blockers |
+| [SQLite durability evidence](SQLITE-DUR-001.md) | local-lite writer/storage/dirty-shutdown decision, executable evidence and residual host qualification |
 | [Implementation-planner synthesis](reviews/01-implementation-planner-synthesis.md) | independent product, backend, and platform planning findings and council disposition |
 | [Adversarial review disposition](reviews/02-adversarial-review.md) | independent product, security/platform, and backend/OSS findings plus applied corrections |
 

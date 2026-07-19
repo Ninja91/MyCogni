@@ -15,5 +15,6 @@ ADRs capture decisions that constrain implementation or materially affect privac
 | [0009](0009-external-side-effect-journal.md) | Accepted for initial build | immutable intent, fenced dispatch, and unknown outcomes |
 | [0010](0010-control-plane-authentication.md) | Accepted for initial build | authenticated local/cloud control planes and step-up |
 | [0011](0011-advisory-local-intelligence.md) | Accepted as a boundary; runtime deferred until post-v1 evidence | optional local models return untrusted suggestions only |
+| [0012](0012-sqlite-local-lite-durability.md) | Accepted for initial build | one SQLite owner, storage eligibility, dirty recovery and fail-closed readiness; host qualification pending |
 
 New ADRs use: context, decision, consequences, alternatives, security/privacy impact, and review trigger.
