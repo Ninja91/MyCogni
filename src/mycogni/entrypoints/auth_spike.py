@@ -10,7 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Protocol
 
-from mycogni.application.auth import AuthService
+from mycogni.application.auth import AuthService, ReprovisionOperatorAuthority
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     AuthDenial,
@@ -239,6 +239,7 @@ def exchange_reprovision_on_tty(
     *,
     submitted_code: str,
     operator_tty: OperatorTty,
+    operator_authority: ReprovisionOperatorAuthority,
 ) -> AuthOutcome[OperatorBootstrapResult]:
     """Consume only a reprovision bootstrap after explicit destructive confirmation."""
     return _exchange_bootstrap_on_tty(
@@ -246,6 +247,7 @@ def exchange_reprovision_on_tty(
         submitted_code=submitted_code,
         operator_tty=operator_tty,
         reprovision=True,
+        operator_authority=operator_authority,
     )
 
 
@@ -255,6 +257,7 @@ def _exchange_bootstrap_on_tty(
     submitted_code: str,
     operator_tty: OperatorTty,
     reprovision: bool,
+    operator_authority: ReprovisionOperatorAuthority | None = None,
 ) -> AuthOutcome[OperatorBootstrapResult]:
     if not operator_tty.isatty():
         prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
@@ -276,8 +279,12 @@ def _exchange_bootstrap_on_tty(
         )
     else:
         if reprovision:
-            authorization = service._authorize_confirmed_reprovision(credential)
-            outcome = service.exchange_confirmed_reprovision(credential, authorization)
+            authorized = service.authorize_reprovision_ceremony(credential, operator_authority)
+            if authorized.denial is not None:
+                outcome = AuthOutcome.denied(authorized.denial)
+            else:
+                assert authorized.value is not None
+                outcome = service.exchange_confirmed_reprovision(credential, authorized.value)
         else:
             outcome = service.exchange_bootstrap(credential)
     if outcome.denial is not None:

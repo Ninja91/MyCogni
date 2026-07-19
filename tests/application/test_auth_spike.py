@@ -21,7 +21,11 @@ from mycogni.adapters.auth import (
     SyntheticCrash,
     VolatileAuthDecisionStore,
 )
-from mycogni.application.auth import AuthService, ReprovisionCeremonyAuthorization
+from mycogni.application.auth import (
+    AuthService,
+    ReprovisionCeremonyAuthorization,
+    ReprovisionOperatorAuthority,
+)
 from mycogni.application.diagnostics import (
     DiagnosticComponent,
     DiagnosticEvent,
@@ -148,13 +152,20 @@ def _service(
     clock = MutableClock()
     source = DeterministicTokenSource()
     store = VolatileAuthDecisionStore()
-    service = AuthService(clock=clock, token_source=source, store=store, policy=policy)
+    setup = TrustedLocalAuthSetup(clock=clock, token_source=source, store=store)
+    service = AuthService(
+        clock=clock,
+        token_source=source,
+        store=store,
+        reprovision_operator_authority=setup.reprovision_operator_authority,
+        policy=policy,
+    )
     return (
         service,
         clock,
         source,
         store,
-        TrustedLocalAuthSetup(clock=clock, token_source=source, store=store),
+        setup,
     )
 
 
@@ -344,6 +355,16 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
     assert (
         service.exchange_confirmed_reprovision(bootstrap, forged).denial is AuthDenial.INVALID_PROOF
     )
+    assert (
+        service.authorize_reprovision_ceremony(bootstrap, None).denial is AuthDenial.INVALID_PROOF
+    )
+    forged_operator = ReprovisionOperatorAuthority(
+        OpaqueCredential.from_secret(OpaqueId.new(), source.generate(32))
+    )
+    assert (
+        service.authorize_reprovision_ceremony(bootstrap, forged_operator).denial
+        is AuthDenial.INVALID_PROOF
+    )
     assert service.authenticate_session(initial.session).value == initial.session.handle
 
     # Declining the owned operator ceremony issues no capability and preserves
@@ -354,12 +375,15 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
             service,
             submitted_code=bootstrap.operator_code(),
             operator_tty=declined_tty,
+            operator_authority=setup.reprovision_operator_authority,
         ).denial
         is AuthDenial.OPERATOR_DECLINED
     )
     assert service.authenticate_session(initial.session).value == initial.session.handle
 
-    authorization = service._authorize_confirmed_reprovision(bootstrap)
+    authorization = _allowed(
+        service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
+    )
     barrier = threading.Barrier(3)
     outcomes: list[AuthOutcome[BootstrapExchange]] = []
 
@@ -381,6 +405,76 @@ def test_reprovision_requires_bound_one_use_operator_ceremony_authority() -> Non
         is AuthDenial.REPLAYED
     )
     assert service.authenticate_session(initial.session).denial is AuthDenial.STALE_EPOCH
+
+
+def test_reprovision_ceremony_capacity_expiry_counts_and_bounded_tombstones() -> None:
+    policy = AuthPolicy(
+        reprovision_ceremony_ttl_seconds=1,
+        reprovision_ceremony_capacity=2,
+        reprovision_ceremony_tombstone_capacity=2,
+        reprovision_ceremony_replay_seconds=10,
+    )
+    service, clock, _source, _store, setup = _service(policy=policy)
+    _actor, _profile, roots, _initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+    operator = setup.reprovision_operator_authority
+
+    first = _allowed(service.authorize_reprovision_ceremony(bootstrap, operator))
+    _allowed(service.authorize_reprovision_ceremony(bootstrap, operator))
+    assert (
+        service.authorize_reprovision_ceremony(bootstrap, operator).denial
+        is AuthDenial.CAPACITY_EXHAUSTED
+    )
+    assert service.reprovision_ceremony_counts() == {
+        "active": 2,
+        "tombstones": 0,
+        "total": 2,
+    }
+
+    clock.advance(1)
+    service.garbage_collect(0)
+    assert service.reprovision_ceremony_counts() == {
+        "active": 0,
+        "tombstones": 2,
+        "total": 2,
+    }
+    assert service.exchange_confirmed_reprovision(bootstrap, first).denial is AuthDenial.EXPIRED
+
+    replacement = _allowed(service.authorize_reprovision_ceremony(bootstrap, operator))
+    _allowed(service.exchange_confirmed_reprovision(bootstrap, replacement))
+    counts = service.reprovision_ceremony_counts()
+    assert counts == {"active": 0, "tombstones": 2, "total": 2}
+    assert counts["total"] <= (
+        policy.reprovision_ceremony_capacity + policy.reprovision_ceremony_tombstone_capacity
+    )
+
+
+def test_reprovision_ceremony_replay_survives_only_its_finite_horizon() -> None:
+    policy = AuthPolicy(reprovision_ceremony_replay_seconds=2)
+    service, clock, _source, _store, setup = _service(policy=policy)
+    _actor, _profile, roots, _initial = _exchange(service, setup)
+    bootstrap = _allowed(service.begin_reprovision(roots.reprovision.credential))
+    authorization = _allowed(
+        service.authorize_reprovision_ceremony(bootstrap, setup.reprovision_operator_authority)
+    )
+    _allowed(service.exchange_confirmed_reprovision(bootstrap, authorization))
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, authorization).denial
+        is AuthDenial.REPLAYED
+    )
+    clock.advance(1)
+    service.garbage_collect(0)
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, authorization).denial
+        is AuthDenial.REPLAYED
+    )
+    clock.advance(1)
+    service.garbage_collect(0)
+    assert (
+        service.exchange_confirmed_reprovision(bootstrap, authorization).denial
+        is AuthDenial.INVALID_PROOF
+    )
+    assert service.reprovision_ceremony_counts()["total"] == 0
 
 
 def test_post_consume_crashes_burn_bootstrap_step_up_and_recovery() -> None:
@@ -727,7 +821,10 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
     declined = PseudoTty(confirmed=False)
     assert (
         exchange_reprovision_on_tty(
-            service, submitted_code=reprovision_code, operator_tty=declined
+            service,
+            submitted_code=reprovision_code,
+            operator_tty=declined,
+            operator_authority=setup.reprovision_operator_authority,
         ).denial
         is AuthDenial.OPERATOR_DECLINED
     )
@@ -742,6 +839,7 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
             service,
             submitted_code=reprovision_code,
             operator_tty=interrupted_handoff,
+            operator_authority=setup.reprovision_operator_authority,
         )
     )
     assert first_reprovision.displayed is False
@@ -784,6 +882,7 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
                 next_tty, "reprovision-bootstrap-code (one-use, short-lived)"
             ),
             operator_tty=next_handoff,
+            operator_authority=setup.reprovision_operator_authority,
         )
     ).exchange
     assert second_reprovision.epoch == 4
@@ -887,7 +986,9 @@ def test_store_copies_mutable_records_and_retains_only_structural_digests() -> N
     exchange = _allowed(service.exchange_bootstrap(bootstrap))
     _grant(service, actor, profile, exchange.session, AuthPurpose.PROFILE_DELETION)
     reprovision = _allowed(service.begin_bootstrap(roots.reprovision))
-    authorization = service._authorize_confirmed_reprovision(reprovision)
+    authorization = _allowed(
+        service.authorize_reprovision_ceremony(reprovision, setup.reprovision_operator_authority)
+    )
     reprovisioned = _allowed(service.exchange_confirmed_reprovision(reprovision, authorization))
     assert reprovisioned.replacement_reprovision is not None
     digest = SecretDigest(hashlib.sha256(reprovisioned.session.secret.reveal()).digest())
@@ -1166,6 +1267,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
             service,
             submitted_code=first_bootstrap_code,
             operator_tty=declined_tty,
+            operator_authority=setup.reprovision_operator_authority,
         )
         assert declined.denial is AuthDenial.OPERATOR_DECLINED
         tty.write_public(declined_tty.getvalue())
@@ -1175,6 +1277,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
                 service,
                 submitted_code=first_bootstrap_code,
                 operator_tty=first_handoff_tty,
+                operator_authority=setup.reprovision_operator_authority,
             )
         )
         assert first_reprovision.displayed
@@ -1196,6 +1299,7 @@ def test_executable_operator_review_harness_matches_retained_transcript() -> Non
                 service,
                 submitted_code=second_bootstrap_code,
                 operator_tty=second_handoff_tty,
+                operator_authority=setup.reprovision_operator_authority,
             )
         )
         assert second_reprovision.displayed

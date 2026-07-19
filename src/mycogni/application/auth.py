@@ -61,6 +61,29 @@ class ReprovisionCeremonyAuthorization:
         return "ReprovisionCeremonyAuthorization([REDACTED])"
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class ReprovisionOperatorAuthority:
+    """Composition-held identity for the sole owned destructive operator boundary."""
+
+    credential: OpaqueCredential
+
+    def __post_init__(self) -> None:
+        if type(self.credential) is not OpaqueCredential:
+            raise TypeError("operator authority requires an opaque credential")
+
+    def __repr__(self) -> str:
+        return "ReprovisionOperatorAuthority([REDACTED])"
+
+
+@dataclass(slots=True)
+class _ReprovisionCeremonyRecord:
+    digest: SecretDigest
+    bootstrap_handle: OpaqueId
+    expires_at_utc: datetime
+    terminal_at_utc: datetime | None = None
+    terminal_denial: AuthDenial | None = None
+
+
 @runtime_checkable
 class TokenSource(Protocol):
     """High-entropy opaque material source owned by application composition."""
@@ -203,14 +226,19 @@ class AuthService:
         clock: Clock,
         token_source: TokenSource,
         store: AuthDecisionStore,
+        reprovision_operator_authority: ReprovisionOperatorAuthority,
         policy: AuthPolicy | None = None,
     ) -> None:
         self._clock = clock
         self._token_source = token_source
         self._store = store
         self._policy = policy if policy is not None else AuthPolicy()
+        if type(reprovision_operator_authority) is not ReprovisionOperatorAuthority:
+            raise TypeError("auth service requires composition-held reprovision operator authority")
+        self._reprovision_operator_handle = reprovision_operator_authority.credential.handle
+        self._reprovision_operator_digest = self._digest(reprovision_operator_authority.credential)
         self._reprovision_ceremony_lock = RLock()
-        self._reprovision_ceremonies: dict[OpaqueId, tuple[SecretDigest, OpaqueId, bool]] = {}
+        self._reprovision_ceremonies: dict[OpaqueId, _ReprovisionCeremonyRecord] = {}
 
     def _now(self) -> datetime:
         now = self._clock.now()
@@ -311,27 +339,43 @@ class AuthService:
             frozenset({None, RootPurpose.INITIAL_BOOTSTRAP}),
         )
 
-    def _authorize_confirmed_reprovision(
-        self, bootstrap: OpaqueCredential
-    ) -> ReprovisionCeremonyAuthorization:
-        """Mint authority for the owned TTY boundary after it confirms the warning.
-
-        This is deliberately not a public application operation.  The operator
-        entrypoint owns the call position: it invokes this only after interactive
-        confirmation, never from a caller-provided Boolean.
-        """
+    def authorize_reprovision_ceremony(
+        self,
+        bootstrap: OpaqueCredential,
+        operator_authority: object,
+    ) -> AuthOutcome[ReprovisionCeremonyAuthorization]:
+        """Mint a finite permit only for the composition-owned operator boundary."""
+        if type(bootstrap) is not OpaqueCredential:
+            return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
+        if type(operator_authority) is not ReprovisionOperatorAuthority:
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        if (
+            operator_authority.credential.handle != self._reprovision_operator_handle
+            or not self._matches_digest(
+                self._reprovision_operator_digest, operator_authority.credential
+            )
+        ):
+            return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        now = self._now()
         credential, digest = self._credential()
         authorization = ReprovisionCeremonyAuthorization(
             credential=credential,
             bootstrap_handle=bootstrap.handle,
         )
         with self._reprovision_ceremony_lock:
-            self._reprovision_ceremonies[credential.handle] = (
-                digest,
-                bootstrap.handle,
-                False,
+            self._garbage_collect_reprovision_ceremonies_locked(now)
+            active = sum(
+                record.terminal_at_utc is None for record in self._reprovision_ceremonies.values()
             )
-        return authorization
+            if active >= self._policy.reprovision_ceremony_capacity:
+                return AuthOutcome.denied(AuthDenial.CAPACITY_EXHAUSTED)
+            self._reprovision_ceremonies[credential.handle] = _ReprovisionCeremonyRecord(
+                digest=digest,
+                bootstrap_handle=bootstrap.handle,
+                expires_at_utc=now
+                + timedelta(seconds=self._policy.reprovision_ceremony_ttl_seconds),
+            )
+        return AuthOutcome.allowed(authorization)
 
     def exchange_confirmed_reprovision(
         self,
@@ -343,27 +387,72 @@ class AuthService:
             return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
         if type(authorization) is not ReprovisionCeremonyAuthorization:
             return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+        now = self._now()
         with self._reprovision_ceremony_lock:
+            self._garbage_collect_reprovision_ceremonies_locked(now)
             registered = self._reprovision_ceremonies.get(authorization.credential.handle)
             if registered is None:
                 return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
-            expected_digest, expected_bootstrap, used = registered
-            if used:
-                return AuthOutcome.denied(AuthDenial.REPLAYED)
+            if registered.terminal_at_utc is not None:
+                return AuthOutcome.denied(registered.terminal_denial or AuthDenial.REPLAYED)
             if (
-                expected_bootstrap != bootstrap.handle
+                registered.bootstrap_handle != bootstrap.handle
                 or authorization.bootstrap_handle != bootstrap.handle
-                or not self._matches_digest(expected_digest, authorization.credential)
+                or not self._matches_digest(registered.digest, authorization.credential)
             ):
                 return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
+            if now >= registered.expires_at_utc:
+                registered.terminal_at_utc = now
+                registered.terminal_denial = AuthDenial.EXPIRED
+                self._trim_reprovision_tombstones_locked()
+                return AuthOutcome.denied(AuthDenial.EXPIRED)
             # Burn before entering the destructive store decision so exception,
             # denial, replay, and concurrent calls cannot reuse confirmation.
-            self._reprovision_ceremonies[authorization.credential.handle] = (
-                expected_digest,
-                expected_bootstrap,
-                True,
-            )
+            registered.terminal_at_utc = now
+            registered.terminal_denial = AuthDenial.REPLAYED
+            self._trim_reprovision_tombstones_locked()
         return self._exchange_bootstrap(bootstrap, frozenset({RootPurpose.REPROVISION}))
+
+    def _garbage_collect_reprovision_ceremonies_locked(self, now: datetime) -> int:
+        replay = timedelta(seconds=self._policy.reprovision_ceremony_replay_seconds)
+        for record in self._reprovision_ceremonies.values():
+            if record.terminal_at_utc is None and now >= record.expires_at_utc:
+                record.terminal_at_utc = record.expires_at_utc
+                record.terminal_denial = AuthDenial.EXPIRED
+        doomed = [
+            handle
+            for handle, record in self._reprovision_ceremonies.items()
+            if (record.terminal_at_utc is not None and now >= record.terminal_at_utc + replay)
+        ]
+        for handle in doomed:
+            del self._reprovision_ceremonies[handle]
+        self._trim_reprovision_tombstones_locked()
+        return len(doomed)
+
+    def _trim_reprovision_tombstones_locked(self) -> None:
+        terminal = sorted(
+            (
+                (record.terminal_at_utc, handle)
+                for handle, record in self._reprovision_ceremonies.items()
+                if record.terminal_at_utc is not None
+            ),
+            key=lambda item: (item[0], str(item[1])),
+        )
+        overflow = len(terminal) - self._policy.reprovision_ceremony_tombstone_capacity
+        for _terminal_at, handle in terminal[: max(0, overflow)]:
+            del self._reprovision_ceremonies[handle]
+
+    def reprovision_ceremony_counts(self) -> dict[str, int]:
+        """Expose finite non-secret retention counts for operations and tests."""
+        with self._reprovision_ceremony_lock:
+            active = sum(
+                record.terminal_at_utc is None for record in self._reprovision_ceremonies.values()
+            )
+            return {
+                "active": active,
+                "tombstones": len(self._reprovision_ceremonies) - active,
+                "total": len(self._reprovision_ceremonies),
+            }
 
     @staticmethod
     def _matches_digest(expected: SecretDigest, credential: OpaqueCredential) -> bool:
@@ -644,7 +733,11 @@ class AuthService:
         return self._store.validate_grant(grant, session, self._digest(session), self._now())
 
     def garbage_collect(self, retention_seconds: int) -> int:
-        return self._store.garbage_collect(self._now(), retention_seconds)
+        now = self._now()
+        removed = self._store.garbage_collect(now, retention_seconds)
+        with self._reprovision_ceremony_lock:
+            removed += self._garbage_collect_reprovision_ceremonies_locked(now)
+        return removed
 
     @property
     def policy(self) -> AuthPolicy:

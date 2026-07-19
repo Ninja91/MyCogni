@@ -5,7 +5,11 @@ from __future__ import annotations
 import hashlib
 
 from mycogni.adapters.auth import VolatileAuthDecisionStore
-from mycogni.application.auth import TOKEN_BYTES, TokenSource
+from mycogni.application.auth import (
+    TOKEN_BYTES,
+    ReprovisionOperatorAuthority,
+    TokenSource,
+)
 from mycogni.application.ports import Clock
 from mycogni.domain import OpaqueId, Sensitive
 from mycogni.domain.auth import (
@@ -33,6 +37,22 @@ class TrustedLocalAuthSetup:
         self._clock = clock
         self._token_source = token_source
         self._store = store
+        material = token_source.generate(TOKEN_BYTES)
+        if type(material) is not bytes or len(material) != TOKEN_BYTES:
+            raise RuntimeError(
+                "operator-boundary token source violated the opaque-material contract"
+            )
+        self._reprovision_operator_authority = ReprovisionOperatorAuthority(
+            OpaqueCredential(
+                handle=OpaqueId.new(),
+                secret=Sensitive(material, category=AUTH_SECRET_CATEGORY),
+            )
+        )
+
+    @property
+    def reprovision_operator_authority(self) -> ReprovisionOperatorAuthority:
+        """Return authority only to trusted composition wiring the owned TTY boundary."""
+        return self._reprovision_operator_authority
 
     def _capability(
         self,

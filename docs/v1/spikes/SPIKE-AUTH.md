@@ -55,9 +55,18 @@ copied opaque code alone: `begin_reprovision_on_tty` parses the no-echo input, a
 canonical installation, actor, profile, and fixed `reprovision` purpose from handle plus digest. That port
 accepts no caller-supplied authority binding. The ordinary operator exchange rejects a reprovision bootstrap,
 so it cannot bypass the purpose-specific destructive confirmation. After confirmation, the owned operator
-boundary mints a random service-registered authorization bound to that exact bootstrap. The service burns the
-authorization before attempting the destructive store decision; forged, cross-bootstrap, replayed, and
-concurrent uses fail closed. There is no public Boolean that asserts confirmation.
+boundary presents a separate high-entropy identity issued and retained by trusted local composition. The
+service retains only that identity's handle and digest; ordinary service callers and alternate adapters do not
+receive it. A valid boundary mints a random service-registered authorization bound to that exact bootstrap.
+The service burns the authorization before attempting the destructive store decision; missing/forged boundary
+identity, forged/cross-bootstrap authorization, replay, and concurrent uses fail closed. There is no public
+Boolean or confirmation-shaped port that asserts confirmation.
+
+Ceremony authorizations have a 60-second default TTL, a 16-active-record default capacity, a 64-tombstone hard
+cap, and a five-minute replay horizon. Saturation denies before registration. Expired and used records become
+non-secret tombstones; explicit service GC and authorization operations remove them after the replay horizon,
+while oldest tombstones are evicted at the hard cap. Non-secret counts expose active/tombstone/total retention
+for operations and tests without exposing credentials.
 
 Every secret contains at least 256 bits from the injected token source. The spike adapter uses
 `secrets.token_bytes`; state stores only fixed SHA-256 `SecretDigest` values and compares them with
@@ -141,6 +150,7 @@ be revoked, the current route will be consumed, the replacement must be saved, a
 loss before handoff can leave no route. Declining occurs before consumption and preserves the route. The
 ordinary bootstrap exchange rejects this route as `wrong_purpose`; only the reprovision ceremony can consume
 it. The confirmed path additionally requires the boundary's opaque, bootstrap-bound, one-use authorization.
+The composition-held boundary identity is distinct from both the reprovision root and the bootstrap code.
 
 Input uses the port's `read_secret_no_echo`; there is no command-line argument, URL, query string, or ordinary
 stdout/stderr secret path. The test proves only that the injected channel does not echo. A production adapter
@@ -203,7 +213,8 @@ Focused regressions cover:
   time comparison, and exact mutable-state validation;
 - confirmation refusal before offline consume, non-TTY refusal, interrupted bootstrap handoff/recovery
   redisplay, purpose-fixed code-only reprovision, generic-exchange rejection, forged ceremony denial,
-  destructive decline preservation, one-use/replay/concurrent ceremony authorization, interrupted reprovision
+  forged/missing operator-boundary denial, destructive decline preservation, one-use/replay/concurrent ceremony
+  authorization, expiry/saturation/counts/bounded tombstones/replay-horizon GC, interrupted reprovision
   redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted traceback/rendering, no
   URL/argv path, typed diagnostics, and the executable transcript.
 

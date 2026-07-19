@@ -92,6 +92,7 @@ class AuthDenial(StrEnum):
     MALFORMED_CREDENTIAL = "malformed_credential"
     OPERATOR_DECLINED = "operator_declined"
     OUTPUT_INTERRUPTED = "output_interrupted"
+    CAPACITY_EXHAUSTED = "capacity_exhausted"
 
 
 class RootPurpose(StrEnum):
@@ -176,6 +177,10 @@ class AuthPolicy:
     recovery_ttl_seconds: int = DEFAULT_RECOVERY_SECONDS
     activation_delay_seconds: int = 0
     max_attempts: int = 5
+    reprovision_ceremony_ttl_seconds: int = 60
+    reprovision_ceremony_capacity: int = 16
+    reprovision_ceremony_tombstone_capacity: int = 64
+    reprovision_ceremony_replay_seconds: int = 300
 
     def __post_init__(self) -> None:
         for field_name in ("bootstrap_ttl_seconds", "session_ttl_seconds", "step_up_ttl_seconds"):
@@ -194,6 +199,23 @@ class AuthPolicy:
             raise ValueError("activation_delay_seconds must be an integer from 0 through 60")
         if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= 10:
             raise ValueError("max_attempts must be an integer from 1 through 10")
+        if (
+            type(self.reprovision_ceremony_ttl_seconds) is not int
+            or not 1 <= self.reprovision_ceremony_ttl_seconds <= 300
+        ):
+            raise ValueError("reprovision ceremony TTL must be from 1 through 300 seconds")
+        for field_name in (
+            "reprovision_ceremony_capacity",
+            "reprovision_ceremony_tombstone_capacity",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or not 1 <= value <= 1_024:
+                raise ValueError(f"{field_name} must be an integer from 1 through 1024")
+        if (
+            type(self.reprovision_ceremony_replay_seconds) is not int
+            or not 0 <= self.reprovision_ceremony_replay_seconds <= 86_400
+        ):
+            raise ValueError("reprovision ceremony replay retention must be from 0 through 86400")
 
 
 @dataclass(frozen=True, slots=True)
