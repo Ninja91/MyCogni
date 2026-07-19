@@ -134,3 +134,37 @@ in a separate runtime `RUN` layer duplicated roughly 29 MB of compressed data
 per platform. The Dockerfile now applies ownership and read-only permissions in
 the build stage before `COPY`; the next reproduction must confirm the optimized
 layout without weakening runtime permissions.
+
+## Final merged-source reproduction — 2026-07-18 PT
+
+After the accepted auth source and final runner P2 remediation were integrated,
+the optimized Dockerfile was rebuilt with deterministic labels:
+
+```console
+docker buildx bake --allow=fs.write=/private/tmp --progress=plain \
+  --set core.args.VCS_REF=b2bfa157faee7bee982a99b6347d26278fb5d517 \
+  --set core.args.BUILD_CREATED=2026-07-19T02:00:00Z \
+  --set core.args.VERSION=0.0.0 \
+  --set core.output=type=oci,dest=/private/tmp/mycogni-core-pf002-final.oci.tar core
+```
+
+Final evidence:
+
+- OCI index:
+  `sha256:7cf68edcbdc007709968bf8d45b9d4df5415af18ed92bdc947a72ee015f6c9d0`;
+- linux/amd64 manifest:
+  `sha256:fc566e0931a865d576b0c47e68572f7cf2397ed783d9104cc6be31aae0be48de`;
+- linux/arm64 manifest:
+  `sha256:7077d2016860a1688910f008dc417b628ca23924d601dd8cae01af2c7716f032`;
+- local archive SHA-256:
+  `ec83c7cc78314ef4c2dc89a0f68b69852804b395b5abefc019ef8a6e06c7ee6b`;
+- loaded native configuration: `USER 65532:65532`, revision
+  `b2bfa157faee7bee982a99b6347d26278fb5d517`, created
+  `2026-07-19T02:00:00Z`, version `0.0.0`;
+- native loaded image size: `74,482,682` bytes, confirming that moving
+  hardening before `COPY` removed the duplicate runtime payload layer.
+
+Both final platform images again passed the non-root, read-only, drop-all,
+no-new-privileges, no-route Uvicorn/Alembic/import smoke. The archive remains a
+local ephemeral reproduction artifact; durable CI storage and authenticated
+release provenance remain separate release-workflow requirements.

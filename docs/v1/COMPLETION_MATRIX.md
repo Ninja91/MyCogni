@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-17. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness with code-level acceptance. Auth remediation and the pure runner/mailbox spike are active. It does not yet contain a remover runtime, accepted Docker image, formally promoted network-deny package or live connector.
+Snapshot date: 2026-07-18. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, and a network-deny harness with code-level acceptance. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package or live connector.
 
 ## Status vocabulary
 
@@ -22,7 +22,7 @@ Documentation describing a future component is not implementation evidence for t
 | Interactive architecture walkthrough | `IN_PROGRESS` | `86c7f17`, `reviews/11-site-adversarial-review.md`; source/offline ACCEPT with zero P0/P1/P2, browser-backed keyboard/responsive reproduction, nine dual-runtime mutation tests, successful Pages run `29456011480` and public HTTPS 200 | merge/redeploy current branch truth; screen-reader/full WCAG inspection and external content-link checks remain open |
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
-| Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; 133 focused/935 dual-runtime lane tests plus 240-test final review | merged dual-runtime reproduction after active auth remediation; optional Linux namespace reproduction and authenticated attestations remain open |
+| Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; final merged repository gates pass 1,412 tests plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
 | Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
@@ -36,7 +36,7 @@ Documentation describing a future component is not implementation evidence for t
 | Root locked toolchain | PF-001 | `IN_PROGRESS` | `7602e59`, `50c57b9`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Trusted-core boundaries | PF-CORE | `IN_PROGRESS` | `8980735`, `50c57b9`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Connector protocol boundary | PF-BOUNDARY | `IN_PROGRESS` | `5c51d23`, `cef7b0b`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
-| Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`, `docs/v1/PF-002-BUILD-EVIDENCE.md`; successful pinned amd64/arm64 OCI index `sha256:816ace6f26ac...`, native arm64 and emulated amd64 hardened runtime smokes on 2026-07-18 | build/runtime evidence is present; canonical `COMPLETE` still requires the externally rooted authenticated semantic-review attestation enforced by GOV-001 |
+| Multi-architecture build skeleton | PF-002 | `IN_PROGRESS` | `bbf3735`, `8990fc4`, `564b091`, `c11c7a7`, `docs/v1/PF-002-BUILD-EVIDENCE.md`, `reviews/14-pf002-adversarial-review.md`; accepted-source revision-labelled amd64/arm64 OCI index `sha256:7cf68edcbdc0...`, native arm64 and emulated amd64 hardened smokes on 2026-07-18; independent code-evidence ACCEPT with zero P0/P1 | build/runtime evidence is present; canonical `COMPLETE` still requires the externally rooted authenticated semantic-review attestation enforced by GOV-001 |
 | PR CI, frozen inputs and safety/claim guards | CI-001 | `IN_PROGRESS` | `73c097a`, `56f40e6`; executable evidence exists, but no structured commit-bound acceptance attestation is registered | add typed acceptance criteria and independent attestation before `COMPLETE` |
 | Typed local diagnostics | TEL-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization before package completion |
 | Selected threat/test catalog | THREAT-CATALOG-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisite and protected-review authorization; selected catalog remains non-exhaustive |
@@ -45,7 +45,7 @@ Documentation describing a future component is not implementation evidence for t
 | Shared contracts | CT-001 | `IN_PROGRESS` | executable criterion evidence exists; no authenticated acceptance attestation exists | complete prerequisites and protected-review authorization before package completion |
 | Synthetic corpus and deterministic simulator | SIM-001 | `IN_PROGRESS` | `fadaad6` plus remediation and `reviews/07-sim001-adversarial-review.md`; canonical reserved-domain corpus/scenario goldens, synchronized transactional clock/web/mail protocol and final code-level ACCEPT with zero P0/P1/P2 | authenticated independent attestation is still absent; NET-001 remains separate |
 | Network-deny proof | NET-001 | `IN_PROGRESS` | `362795e`, `docs/v1/NET-001-NETWORK-DENY.md`, `reviews/09-net001-adversarial-review.md`; final code-level ACCEPT, 133 focused/87 simulator/935 dual-runtime lane tests and 240-test review evidence | authenticated attestation and optional Linux namespace reproduction remain open; OS-level hostile-code containment remains a nonclaim |
-| Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `IN_PROGRESS` | auth through `0df7343` plus core-lane remediation `696c9b0`; runner `93700aa`; `docs/v1/spikes/SPIKE-AUTH.md`, `reviews/12-spike-auth-adversarial-review.md`, `reviews/13-spike-runner-adversarial-review.md`; focused dual-runtime suites pass but both reviews still REJECT | close the remaining auth confirmation-bypass P1; remediate runner protocol/time/role/budget/retention P1s; complete three-hat re-reviews; other spikes remain unstarted |
+| Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `IN_PROGRESS` | auth `030caed`; runner `b2bfa15`; `docs/v1/spikes/SPIKE-AUTH.md`, `docs/v1/spikes/SPIKE-RUNNER.md`, `reviews/12-spike-auth-adversarial-review.md`, `reviews/13-spike-runner-adversarial-review.md`; both implemented spikes have final three-hat code-level ACCEPT with zero P0/P1/P2 | authenticated package acceptance, durable production adapters and runner-specific OCI containment remain open; key/egress/browser/backup spikes remain unstarted |
 | SQLite/process durability contract | SQLITE-DUR-001 | `NOT_STARTED` | — | filesystem/process/write model must be frozen |
 | Synthetic-only authenticated shell | UX-001 | `NOT_STARTED` | — | depends on auth/contracts |
 | M0 milestone | all M0 | `IN_PROGRESS` | plan and first three foundation packages integrated | complete remaining M0 packages and independently reproduce evidence |
@@ -140,10 +140,10 @@ These do not block M0 foundation work, but they block their named milestones:
 Current next slice after the implemented toolchain, boundary, CI, database, shared-contract,
 simulator and network-deny foundations:
 
-1. finish SPIKE-AUTH remediation and obtain independent security/recovery,
-   product/operator and backend/concurrency dispositions;
-2. finish the pure SPIKE-RUNNER mailbox/protocol slice and independently review its
-   state, identity, replay, cleanup and secret-retention boundaries;
+1. preserve the final SPIKE-AUTH three-hat code acceptance while implementing its
+   durable storage, real-terminal and host-secret boundaries in successor packages;
+2. preserve the final SPIKE-RUNNER three-hat code acceptance while adding a
+   persistent adapter and runner-specific OCI containment evidence;
 3. obtain the externally rooted authenticated PF-002 semantic-review
    attestation now that amd64/arm64 build and hardened runtime evidence exists;
 4. start SQLITE-DUR-001 and SPIKE-KEY after the active spike contracts stabilize;
@@ -228,7 +228,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-KEY | SPIKE-KEY | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `IN_PROGRESS` | pure mailbox/protocol implementation active in the boundary lane | real OCI evidence remains gated by PF-002 |
+| Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `IN_PROGRESS` | `b2bfa15`, `reviews/13-spike-runner-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 843 focused tests on both runtimes | authenticated package acceptance, persistent adapter/restart evidence and runner-specific OCI containment remain open; PF-002 proves only trusted-core packaging |
 | Canonical inventory: TRUST-001 | TRUST-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPDATE-001 | UPDATE-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPG-001 | UPG-001 | `NOT_STARTED` | — | follow work-package dependency order |

@@ -35,7 +35,7 @@ The infra/edge/container-security reviewer independently established:
 | “Loopback only” was stricter than the independent observation because Docker Desktop also exposes inert tunnel devices. | Corrected the criterion to no route plus failed connection; interface count is not a security claim. |
 | The program-summary matrix still said two-architecture evidence was missing. | Corrected to distinguish present build/runtime evidence from missing authenticated acceptance. |
 | The temporary archive lacked a recorded checksum, durable artifact/log pointer and exact revision label. | Recorded the local tar SHA-256 and explicit limitations. Durable CI retention and exact VCS labeling remain release-workflow requirements; unsigned incomplete BuildKit provenance is only corroborating evidence. |
-| Runtime `chmod` duplicated the copied virtual-environment payload in another layer. | Moved ownership/read-only hardening into the build stage before runtime `COPY`; semantic validation now rejects reintroducing runtime hardening layers. A fresh final-source build must confirm the optimized layout. |
+| Runtime `chmod` duplicated the copied virtual-environment payload in another layer. | Moved ownership/read-only hardening into the build stage before runtime `COPY`; semantic validation rejects reintroducing runtime hardening layers. Accepted-source index `sha256:7cf68edcbdc0...` passed both platform smokes and reduced the native loaded image from about 103.9 MB to 74.5 MB. |
 
 PF-002 proves the trusted-core packaging skeleton. It does not prove the future
 browser/connector runner, physical x86 hardware, hostile-code containment,
