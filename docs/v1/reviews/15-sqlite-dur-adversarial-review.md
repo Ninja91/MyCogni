@@ -7,9 +7,10 @@ final-round remediation `02f91ce` with evidence `9ed5e28`
 Remediation commits: `1dfd256`; `7cb58fa`; `02f91ce`; latest remediation
 `f01b3c5`
 
-Current verdict: **edge final REJECT finding remediated; independent re-review
-pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role
-labels, not model identities, human qualifications, attestations or
+Current verdict: **code-level ACCEPT for exact target `f01b3c5` — zero P0, zero
+P1 and zero P2 in each of three independent role reviews**.
+`SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role labels,
+not model identities, human qualifications, authenticated attestations or
 certifications.
 
 ## Independent review passes against `0fff920`
@@ -181,10 +182,29 @@ The edge review recorded REJECT, not acceptance.
 The focused lane after this remediation is 80 passing tests with Ruff and mypy
 clean. This remains implementation evidence only.
 
+## Exact-target final re-reviews of `f01b3c5`
+
+Three independent role-separated passes reviewed the exact remediation commit
+and its deterministic regressions:
+
+| Review role | Verdict | Open code findings |
+| --- | --- | --- |
+| Backend and infrastructure | **ACCEPT** | P0: 0; P1: 0; P2: 0 |
+| Edge and operator lifecycle | **ACCEPT** | P0: 0; P1: 0; P2: 0 |
+| Architecture and reliability | **ACCEPT** | P0: 0; P1: 0; P2: 0 |
+
+The reviews accepted the implemented software boundary at `f01b3c5`: UoW work
+reservation spans cleanup-pause publication, shutdown cannot cross pending
+cleanup, sealed validation and release remain linearized, and the forced
+interleavings retain recovery evidence. These are code-level review verdicts,
+not authenticated external attestations or host durability certification.
+
 ## Residual risk and next decision
 
-This record does not convert any REJECT into ACCEPT. An independent pass must
-review commit `f01b3c5` and record its own commit-bound verdict.
+The exact-target code review is accepted, but package status remains
+`IN_PROGRESS`. Python 3.13 and the full merged test lane were unavailable on the
+critically full development host. GOV-001 authenticated acceptance is also
+absent.
 
 SQLAlchemy hooks prevent an inherited SQLAlchemy connection from executing in a
 forked child, but cannot revoke a raw SQLite/file descriptor inherited outside

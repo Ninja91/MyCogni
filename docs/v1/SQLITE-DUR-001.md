@@ -146,8 +146,12 @@ second pass. Final backend and architecture reviews still rejected
 validation/release ordering, concurrent runtime lifecycle and UoW retry
 ambiguity; `02f91ce` remediates those findings, but independent commit-bound
 re-review still rejected a cleanup-pause/shutdown race; `f01b3c5` remediates it,
-but another independent commit-bound re-review and the required host conformance
-evidence remain open. It does not promote `JOB-STATE-001`, `MIG-001`, `BAK-001`,
-any dispatch journal, or any live external action. See
+and three independent exact-target reviews now record code-level ACCEPT with
+zero P0/P1/P2. This does not complete the package: Python 3.13 and the full
+merged test lane were unavailable on the critically full host, authenticated
+attestation remains absent, and exact-host filesystem, Docker restart, bounded
+device-full and independently reviewed power-interruption evidence remain open.
+It does not promote `JOB-STATE-001`, `MIG-001`, `BAK-001`, any dispatch journal,
+or any live external action. See
 `docs/v1/reviews/15-sqlite-dur-adversarial-review.md` for chronology and
 disposition.
