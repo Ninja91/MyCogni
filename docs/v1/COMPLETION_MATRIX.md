@@ -223,7 +223,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: RESTORE-INTENT-001 | RESTORE-INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: RUN-001 | RUN-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SCHED-001 | SCHED-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `IN_PROGRESS` | volatile spike integrated; remediation and three-hat re-review active | no package acceptance or AUTH-001 promotion claim |
+| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `IN_PROGRESS` | `030caed`, `reviews/12-spike-auth-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 57 focused tests on both runtimes | authenticated package acceptance and durable/terminal/host-secret/multiprocess production boundaries remain open; no AUTH-001 promotion claim |
 | Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |

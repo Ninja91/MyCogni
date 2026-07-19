@@ -2,15 +2,18 @@
 
 Initial target: integration commit `1931d20`.
 First remediation target: integration commit `ff428c1`.
+Final accepted target: integration commit `030caed`.
 
-Current verdict: **REJECT** — zero P0; three open P1 findings plus bounded P2 work
-after the first remediation. SPIKE-AUTH stays `IN_PROGRESS` and does not promote
-`AUTH-001`, `AUTH-002`, `AUTH-003` or `VFY-AUTH-001`.
+Current verdict: **ACCEPT at source/code-review level** — zero open P0, P1 or P2
+findings after independent architecture/correctness, backend/concurrency and
+product/operator review of exact commit `030caed`. SPIKE-AUTH stays canonically
+`IN_PROGRESS` and does not promote `AUTH-001`, `AUTH-002`, `AUTH-003` or
+`VFY-AUTH-001` without authenticated acceptance and the durable production work.
 
 Multiple independent correctness/recovery review attempts were stopped by an automated
-content filter before returning a code verdict. That is neither acceptance nor a
-finding; this required hat must be rerun on the next remediation with an available
-independent lane.
+content filter before returning a code verdict. That was neither acceptance nor a
+finding. Later independent lanes completed all three required code-review hats; no
+Trusted Access enrollment was used or required.
 
 ## Initial findings
 
@@ -57,6 +60,49 @@ The backend reviewer independently reproduced the grant-provenance bypass on Pyt
 3.12 and 3.13. The product reviewer reproduced the missing initial handoff and repeated
 reprovision dead end. No P1 is dispositioned by the green implementation suite.
 
+## Subsequent remediation cycles and final disposition
+
+The next integrations (`0df7343`, `5cc13e6`, `87d6042`, `f9f24af`, `69b42fa`,
+`fcec6ce`) closed grant provenance, code-only reprovision, complete initial and
+replacement handoff, two consecutive copied-string expiry/reprovision cycles,
+malformed-grant denial, informed confirmation and bounded ceremony retention.
+Independent reviewers continued to reject intermediate revisions when they found
+that:
+
+- generic service and later direct store calls could still authorize destructive
+  reprovision without the operator ceremony;
+- a service-local proof issuer was callable by the same alternate adapter;
+- foreign service/composition rebinding over the same store bypassed the intended
+  authority owner; and
+- installation initialization could overwrite root handles or swap operator and
+  service identities across installations.
+
+Final commit `030caed` moves reprovision proof registration, validation, one-use
+consumption, TTL/capacity/tombstone retention and garbage collection into the exact
+atomic store boundary. Trusted setup binds one globally disjoint namespace across
+root, operator and service identities; generic exchange categorically rejects
+reprovision; confirmed exchange verifies exact store/service/installation/bootstrap
+provenance and burns the proof before root transition. Collision, decline, replay,
+concurrency and post-proof crash paths fail closed before unrelated authority mutates.
+
+The operator path retains an all-or-nothing initial session/recovery handoff, recovery
+from the copied displayed string, two copied-string-only reprovision rotations,
+explicit destructive consequences, decline preservation, interrupted-handoff
+redisplay guidance and truthful purpose/capacity messages without credential leakage.
+
+Final exact-commit verdicts:
+
+| Review hat | P0 | P1 | P2 | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| Architecture/correctness | 0 | 0 | 0 | ACCEPT |
+| Backend/concurrency/OSS | 0 | 0 | 0 | ACCEPT |
+| Product/operator | 0 | 0 | 0 | ACCEPT |
+
+The final focused suite passed 57 tests on both Python 3.12.12 and 3.13.11. Reviewers
+also ran direct store, cross-service, cross-installation, collision, replay,
+concurrency, crash and operator-output probes not represented by the original green
+suite.
+
 ## Positive evidence retained
 
 The review found the redacted credential rendering, fixed-size digest comparison,
@@ -65,7 +111,6 @@ non-production browser/durability/host exclusions to be sound directions. Focuse
 product-review checks passed on Python 3.12 and 3.13, but they did not make the four
 semantic failures safe.
 
-Every P1 must be fixed and independently re-reviewed by the required three hats before
-the spike can receive code-level acceptance. Durable restart, browser, real terminal,
-host-secret storage and multi-process behavior remain explicit nonclaims even after a
-future source-level acceptance.
+Durable restart, browser, real terminal, host-secret storage, hostile same-process
+introspection and multi-process behavior remain explicit nonclaims after this
+source-level acceptance.
