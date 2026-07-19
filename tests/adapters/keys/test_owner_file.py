@@ -197,7 +197,9 @@ def test_source_observation_never_authorizes_profile_key_work(
     assert _extract(provider.unwrap_profile_key(wrapped, BINDING)) != b"k" * 32
 
 
-def test_restart_object_begins_not_ready(provider_paths: tuple[Path, Path]) -> None:
+def test_exact_sentinel_record_recomposition_starts_not_ready_then_succeeds(
+    provider_paths: tuple[Path, Path],
+) -> None:
     provider = _provider(provider_paths)
     _ready(provider)
     del provider
@@ -207,6 +209,7 @@ def test_restart_object_begins_not_ready(provider_paths: tuple[Path, Path]) -> N
     with pytest.raises(SecretProviderError) as caught:
         restarted.create_profile_key(BINDING)
     assert caught.value.code is SecretFailureCode.READINESS_REQUIRED
+    _ready(restarted)
 
 
 def test_aad_v1_exact_binary_vector(provider_paths: tuple[Path, Path]) -> None:
@@ -332,6 +335,87 @@ def test_tampered_profile_record_latches_recovery(provider_paths: tuple[Path, Pa
     assert mismatch.value.code is SecretFailureCode.CATALOG_KEY_MISMATCH
     assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
     assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+
+
+def test_readiness_backend_failure_is_redacted_unavailable(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+
+    class FailingCipher:
+        def __init__(self, _key: object) -> None:
+            pass
+
+        def decrypt(self, _nonce: bytes, _ciphertext: bytes, _aad: bytes) -> bytes:
+            raise RuntimeError(f"backend-canary:{key_path}")
+
+    monkeypatch.setattr(owner_file, "AESGCM", FailingCipher)
+    readiness = provider.readiness()
+
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is SourceStatus.UNAVAILABLE
+    assert str(key_path) not in repr(readiness)
+
+
+def test_unwrap_backend_failure_is_redacted_unavailable(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
+
+    class FailingCipher:
+        def __init__(self, _key: object) -> None:
+            pass
+
+        def decrypt(self, _nonce: bytes, _ciphertext: bytes, _aad: bytes) -> bytes:
+            raise RuntimeError(f"backend-canary:{key_path}")
+
+    monkeypatch.setattr(owner_file, "AESGCM", FailingCipher)
+    with pytest.raises(SecretProviderError) as caught:
+        provider.unwrap_profile_key(wrapped, BINDING)
+
+    assert caught.value.code is SecretFailureCode.UNAVAILABLE
+    assert str(key_path) not in repr(caught.value)
+
+
+def test_invalid_tag_does_not_overwrite_post_use_source_latch(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.exceptions import InvalidTag
+
+    from mycogni.adapters.keys import owner_file
+
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
+
+    class RemovingCipher:
+        def __init__(self, _key: object) -> None:
+            pass
+
+        def decrypt(self, _nonce: bytes, _ciphertext: bytes, _aad: bytes) -> bytes:
+            key_path.unlink()
+            raise InvalidTag
+
+    monkeypatch.setattr(owner_file, "AESGCM", RemovingCipher)
+    with pytest.raises(SecretProviderError) as caught:
+        provider.unwrap_profile_key(wrapped, BINDING)
+
+    assert caught.value.code is SecretFailureCode.CATALOG_KEY_MISMATCH
+    readiness = provider.readiness()
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is SourceStatus.UNAVAILABLE
 
 
 def test_failed_initial_sentinel_authentication_is_permanently_latched(
@@ -498,7 +582,10 @@ def test_second_live_provider_for_same_source_is_rejected(
 
 def test_same_aes_key_domain_rejects_concurrent_cross_installation_provider(
     provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from mycogni.adapters.keys import owner_file
+
     key_path, managed_root = provider_paths
     provider = _provider(provider_paths)
     _ready(provider)
@@ -540,6 +627,40 @@ def test_same_aes_key_domain_rejects_concurrent_cross_installation_provider(
     assert other_readiness.source_status is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as caught:
         other.create_profile_key(replace(BINDING, installation_id=other_installation))
+    assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
+
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"t" * 12)
+    with pytest.raises(SecretProviderError) as collision:
+        provider.create_profile_key(BINDING)
+    assert collision.value.code is SecretFailureCode.NONCE_REUSE
+
+
+def test_distinct_authenticated_sentinel_record_reusing_nonce_latches_domain(
+    provider_paths: tuple[Path, Path],
+) -> None:
+    key_path, _managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    provider = _provider(provider_paths)
+    _ready(provider)
+    del provider
+    gc.collect()
+
+    replacement_sentinel_id = _id("20000000-0000-4000-8000-000000000045")
+    replacement = _provider(
+        provider_paths,
+        sentinel_id=replacement_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            sentinel_id=replacement_sentinel_id,
+            nonce=b"s" * 12,
+        ),
+    )
+
+    readiness = replacement.readiness()
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is SourceStatus.READABLE
+    with pytest.raises(SecretProviderError) as caught:
+        replacement.create_profile_key(BINDING)
     assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
@@ -634,10 +755,12 @@ def test_duplicate_nonce_latch_survives_provider_recomposition(
     gc.collect()
 
     provider = _provider(provider_paths)
-    _ready(provider)
+    readiness = provider.readiness()
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as latched:
         provider.create_profile_key(BINDING)
-    assert latched.value.code is SecretFailureCode.NONCE_REUSE
+    assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
 def test_sentinel_nonce_is_reserved_from_profile_wraps(

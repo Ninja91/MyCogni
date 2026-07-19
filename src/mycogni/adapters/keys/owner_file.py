@@ -113,7 +113,7 @@ class _ProcessWrapState:
     limit: int
     count: int = 0
     used_nonces: set[bytes] = field(default_factory=set)
-    sentinel_nonces: set[bytes] = field(default_factory=set)
+    sentinel_records: dict[bytes, bytes] = field(default_factory=dict)
     nonce_reuse_latched: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -246,6 +246,12 @@ class OwnerFileSecretProvider:
                             KeyReadinessState.RECOVERY_REQUIRED,
                             SourceStatus.READABLE,
                         )
+                    except Exception:
+                        self._latch_recovery(SourceStatus.UNAVAILABLE)
+                        return KeyReadiness(
+                            KeyReadinessState.RECOVERY_REQUIRED,
+                            SourceStatus.UNAVAILABLE,
+                        )
                     if not hmac.compare_digest(plaintext, _READINESS_PLAINTEXT):
                         self._latch_recovery(SourceStatus.READABLE)
                         return KeyReadiness(
@@ -327,10 +333,11 @@ class OwnerFileSecretProvider:
             except SecretProviderError:
                 raise
             except InvalidTag:
-                self._latch_recovery(SourceStatus.READABLE)
+                if not self._recovery_latched:
+                    self._latch_recovery(SourceStatus.READABLE)
                 _fail(SecretFailureCode.CATALOG_KEY_MISMATCH)
             except Exception:
-                _fail(SecretFailureCode.MALFORMED_RECORD)
+                _fail(SecretFailureCode.UNAVAILABLE)
         if len(plaintext) != PROFILE_DEK_BYTES:
             _fail(SecretFailureCode.MALFORMED_RECORD)
         return ProfileDekHandle(
@@ -358,20 +365,30 @@ class OwnerFileSecretProvider:
         """Bind this provider to process-wide accounting for the actual AES key."""
         domain = snapshot.material_digest
         with _REGISTRY_LOCK:
-            existing = _LIVE_KEY_PROVIDERS.get(domain)
-            if existing is not None and existing is not self:
-                _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
             state = _PROCESS_WRAP_STATES.get(domain)
             if state is None:
                 state = _ProcessWrapState(self._process_wrap_limit)
                 _PROCESS_WRAP_STATES[domain] = state
-            elif state.limit != self._process_wrap_limit:
-                _fail(SecretFailureCode.PROVIDER_MISMATCH)
             sentinel_nonce = self._readiness_sentinel.nonce
-            if sentinel_nonce in state.used_nonces:
-                state.nonce_reuse_latched = True
-                _fail(SecretFailureCode.NONCE_REUSE)
-            state.sentinel_nonces.add(sentinel_nonce)
+            sentinel_commitment = self._sentinel_record_commitment()
+            with state.lock:
+                if state.nonce_reuse_latched:
+                    _fail(SecretFailureCode.NONCE_REUSE)
+                existing_commitment = state.sentinel_records.get(sentinel_nonce)
+                if sentinel_nonce in state.used_nonces or (
+                    existing_commitment is not None
+                    and not hmac.compare_digest(existing_commitment, sentinel_commitment)
+                ):
+                    state.nonce_reuse_latched = True
+                    _fail(SecretFailureCode.NONCE_REUSE)
+                # Account for an authenticated record before any later composition
+                # rejection: this nonce has already been used under the AES key.
+                state.sentinel_records[sentinel_nonce] = sentinel_commitment
+            if state.limit != self._process_wrap_limit:
+                _fail(SecretFailureCode.PROVIDER_MISMATCH)
+            existing = _LIVE_KEY_PROVIDERS.get(domain)
+            if existing is not None and existing is not self:
+                _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
             _LIVE_KEY_PROVIDERS[domain] = self
             self._wrap_state = state
 
@@ -665,7 +682,7 @@ class OwnerFileSecretProvider:
                 _fail(SecretFailureCode.UNAVAILABLE)
             if type(nonce) is not bytes or len(nonce) != WRAP_NONCE_BYTES:
                 _fail(SecretFailureCode.UNAVAILABLE)
-            if nonce in state.used_nonces or nonce in state.sentinel_nonces:
+            if nonce in state.used_nonces or nonce in state.sentinel_records:
                 state.nonce_reuse_latched = True
                 _fail(SecretFailureCode.NONCE_REUSE)
             state.used_nonces.add(nonce)
@@ -707,3 +724,15 @@ class OwnerFileSecretProvider:
                 struct.pack(">B", _SUITE_ID),
             )
         )
+
+    def _sentinel_record_commitment(self) -> bytes:
+        """Commit to the complete authenticated sentinel record for idempotence."""
+        aad = self._sentinel_aad()
+        ciphertext = self._readiness_sentinel.ciphertext
+        return hashlib.sha256(
+            b"MyCogni\x00sentinel-record-commitment\x00"
+            + struct.pack(">I", len(aad))
+            + aad
+            + struct.pack(">I", len(ciphertext))
+            + ciphertext
+        ).digest()

@@ -111,6 +111,23 @@ def test_matrix_status_drift_fails_closed(tmp_path: Path) -> None:
     )
 
 
+def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    index = root / "site/index.html"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "STATUS · 2026-07-19",
+            "STATUS · 2026-07-18",
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "visible status date" in error and "does not match matrix snapshot date" in error
+        for error in validate_repository(root)
+    )
+
+
 def test_spike_key_status_drift_fails_closed(tmp_path: Path) -> None:
     root = _site_fixture(tmp_path)
     index = root / "site/index.html"

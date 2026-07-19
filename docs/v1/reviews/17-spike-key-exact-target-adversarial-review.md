@@ -2,11 +2,13 @@
 
 Initial target: `2a144bf3a586cbaf05517f84e7c5ae9295e1ace4`.
 Second target: `b74afdb67a435d5a4cc37bd78b30917e5e72a944`.
+Third target: `4f6f0ca5f5b445660e85e0fcf24bc36a38e1a4cc`.
 
 Current verdict: **REJECT**. The initial target had one P0 plus overlapping P1/P2 findings. The
-second target closed those findings but introduced an incomplete AES-key nonce/accounting domain
-and was also rejected. Neither may be described as code-level accepted. A third candidate exists
-only as unreviewed source until a new exact commit and three clean verdicts are recorded.
+second target closed those findings but introduced an incomplete AES-key nonce/accounting domain.
+The third target closed that split-domain issue but retained an incomplete authenticated-sentinel
+nonce ledger. All three were rejected and none may be described as code-level accepted. The next
+candidate remains unreviewed until a new exact commit and three clean verdicts are recorded.
 
 This is an AI-assisted source review, not independent human cryptographic certification. Three
 read-only reviewers inspected the same commit independently and made no file, network or Docker
@@ -128,16 +130,56 @@ nonce before profile wrapping, and prove both with executable cross-installation
   global locks and that `source_status()` could return a stale latched observation after the
   current source changed again.
 
-## Third candidate before new exact review
+## Third exact target `4f6f0ca` — REJECT
 
-The current candidate scopes pre-readiness exclusivity to the canonical path and, after sentinel
+The third target scoped pre-readiness exclusivity to the canonical path and, after sentinel
 authentication, scopes live-provider uniqueness plus cap/nonce accounting to a material-digest
 AES-key domain. It reserves sentinel nonces before wrapping, keeps that state across in-process
 recomposition, rejects raw-fork construction before global locks, reports current low-level source
 condition separately from the readiness latch, and strictly validates every sentinel field.
 
-The focused lane now reports `76 passed`. Added evidence covers concurrent and sequential
+Its focused lane reported `76 passed`. Added evidence covered concurrent and sequential
 cross-installation/path use of the same material, sentinel/profile nonce collision, raw-fork
 construction with the registry lock held, corrupted/wrong-purpose/identity-substituted sentinels,
-strict bool/float/subclass rejection and 32 randomized round trips. This remains unreviewed until
-committed and inspected independently by all three new reviewers.
+strict bool/float/subclass rejection and 32 randomized round trips.
+
+Three independent exact-target reviews nevertheless returned **REJECT**:
+
+- cryptographic/scientist: P0 0, P1 1, P2 0, plus one stale-site P3;
+- product/operator/open source: P0 0, P1 1, P2 1;
+- backend/infra/edge: P0 0, P1 1, P2 2.
+
+### Third-target P1
+
+`sentinel_nonces` was only a set. A different authenticated sentinel record could reuse an
+already-recorded sentinel nonce under the same actual AES key and be treated like idempotent
+recomposition. In addition, live-provider rejection happened before the newly authenticated
+record's nonce was reserved, even though that nonce had already been used under the key.
+
+Required remediation: map each sentinel nonce to a commitment over the complete authenticated
+record; allow only exact persisted-record recomposition; latch a different record at the same
+nonce or any sentinel/profile collision; and account for authenticated records before later
+live-provider/configuration rejection.
+
+### Third-target P2 and claim findings
+
+- readiness allowed unexpected AEAD backend exceptions to escape, and unwrap classified them as
+  malformed input rather than redacted unavailability;
+- unwrap's neutral `InvalidTag` handler could overwrite a stronger source-removal/unsafe latch
+  established by post-use revalidation;
+- the visible static-site badge retained `2026-07-18` while its matrix, data attribute and current
+  narrative used `2026-07-19`, and the site guard did not enforce equality.
+
+## Fourth candidate before new exact review
+
+The remediation candidate stores domain-separated commitments over canonical sentinel AAD and
+ciphertext, permits exact record recomposition, latches distinct-record same-nonce reuse, and
+accounts authenticated records before later composition rejection. Backend failures are finite
+and redacted, while post-use source-latch precedence is preserved. Static-site snapshot dates are
+guarded against the completion matrix.
+
+The focused key lane reports `80 passed`; the combined key plus site-guard lane reports `92
+passed`. New tests cover exact and distinct sentinel recomposition, nonce reservation by a
+concurrently rejected provider, readiness/unwrap backend failures, source-latch precedence and
+site-date mutation. This candidate remains unreviewed until committed and inspected independently
+by three new reviewers.

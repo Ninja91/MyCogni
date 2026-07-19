@@ -88,9 +88,12 @@ source alias. POSIX/source checks still cannot prove mount-alias safety on every
 New wraps use private module-owned OS entropy calls. The runtime constructor has no entropy
 injection parameter; executable tests monkeypatch the private wrappers. The sole live provider
 enforces a conservative process-lifetime wrap cap and remembers nonces for the actual AES-key
-domain across provider recomposition. Every authenticated readiness-sentinel nonce is reserved in
-that domain before profile wrapping; a duplicate of either a sentinel or profile nonce
-permanently latches new wrapping off. It never retries after an ambiguous
+domain across provider recomposition. Every authenticated readiness-sentinel nonce maps to a
+domain-separated commitment over its canonical AAD and ciphertext. Exact recomposition of the
+same persisted sentinel is idempotent; a distinct authenticated record at the same nonce, or a
+sentinel/profile collision, permanently latches new wrapping off. An authenticated sentinel is
+accounted under the domain lock before a later live-provider or configuration rejection because
+its nonce has already been used under that AES key. It never retries after an ambiguous
 cryptographic/provider failure.
 Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
 KEY-001/KEY-002 and remain prerequisites for production wrapping.
@@ -122,6 +125,11 @@ is reserved for the separate explicit empty-install lifecycle, never inferred fr
 runtime file. Existing ciphertext plus any non-ready state pauses all dependent work. A dedicated
 wrapped catalog sentinel binds recovery to the expected installation/provider/catalog identity;
 staged recovery verifies it before committing any provider/catalog transition.
+
+AEAD authentication failure is reported neutrally and latches recovery. Other cryptographic
+backend exceptions map to redacted unavailable state, never malformed caller input. If source
+revalidation also fails after an AEAD authentication failure, the stronger current source latch
+is preserved rather than overwritten by the neutral authentication result.
 
 Future rotation follows `PREPARED -> ACTIVE -> RETIRING -> RETIRED`. Rewrapping preserves the
 same profile DEK and compare-and-swaps its catalog record. Old KEKs remain recoverable until every
