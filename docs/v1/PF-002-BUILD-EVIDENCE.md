@@ -90,6 +90,8 @@ Build evidence:
   shebang checks under CPython `3.12.12`;
 - OCI index digest
   `sha256:816ace6f26acdacf1a1965c4739967b4cf535779345f6598b77cef42038e8a95`;
+- ephemeral OCI archive SHA-256
+  `d1699dde7486a64ff0448a4dbba871ba510805f7cb0b6c8233f8a5714f468cae`;
 - linux/amd64 manifest
   `sha256:35f1263ec98a739aefead8d18ef108da4e3a0b74892c17f8db1b3e70265b6a77`;
 - linux/arm64 manifest
@@ -99,8 +101,11 @@ The loaded index reported `USER 65532:65532`. Each platform then passed the
 same runtime command with `--network none`, `--read-only`, `--cap-drop ALL`,
 `--security-opt no-new-privileges:true` and a finite, non-executable tmpfs at
 `/tmp/mycogni`. The probe asserted UID `65532`, zero effective capabilities,
-`NoNewPrivs: 1`, loopback as the only network interface, and no write access to
-`/opt/mycogni` or `/var/lib/mycogni`. Both emitted:
+`NoNewPrivs: 1`, no IPv4 route, a failed network connection probe, and no write
+access to `/opt/mycogni` or `/var/lib/mycogni`. The initial smoke observed only
+loopback; an independent rerun also observed inert tunnel interfaces, so
+interface count is deliberately not a networkless acceptance criterion. Both
+platforms emitted:
 
 ```text
 Running uvicorn 0.51.0 with CPython 3.12.12 on Linux
@@ -114,3 +119,18 @@ evidence, not an independent physical x86 host result. PF-002's build/runtime
 acceptance evidence is now present. Canonical package status remains
 `IN_PROGRESS` because GOV-001 intentionally forbids `COMPLETE` without an
 externally rooted authenticated semantic-review attestation.
+
+The archive is retained only as a local `/private/tmp` reproduction artifact;
+the digest makes this run self-identifying but is not durable CI storage. The
+loaded image labels also used the bake default `revision=unknown`. The embedded
+unsigned BuildKit provenance binds both manifests to source revision `a9f11e8`,
+but has an empty builder identity and incomplete request/dependency capture.
+It is corroborating local evidence, not signed provenance or a GOV-001 trust
+root. A later release workflow must retain the full log/archive as a durable CI
+artifact and pass the exact VCS revision into the image label.
+
+The independent review also found that hardening the copied virtual environment
+in a separate runtime `RUN` layer duplicated roughly 29 MB of compressed data
+per platform. The Dockerfile now applies ownership and read-only permissions in
+the build stage before `COPY`; the next reproduction must confirm the optimized
+layout without weakening runtime permissions.

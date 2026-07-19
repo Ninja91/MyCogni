@@ -148,12 +148,18 @@ def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
     )
     assert "--from=build /opt/mycogni/.venv /opt/mycogni/.venv" in copies
     assert not any("--chown" in value and "/opt/mycogni" in value for value in copies)
+    build_instructions = instructions[:last_from]
     assert any(
         item.name == "RUN"
         and "chown -R 0:0 /opt/mycogni" in item.value
         and "chmod -R a-w /opt/mycogni" in item.value
-        for item in runtime
+        for item in build_instructions
     )
+    assert not any(
+        item.name == "RUN"
+        and ("chown -R 0:0 /opt/mycogni" in item.value or "chmod -R a-w /opt/mycogni" in item.value)
+        for item in runtime
+    ), "runtime hardening must not duplicate the copied virtual-environment layer"
     assert any(
         item.name == "CMD"
         and "/opt/mycogni/.venv/bin/uvicorn --version" in item.value

@@ -21,7 +21,9 @@ RUN uv sync --frozen --no-dev --no-editable --package mycogni \
     && /opt/mycogni/.venv/bin/python -c "from pathlib import Path; expected = '#!/opt/mycogni/.venv/bin/python'; assert all((Path('/opt/mycogni/.venv/bin') / name).read_text().splitlines()[0] == expected for name in ('uvicorn', 'alembic'))" \
     && /opt/mycogni/.venv/bin/uvicorn --version \
     && /opt/mycogni/.venv/bin/alembic --version \
-    && rm -rf /root/.cache/uv
+    && rm -rf /root/.cache/uv \
+    && chown -R 0:0 /opt/mycogni \
+    && chmod -R a-w /opt/mycogni
 
 FROM docker.io/library/python@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS runtime
 
@@ -47,9 +49,6 @@ RUN install -d -o 0 -g 0 -m 0555 /opt/mycogni \
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni /tmp/mycogni
 
 COPY --from=build /opt/mycogni/.venv /opt/mycogni/.venv
-
-RUN chown -R 0:0 /opt/mycogni \
-    && chmod -R a-w /opt/mycogni
 
 WORKDIR /var/lib/mycogni
 USER 65532:65532
