@@ -200,15 +200,25 @@ class WrappedReadinessSentinel:
         ):
             if type(value) is not OpaqueId:
                 raise TypeError(f"readiness sentinel {label} ID must be an OpaqueId")
+        if type(self.format_version) is not int:
+            raise TypeError("readiness-sentinel format version must be an integer")
         if self.format_version != WRAPPED_KEY_FORMAT_VERSION:
             raise ValueError("unsupported readiness-sentinel format version")
+        if type(self.aad_version) is not int:
+            raise TypeError("readiness-sentinel AAD version must be an integer")
         if self.aad_version != WRAPPED_KEY_AAD_VERSION:
             raise ValueError("unsupported readiness-sentinel AAD version")
+        if type(self.suite) is not str:
+            raise TypeError("readiness-sentinel suite must be a string")
         if self.suite != WRAP_SUITE:
             raise ValueError("unsupported readiness-sentinel suite")
-        if type(self.nonce) is not bytes or len(self.nonce) != WRAP_NONCE_BYTES:
+        if type(self.nonce) is not bytes:
+            raise TypeError("readiness-sentinel nonce must be bytes")
+        if len(self.nonce) != WRAP_NONCE_BYTES:
             raise ValueError("readiness-sentinel nonce must be exactly 12 bytes")
-        if type(self.ciphertext) is not bytes or len(self.ciphertext) != WRAPPED_PROFILE_KEY_BYTES:
+        if type(self.ciphertext) is not bytes:
+            raise TypeError("readiness-sentinel ciphertext must be bytes")
+        if len(self.ciphertext) != WRAPPED_PROFILE_KEY_BYTES:
             raise ValueError("readiness-sentinel ciphertext must be exactly 48 bytes")
 
     def __repr__(self) -> str:

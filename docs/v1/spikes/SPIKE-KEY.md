@@ -1,9 +1,9 @@
 # SPIKE-KEY — explicit local KEK and profile-key wrap boundary
 
-Status: `IN_PROGRESS`. Initial exact target `2a144bf` was rejected by all three reviewers with one
-P0 split-key finding. A replacement candidate now enforces the remediation contract and passes its
-focused local suite, but clean repeat exact-target review is still pending; neither result is
-acceptance.
+Status: `IN_PROGRESS`. Initial exact target `2a144bf` was rejected with one P0 split-key finding;
+second target `b74afdb` was rejected for an incomplete AES-key nonce domain. The current candidate
+passes its expanded focused local suite, but a clean new exact-target review is still pending; no
+rejected or unreviewed result is acceptance.
 macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
 backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
 `SPIKE-BACKUP`, `THR-KEYS-001` or `VFY-KEYS-001`.
@@ -62,10 +62,12 @@ Unknown versions and malformed lengths fail before AEAD. Historical inputs come 
 persisted binding rather than a mutable current global schema.
 
 The production constructor exposes no entropy source. Private module wrappers call the
-operating-system RNG and are monkeypatched only in direct tests. One live provider per exact
-path/reference enforces the process-lifetime wrap cap and duplicate-nonce latch; a second live
-provider is denied. Durable accounting across processes/restarts is deferred to KEY-001 and is a
-production blocker, not an implied property of the spike.
+operating-system RNG and are monkeypatched only in direct tests. Before readiness, only one live
+provider may own a canonical source path. Sentinel authentication binds the provider to a
+process-wide material-digest domain, so another installation/reference/path using the same AES key
+is denied and cannot split the wrap cap or nonce ledger. Sentinel nonces are reserved in that same
+domain before profile wrapping. Durable accounting across processes/restarts is deferred to
+KEY-001 and is a production blocker, not an implied property of the spike.
 
 ## Native owner-only provider
 
@@ -102,9 +104,10 @@ Routine startup never mutates provider or catalog storage. It distinguishes:
 | ready | exact dedicated sentinel and lifetime source pin agree | allow only the operations implemented by the current package |
 
 A restart always begins not ready, must preserve the same non-secret KEK reference and must
-authenticate the dedicated catalog sentinel before use. A forked child must rebuild trusted
-composition; inherited provider/handle instances fail before entropy or inherited locks. Failed
-recovery verification never pins, clears a latch, or overwrites the live source/catalog.
+authenticate the dedicated catalog sentinel before use. Inherited provider/handle instances and
+new provider construction in a raw fork child fail before entropy or inherited locks; the child
+must `exec`/restart before rebuilding trusted composition. Failed recovery verification never
+pins, clears a latch, or overwrites the live source/catalog.
 
 ## Provider conformance matrix
 
@@ -123,17 +126,18 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The replacement candidate's 59-test focused suite covers strict construction and rendering, a
+The current candidate's 76-test focused suite covers strict construction and rendering, a
 hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
 mutation, readiness-before-use/restart, initial-failure and replace-then-restore latching, usage
-exhaustion, duplicate-nonce latching, second-provider denial, a real fork with an inherited held
-lock, sentinel checks, symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors,
-archive overlap, configured-directory rename/replacement and typed post-use syscall failures. Test
-values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the focused launcher reports
-`59 passed`; Ruff and strict source mypy also pass. Repeat review and both locked CI runtimes remain
-required.
+exhaustion, process-domain duplicate accounting across installation/path recomposition, reserved
+sentinel nonces, concurrent same-material provider denial, raw-fork constructor/use with inherited
+held locks, corrupted/wrong-purpose/identity-substituted sentinels, 32 randomized round trips,
+symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive overlap,
+configured-directory rename/replacement and typed post-use syscall failures. Test values are
+synthetic. On Darwin arm64 with locked CPython 3.12.12, the focused launcher reports `76 passed`;
+Ruff and strict source mypy also pass. New exact review and both locked CI runtimes remain required.
 
 Reproduce the focused lane from the repository root using a private temporary directory whose
 ancestors are not group/world writable (the provider deliberately rejects a `/tmp` ancestry):

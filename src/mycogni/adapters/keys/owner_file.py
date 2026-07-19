@@ -113,15 +113,20 @@ class _ProcessWrapState:
     limit: int
     count: int = 0
     used_nonces: set[bytes] = field(default_factory=set)
+    sentinel_nonces: set[bytes] = field(default_factory=set)
     nonce_reuse_latched: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+_PROCESS_PID = os.getpid()
 _REGISTRY_LOCK = threading.Lock()
-_LIVE_PROVIDERS: weakref.WeakValueDictionary[
-    tuple[Path, ActiveKekRef, OpaqueId], OwnerFileSecretProvider
-] = weakref.WeakValueDictionary()
-_PROCESS_WRAP_STATES: dict[tuple[Path, ActiveKekRef, OpaqueId], _ProcessWrapState] = {}
+_LIVE_PATH_PROVIDERS: weakref.WeakValueDictionary[Path, OwnerFileSecretProvider] = (
+    weakref.WeakValueDictionary()
+)
+_LIVE_KEY_PROVIDERS: weakref.WeakValueDictionary[bytes, OwnerFileSecretProvider] = (
+    weakref.WeakValueDictionary()
+)
+_PROCESS_WRAP_STATES: dict[bytes, _ProcessWrapState] = {}
 
 
 class OwnerFileSecretProvider:
@@ -139,6 +144,8 @@ class OwnerFileSecretProvider:
         managed_roots: tuple[Path, ...],
         process_wrap_limit: int = DEFAULT_PROCESS_WRAP_LIMIT,
     ) -> None:
+        if os.getpid() != _PROCESS_PID:
+            _fail(SecretFailureCode.FORKED_PROCESS)
         if type(active_kek) is not ActiveKekRef:
             raise TypeError("owner-file provider requires an active KEK reference")
         if active_kek.provider_kind != OWNER_FILE_PROVIDER_KIND:
@@ -180,21 +187,14 @@ class OwnerFileSecretProvider:
         self._recovery_latched = False
         self._latched_source_status = SourceStatus.UNAVAILABLE
         self._state_lock = threading.Lock()
+        self._wrap_state: _ProcessWrapState | None = None
 
-        registry_key = (self._key_path, self._active_kek, self._installation_id)
         with _REGISTRY_LOCK:
-            existing = _LIVE_PROVIDERS.get(registry_key)
+            existing = _LIVE_PATH_PROVIDERS.get(self._key_path)
             if existing is not None:
                 _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
-            wrap_state = _PROCESS_WRAP_STATES.get(registry_key)
-            if wrap_state is None:
-                wrap_state = _ProcessWrapState(process_wrap_limit)
-                _PROCESS_WRAP_STATES[registry_key] = wrap_state
-            elif wrap_state.limit != process_wrap_limit:
-                raise ValueError("process wrap limit cannot change during a process lifetime")
-            _LIVE_PROVIDERS[registry_key] = self
-        self._wrap_state = wrap_state
-        self._registry_key = registry_key
+            _LIVE_PATH_PROVIDERS[self._key_path] = self
+        self._process_wrap_limit = process_wrap_limit
 
     def __repr__(self) -> str:
         return "OwnerFileSecretProvider(key_path=[REDACTED], active_kek=[REDACTED])"
@@ -216,7 +216,7 @@ class OwnerFileSecretProvider:
                     with self._material_session(required_pin=self._source_pin):
                         pass
             except SecretProviderError as error:
-                if self._recovery_latched:
+                if error.code is SecretFailureCode.RECOVERY_REQUIRED and self._recovery_latched:
                     return self._latched_source_status
                 return self._source_status_for(error.code)
             return SourceStatus.READABLE
@@ -252,6 +252,7 @@ class OwnerFileSecretProvider:
                             KeyReadinessState.RECOVERY_REQUIRED,
                             SourceStatus.READABLE,
                         )
+                self._bind_key_domain(snapshot)
                 self._source_pin = snapshot
             except SecretProviderError as error:
                 source_status = self._source_status_for(error.code)
@@ -349,9 +350,30 @@ class OwnerFileSecretProvider:
     def _require_ready(self) -> _SourcePin:
         if self._recovery_latched:
             _fail(SecretFailureCode.RECOVERY_REQUIRED)
-        if self._source_pin is None:
+        if self._source_pin is None or self._wrap_state is None:
             _fail(SecretFailureCode.READINESS_REQUIRED)
         return self._source_pin
+
+    def _bind_key_domain(self, snapshot: _SourcePin) -> None:
+        """Bind this provider to process-wide accounting for the actual AES key."""
+        domain = snapshot.material_digest
+        with _REGISTRY_LOCK:
+            existing = _LIVE_KEY_PROVIDERS.get(domain)
+            if existing is not None and existing is not self:
+                _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
+            state = _PROCESS_WRAP_STATES.get(domain)
+            if state is None:
+                state = _ProcessWrapState(self._process_wrap_limit)
+                _PROCESS_WRAP_STATES[domain] = state
+            elif state.limit != self._process_wrap_limit:
+                _fail(SecretFailureCode.PROVIDER_MISMATCH)
+            sentinel_nonce = self._readiness_sentinel.nonce
+            if sentinel_nonce in state.used_nonces:
+                state.nonce_reuse_latched = True
+                _fail(SecretFailureCode.NONCE_REUSE)
+            state.sentinel_nonces.add(sentinel_nonce)
+            _LIVE_KEY_PROVIDERS[domain] = self
+            self._wrap_state = state
 
     def _latch_recovery(self, source_status: SourceStatus) -> None:
         self._recovery_latched = True
@@ -364,7 +386,13 @@ class OwnerFileSecretProvider:
             return SourceStatus.UNSAFE
         if code is SecretFailureCode.MALFORMED_RECORD:
             return SourceStatus.CORRUPT
-        if code is SecretFailureCode.CATALOG_KEY_MISMATCH:
+        if code in {
+            SecretFailureCode.CATALOG_KEY_MISMATCH,
+            SecretFailureCode.NONCE_REUSE,
+            SecretFailureCode.PROVIDER_ALREADY_ACTIVE,
+            SecretFailureCode.PROVIDER_MISMATCH,
+            SecretFailureCode.USAGE_LIMIT,
+        }:
             return SourceStatus.READABLE
         return SourceStatus.UNAVAILABLE
 
@@ -622,11 +650,14 @@ class OwnerFileSecretProvider:
 
     def _reserve_nonce(self) -> bytes:
         self._assert_process()
-        with self._wrap_state.lock:
+        state = self._wrap_state
+        if state is None:
+            _fail(SecretFailureCode.READINESS_REQUIRED)
+        with state.lock:
             self._assert_process()
-            if self._wrap_state.nonce_reuse_latched:
+            if state.nonce_reuse_latched:
                 _fail(SecretFailureCode.NONCE_REUSE)
-            if self._wrap_state.count >= self._wrap_state.limit:
+            if state.count >= state.limit:
                 _fail(SecretFailureCode.USAGE_LIMIT)
             try:
                 nonce = _os_nonce_bytes(WRAP_NONCE_BYTES)
@@ -634,11 +665,11 @@ class OwnerFileSecretProvider:
                 _fail(SecretFailureCode.UNAVAILABLE)
             if type(nonce) is not bytes or len(nonce) != WRAP_NONCE_BYTES:
                 _fail(SecretFailureCode.UNAVAILABLE)
-            if nonce in self._wrap_state.used_nonces:
-                self._wrap_state.nonce_reuse_latched = True
+            if nonce in state.used_nonces or nonce in state.sentinel_nonces:
+                state.nonce_reuse_latched = True
                 _fail(SecretFailureCode.NONCE_REUSE)
-            self._wrap_state.used_nonces.add(nonce)
-            self._wrap_state.count += 1
+            state.used_nonces.add(nonce)
+            state.count += 1
             return nonce
 
     def _profile_aad(self, binding: ProfileKeyBinding) -> bytes:

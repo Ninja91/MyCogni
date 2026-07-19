@@ -79,13 +79,19 @@ unsafe ancestors, and retraverses the configured path to revalidate parent and f
 around use. The key path must be structurally
 disjoint in both directions from every configured data, evidence and managed-archive root.
 The provider captures its creator process, checks before entropy/locks/record work and rejects use
-after fork. A second live provider for the same key path/reference is rejected so one process
-cannot silently split nonce accounting.
+after fork. A raw fork child cannot construct or use a provider and must `exec`/restart before
+recomposition, so inherited global locks are never entered. A second live provider for the same
+canonical path is rejected before readiness; after sentinel authentication, a material-digest
+domain rejects a second provider even through another installation, reference, copied path or
+source alias. POSIX/source checks still cannot prove mount-alias safety on every host.
 
 New wraps use private module-owned OS entropy calls. The runtime constructor has no entropy
 injection parameter; executable tests monkeypatch the private wrappers. The sole live provider
-enforces a conservative process-lifetime wrap cap and remembers nonces; a duplicate permanently
-latches new wrapping off. It never retries after an ambiguous cryptographic/provider failure.
+enforces a conservative process-lifetime wrap cap and remembers nonces for the actual AES-key
+domain across provider recomposition. Every authenticated readiness-sentinel nonce is reserved in
+that domain before profile wrapping; a duplicate of either a sentinel or profile nonce
+permanently latches new wrapping off. It never retries after an ambiguous
+cryptographic/provider failure.
 Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
 KEY-001/KEY-002 and remain prerequisites for production wrapping.
 

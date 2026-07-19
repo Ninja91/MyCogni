@@ -88,13 +88,34 @@ def test_malformed_wrapped_records_are_unrepresentable(
         replace(WRAPPED, **changes)
 
 
-def test_dedicated_sentinel_is_strict_redacted_and_a_distinct_type() -> None:
+class _StringSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("changes", "error", "message"),
+    [
+        ({"format_version": 2}, ValueError, "sentinel format"),
+        ({"format_version": 1.0}, TypeError, "format version"),
+        ({"format_version": True}, TypeError, "format version"),
+        ({"aad_version": 1.0}, TypeError, "AAD version"),
+        ({"aad_version": True}, TypeError, "AAD version"),
+        ({"suite": _StringSubclass("A256GCM")}, TypeError, "suite"),
+        ({"nonce": bytearray(b"n" * 12)}, TypeError, "nonce"),
+        ({"ciphertext": bytearray(b"c" * 48)}, TypeError, "ciphertext"),
+    ],
+)
+def test_dedicated_sentinel_is_strict_redacted_and_a_distinct_type(
+    changes: dict[str, object],
+    error: type[Exception],
+    message: str,
+) -> None:
     assert type(SENTINEL) is WrappedReadinessSentinel
     assert type(SENTINEL) is not type(WRAPPED)
     assert "ssss" not in repr(SENTINEL)
     assert "tttt" not in repr(SENTINEL)
-    with pytest.raises(ValueError, match="sentinel format"):
-        replace(SENTINEL, format_version=2)
+    with pytest.raises(error, match=message):
+        replace(SENTINEL, **changes)
 
 
 def test_source_readability_and_installation_readiness_are_separate() -> None:
