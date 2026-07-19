@@ -6,14 +6,14 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import timedelta
-from threading import Event
+from datetime import datetime, timedelta
+from threading import Event, current_thread
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
-from connector_protocol import ResultEnvelope
+from connector_protocol import ActionEnvelope, ResultEnvelope
 from connector_protocol.manifest import Capability
 from connector_protocol.result import NextStepKind, ResultCode
 from services.runner_mailbox import (
@@ -149,6 +149,58 @@ def _repository(
         limits=limits,
         storage_key=b"s" * 32,
     )
+
+
+def test_maintenance_authority_is_mandatory_exact_and_never_implicitly_generated() -> None:
+    with pytest.raises(TypeError):
+        VolatileMailboxRepository()  # type: ignore[call-arg]
+    for malformed in (None, bytearray(b"m" * 32), b"m" * 31, b"m" * 33):
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            VolatileMailboxRepository(
+                maintenance_credential_digest=malformed,  # type: ignore[arg-type]
+            )
+
+
+@pytest.mark.parametrize("role_index", (0, 1, 2, 3))
+def test_maintenance_authority_is_separate_from_every_action_role_before_mutation(
+    action_payload: dict[str, Any], clock: FakeClock, role_index: int
+) -> None:
+    credentials = (ACTION_KEY, CLAIM_CREDENTIAL, COLLECTION_CREDENTIAL, RESULT_CREDENTIAL)
+    repository = VolatileMailboxRepository(
+        maintenance_credential_digest=Sha256CredentialDigester().digest(credentials[role_index]),
+        storage_key=b"s" * 32,
+    )
+    if role_index < 3:
+        with pytest.raises(MailboxError) as denied:
+            _configure(
+                action_payload,
+                clock,
+                repository=repository,
+                credentials=credentials,
+                offer=False,
+            )
+        assert denied.value.denial is MailboxDenial.INVALID_INPUT
+        assert repository._records == {}  # type: ignore[attr-defined]
+    else:
+        service, binding, _, _, collection_credential, _ = _configure(
+            action_payload,
+            clock,
+            repository=repository,
+            credentials=credentials,
+            offer=False,
+        )
+        with pytest.raises(MailboxError) as denied:
+            service.offer(
+                binding,
+                encode(action_payload),
+                action_key=ACTION_KEY,
+                collection_credential=collection_credential,
+            )
+        assert denied.value.denial is MailboxDenial.INVALID_INPUT
+        assert (
+            service.snapshot(binding.mailbox_id, collection_credential=collection_credential).state
+            is MailboxState.EMPTY
+        )
 
 
 def _configure(
@@ -428,6 +480,37 @@ def test_cross_action_credential_reuse_is_rejected_installation_wide(
     assert denied.value.denial is MailboxDenial.REPLAY
 
 
+def test_maintenance_separation_applies_to_later_cross_mailbox_provisioning(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    later = _credentials(30)
+    repository = VolatileMailboxRepository(
+        maintenance_credential_digest=Sha256CredentialDigester().digest(later[1]),
+        storage_key=b"s" * 32,
+    )
+    first = _configure(
+        action_payload,
+        clock,
+        repository=repository,
+        credentials=_credentials(10),
+        offer=False,
+    )
+    with pytest.raises(MailboxError) as denied:
+        _configure(
+            action_payload,
+            clock,
+            repository=repository,
+            credentials=later,
+            offer=False,
+        )
+    assert denied.value.denial is MailboxDenial.INVALID_INPUT
+    service, binding, _, _, collection_credential, _ = first
+    assert (
+        service.snapshot(binding.mailbox_id, collection_credential=collection_credential).state
+        is MailboxState.EMPTY
+    )
+
+
 def test_concurrent_evidence_saturation_has_one_winner_and_no_overcommit(
     action_payload: dict[str, Any], clock: FakeClock
 ) -> None:
@@ -477,7 +560,181 @@ def test_concurrent_evidence_saturation_has_one_winner_and_no_overcommit(
     assert repository._total_evidence_bytes == 20  # type: ignore[attr-defined]
 
 
-def test_uncollected_result_expires_under_bounded_retention_and_gc(
+def test_concurrent_active_material_saturation_is_linearized_and_released_on_claim(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    canonical = (
+        ActionEnvelope.model_validate_json(encode(action_payload), strict=True)
+        .model_dump_json()
+        .encode()
+    )
+    one_offer_bytes = len(canonical) + 64
+    repository = _repository(
+        limits=MailboxLimits(
+            max_mailboxes=2,
+            max_total_active_material_bytes=one_offer_bytes,
+            max_total_evidence_bytes=1024,
+            max_total_committed_bytes=4096,
+        )
+    )
+    configured = [
+        _configure(
+            action_payload,
+            clock,
+            repository=repository,
+            credentials=_credentials(seed),
+            offer=False,
+        )
+        for seed in (10, 20)
+    ]
+
+    def offer(index: int) -> MailboxDenial | None:
+        service, binding, action_key, _, collection_credential, _ = configured[index]
+        try:
+            service.offer(
+                binding,
+                encode(action_payload),
+                action_key=action_key,
+                collection_credential=collection_credential,
+            )
+        except MailboxError as exc:
+            return exc.denial
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(offer, (0, 1)))
+    assert outcomes.count(None) == 1
+    assert outcomes.count(MailboxDenial.QUOTA_EXCEEDED) == 1
+    assert repository._total_active_material_bytes == one_offer_bytes  # type: ignore[attr-defined]
+    winner = outcomes.index(None)
+    service, binding, _, claim_credential, _, _ = configured[winner]
+    service.claim(binding, claim_credential=claim_credential)
+    assert repository._total_active_material_bytes == 0  # type: ignore[attr-defined]
+
+
+def test_small_host_default_limits_bound_every_installation_byte_pool() -> None:
+    limits = MailboxLimits()
+    assert limits.max_mailboxes == 64
+    assert limits.max_total_active_material_bytes == 16_777_216
+    assert limits.max_total_evidence_bytes == 67_108_864
+    assert limits.max_total_committed_bytes == 67_108_864
+
+
+def test_scoped_snapshot_samples_time_under_lock_and_expires_stale_offer(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    service, binding, _, _, collection_credential, _ = _configure(action_payload, clock)
+    clock.current = binding.claim_deadline_utc
+    snapshot = service.snapshot(binding.mailbox_id, collection_credential=collection_credential)
+    assert snapshot.state is MailboxState.EXPIRED
+    assert snapshot.observed_at_utc == clock.current
+    assert snapshot.claim_deadline_utc == binding.claim_deadline_utc
+    assert snapshot.result_deadline_utc == binding.deadline_utc
+
+
+def test_gc_advances_survivor_time_high_water_and_rejects_rollback_claim(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock
+    )
+    observed = binding.claim_deadline_utc + timedelta(seconds=1)
+    clock.current = observed
+    assert service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL) == ()
+    clock.current = binding.claim_deadline_utc - timedelta(seconds=1)
+    with pytest.raises(MailboxError) as rollback:
+        service.claim(binding, claim_credential=claim_credential)
+    assert rollback.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    clock.current = observed
+    assert (
+        service.snapshot(binding.mailbox_id, collection_credential=collection_credential).state
+        is MailboxState.EXPIRED
+    )
+
+
+def test_empty_installation_gc_high_water_rejects_new_mailbox_clock_rollback(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service = RunnerMailboxService(
+        repository,
+        clock,
+        Sha256CredentialDigester(),
+        FixedCredentialSource(),
+    )
+    observed = clock.current + timedelta(minutes=1)
+    clock.current = observed
+    assert service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL) == ()
+    clock.current = observed - timedelta(seconds=1)
+    with pytest.raises(MailboxError) as rollback:
+        _configure(action_payload, clock, repository=repository, offer=False)
+    assert rollback.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert repository._records == {}  # type: ignore[attr-defined]
+
+
+@dataclass(slots=True)
+class _GatedGcClock:
+    current: datetime
+    gc_observation: datetime
+    rollback: datetime
+    gc_entered: Event
+    release_gc: Event
+    gated: bool = False
+
+    def now(self) -> datetime:
+        if self.gated and current_thread().name.startswith("gc-sweep"):
+            self.gc_entered.set()
+            assert self.release_gc.wait(timeout=2)
+            return self.gc_observation
+        if self.gated:
+            return self.rollback
+        return self.current
+
+
+def test_concurrent_gc_linearizes_high_water_before_waiting_rollback_claim(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    gated = _GatedGcClock(
+        current=clock.current,
+        gc_observation=clock.current + timedelta(seconds=30),
+        rollback=clock.current + timedelta(seconds=1),
+        gc_entered=Event(),
+        release_gc=Event(),
+    )
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload,
+        gated,  # type: ignore[arg-type]
+    )
+    gated.gated = True
+
+    def sweep() -> tuple[UUID, ...]:
+        return service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+
+    def claim() -> MailboxDenial | None:
+        try:
+            service.claim(binding, claim_credential=claim_credential)
+        except MailboxError as exc:
+            return exc.denial
+        return None
+
+    with (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="gc-sweep") as sweeper,
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="rollback-claim") as claimer,
+    ):
+        sweep_future = sweeper.submit(sweep)
+        assert gated.gc_entered.wait(timeout=1)
+        claim_future = claimer.submit(claim)
+        gated.release_gc.set()
+        assert sweep_future.result(timeout=2) == ()
+        assert claim_future.result(timeout=2) is MailboxDenial.INTERNAL_UNCERTAINTY
+
+    gated.gated = False
+    gated.current = gated.gc_observation
+    snapshot = service.snapshot(binding.mailbox_id, collection_credential=collection_credential)
+    assert snapshot.observed_at_utc == gated.gc_observation
+
+
+def test_months_idle_unacknowledged_result_is_never_silently_collected_by_gc(
     action_payload: dict[str, Any], clock: FakeClock
 ) -> None:
     repository = _repository(
@@ -486,7 +743,6 @@ def test_uncollected_result_expires_under_bounded_retention_and_gc(
             max_total_evidence_bytes=1024,
             max_total_committed_bytes=4096,
             terminal_retention=timedelta(seconds=1),
-            uncollected_retention=timedelta(seconds=1),
             tombstone_retention=timedelta(minutes=1),
         )
     )
@@ -494,19 +750,23 @@ def test_uncollected_result_expires_under_bounded_retention_and_gc(
         action_payload, clock, repository=repository
     )
     result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    committed_json = _result(binding, ResultCode.CANDIDATE_OBSERVED, NextStepKind.USER_REVIEW)
     service.commit_result(
         binding,
-        _result(binding, ResultCode.CANDIDATE_OBSERVED, NextStepKind.USER_REVIEW),
+        committed_json,
         result_credential=result_credential,
     )
-    clock.current += timedelta(seconds=1)
-    assert service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL) == (
-        binding.mailbox_id,
+    clock.current += timedelta(days=180)
+    assert service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL) == ()
+    visible = service.snapshot(binding.mailbox_id, collection_credential=collection_credential)
+    assert visible.collection_state is CollectionState.READY
+    assert visible.result_present
+    redelivered = service.collect(binding.mailbox_id, collection_credential=collection_credential)
+    expected = (
+        ResultEnvelope.model_validate_json(committed_json, strict=True).model_dump_json().encode()
     )
-    with pytest.raises(MailboxError) as gone:
-        service.collect(binding.mailbox_id, collection_credential=collection_credential)
-    assert gone.value.denial is MailboxDenial.REPLAY
-    assert repository._total_committed_bytes == 0  # type: ignore[attr-defined]
+    assert redelivered.result_json == expected
+    assert repository._total_committed_bytes > 0  # type: ignore[attr-defined]
 
 
 def test_sensitive_payload_is_wrapped_immediately_and_collection_requires_ack(
@@ -547,7 +807,11 @@ def test_sensitive_payload_is_wrapped_immediately_and_collection_requires_ack(
         "disclosures": [],
         "next": {"kind": "user_review"},
     }
-    service.commit_result(binding, encode(result_payload), result_credential=result_credential)
+    result_json = encode(result_payload)
+    service.commit_result(binding, result_json, result_credential=result_credential)
+    assert record.result_envelope is not None
+    assert result_json not in repr(record).encode()
+    assert result_json not in record.result_envelope.wrapped_payload
     first = service.collect(binding.mailbox_id, collection_credential=collection_credential)
     second = service.collect(binding.mailbox_id, collection_credential=collection_credential)
     assert first == second
@@ -563,6 +827,33 @@ def test_sensitive_payload_is_wrapped_immediately_and_collection_requires_ack(
     assert after_ack.staged_evidence_count == 0
 
 
+@pytest.mark.parametrize("tamper", ("wrapped_body", "digest_metadata"))
+def test_wrapped_result_authentication_detects_body_or_metadata_tampering(
+    action_payload: dict[str, Any], clock: FakeClock, tamper: str
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    service.commit_result(
+        binding,
+        _result(binding, ResultCode.CANDIDATE_OBSERVED, NextStepKind.USER_REVIEW),
+        result_credential=result_credential,
+    )
+    wrapped = repository._records[binding.mailbox_id].result_envelope  # type: ignore[attr-defined]
+    assert wrapped is not None
+    if tamper == "wrapped_body":
+        wrapped.wrapped_payload = (
+            bytes([wrapped.wrapped_payload[0] ^ 1]) + wrapped.wrapped_payload[1:]
+        )
+    else:
+        wrapped.payload_digest = "sha256:" + "0" * 64
+    with pytest.raises(MailboxError) as denied:
+        service.collect(binding.mailbox_id, collection_credential=collection_credential)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
 def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(
     action_payload: dict[str, Any], clock: FakeClock
 ) -> None:
@@ -571,7 +862,6 @@ def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(
         max_total_evidence_bytes=1024,
         max_total_committed_bytes=1024,
         terminal_retention=timedelta(seconds=1),
-        uncollected_retention=timedelta(seconds=1),
         tombstone_retention=timedelta(minutes=5),
         max_tombstones=2,
     )
@@ -615,6 +905,56 @@ def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(
     with pytest.raises(MailboxError) as gone:
         service.snapshot(first_id, collection_credential=collection_credential)
     assert gone.value.denial is MailboxDenial.REPLAY
+
+
+def test_tombstone_capacity_never_shortens_configured_mailbox_replay_horizon(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository(
+        limits=MailboxLimits(
+            max_mailboxes=2,
+            max_total_active_material_bytes=4096,
+            max_total_evidence_bytes=1024,
+            max_total_committed_bytes=4096,
+            terminal_retention=timedelta(seconds=1),
+            tombstone_retention=timedelta(days=30),
+            max_tombstones=1,
+        )
+    )
+    configured = [
+        _configure(
+            action_payload,
+            clock,
+            repository=repository,
+            mailbox_id=uuid4(),
+            credentials=_credentials(seed),
+            offer=False,
+        )
+        for seed in (10, 20)
+    ]
+    clock.current = configured[0][1].claim_deadline_utc
+    configured[0][0].expire_due(maintenance_credential=MAINTENANCE_CREDENTIAL)
+    clock.current += timedelta(seconds=1)
+    removed = configured[0][0].garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+    assert len(removed) == 1
+    assert configured[0][0].garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL) == ()
+
+    removed_id = removed[0]
+    retained = next(item for item in configured if item[1].mailbox_id != removed_id)
+    with pytest.raises(MailboxError) as tombstoned:
+        configured[0][0].snapshot(
+            removed_id,
+            collection_credential=next(
+                item[4] for item in configured if item[1].mailbox_id == removed_id
+            ),
+        )
+    assert tombstoned.value.denial is MailboxDenial.REPLAY
+    assert (
+        retained[0].snapshot(retained[1].mailbox_id, collection_credential=retained[4]).state
+        is MailboxState.EXPIRED
+    )
+    assert len(repository._tombstones) == 1  # type: ignore[attr-defined]
+    assert len(repository._records) == 1  # type: ignore[attr-defined]
 
 
 @dataclass(slots=True)

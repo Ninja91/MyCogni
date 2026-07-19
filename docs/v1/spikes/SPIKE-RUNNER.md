@@ -28,6 +28,11 @@ the collection credential held by trusted core. Installation-wide expiry and GC
 require a distinct maintenance credential. There is no unauthenticated snapshot,
 offer, expiry, or cleanup surface.
 
+The volatile repository cannot be constructed without an explicitly provisioned
+maintenance credential digest. It must be exact immutable 32-byte digest material;
+there is no generated, unknown default. Provisioning rejects equality with action,
+claim, result, or collection roles for every active mailbox before mutation.
+
 ## State and collection axes
 
 Mailbox lifecycle and trusted-core delivery are deliberately separate:
@@ -59,6 +64,9 @@ stateDiagram-v2
 credential-scoped snapshot is redacted to mailbox ID, internal axes, byte/count
 totals, and retention flags; it does not expose the action binding. External status
 rendering is outside this component and must never map these states to an outcome.
+Snapshot samples and validates time after acquiring the repository lock, advances
+the record high-water, applies due expiry, and reports the observed instant plus
+claim/result deadlines. It cannot render an indefinitely stale `offered` state.
 
 Collection is two-phase. `collect` begins or resumes delivery without deleting the
 bundle. Only `acknowledge_collection`, called after the trusted consumer durably
@@ -80,8 +88,10 @@ digest, claim deadline, result deadline, wall-budget metadata, and response byte
 The repository samples its clock only after acquiring the transaction lock. A
 caller blocked behind another transaction cannot carry a stale service-layer time
 sample across the lock. Rollback against the per-record high-water fails before
-mutation. Durable time high-water and restore-epoch handling remain persistent
-adapter requirements.
+mutation. Authenticated GC advances both the installation high-water and every
+surviving record's high-water in the same locked transaction; a later claim or new
+mailbox cannot roll back behind a completed sweep. Durable time high-water and
+restore-epoch handling remain persistent adapter requirements.
 
 Four per-action secrets are pairwise distinct and at least 256 bits:
 
@@ -120,9 +130,11 @@ Connector evidence is named an **untrusted sensitive payload**, not ciphertext.
 `payload_digest` detects mismatch but proves neither origin nor encryption. The
 storage adapter must immediately wrap and authenticate bytes under a mailbox-owned
 storage key before retention, then authenticate and unwrap only for core
-collection. The volatile adapter demonstrates this contract with AES-256-GCM and
-metadata-bound associated data. Its process-local key is intentionally not a
-production key-management design.
+collection. The full canonical result envelope is subject to the same rule; the
+repository retains only its bounded size, digest, nonce, and authenticated wrapped
+body rather than plaintext result fields. The volatile adapter demonstrates this
+contract with AES-256-GCM and binding/metadata-associated data. Its process-local
+key is intentionally not a production key-management design.
 
 Raw payload bodies are absent from repr, snapshots, and finite error text. Tests use
 PII canaries to prove the volatile record retains authenticated wrapped bytes rather
@@ -133,28 +145,42 @@ files.
 Per mailbox, result-envelope bytes plus staged evidence bytes must be less than or
 equal to the exact action response budget. Evidence also has item and protocol
 aggregate bounds. Installation limits independently bound active records, total
-evidence bytes, and total committed response bytes; capacity exhaustion returns
-finite backpressure without mutation.
+offered envelope/key/credential material, total evidence bytes, and total committed
+response bytes; capacity exhaustion returns finite backpressure without mutation.
+Small-host defaults are 64 records, 16 MiB active claim material, 64 MiB staged
+evidence, and 64 MiB committed responses. Claims/expiry/abandonment release active
+material quota in the same transaction.
 
 ## Retention, GC, and replay
 
-Committed but unacknowledged bundles and acknowledged/expired/abandoned records
-have separate finite retention windows. Authenticated GC removes eligible records,
-releases quota counters, and creates finite tombstones. Tombstones reject mailbox
-ID replay for their configured retention window and are themselves TTL- and
-count-bounded. This intentionally chooses bounded replay memory; after tombstone
-expiry, unpredictable UUIDv4 IDs, fresh credentials, dispatch epochs, fences, and a
-durable restore epoch must provide the remaining defense in a production adapter.
+Authenticated GC never deletes a committed bundle that lacks durable consumer ack,
+even after months idle. It remains visibly `ready` or `delivering` for reconciliation
+and idempotent redelivery; bounded installation quotas apply backpressure instead
+of inventing a retry or silently losing possible-effect evidence. A future privacy
+horizon may destroy such data only after trusted core durably records and
+acknowledges a typed loss/reconciliation fact. This spike intentionally does not
+invent that authority.
+
+Acknowledged/expired/abandoned records have a finite terminal retention window.
+GC removes eligible terminal records, releases quota counters, and creates finite
+tombstones. Tombstones reject mailbox-ID replay for their full configured horizon.
+When tombstone capacity is full, additional terminal records remain in the record
+table as replay barriers until a tombstone slot expires; no tombstone is evicted
+early. After the configured horizon, unpredictable UUIDv4 IDs, fresh credentials,
+dispatch epochs, fences, and a durable restore epoch must provide the remaining
+defense in a production adapter.
 
 Concurrency tests cover single claim/commit winners and installation evidence
 saturation. Crash edges cover claim, evidence, result commit, and collection ack.
-Long-idle uncollected bundles are collected by policy rather than retained without
-bound.
+Tests cover months-idle redelivery, GC/claim clock races, and tombstone-capacity
+overflow without shortening replay retention.
 
 ## Nonclaims and remaining runtime work
 
 - `VolatileMailboxRepository` loses all state and its wrapping key on restart. It
   must never carry a real action.
+- A persistent adapter must atomically recover/redeliver unacknowledged bundles
+  after restart before it can carry a real action.
 - AES-GCM here proves the adapter contract only. Production requires durable
   envelope-key management, rotation, restore-epoch invalidation, backup policy,
   and restart/crash recovery.

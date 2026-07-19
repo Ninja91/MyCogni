@@ -142,17 +142,18 @@ def _require_utc(value: datetime, field_name: str) -> None:
 class MailboxLimits:
     """Finite installation bounds and authenticated-GC retention windows."""
 
-    max_mailboxes: int = 256
-    max_total_evidence_bytes: int = 268_435_456
-    max_total_committed_bytes: int = 268_435_456
+    max_mailboxes: int = 64
+    max_total_active_material_bytes: int = 16_777_216
+    max_total_evidence_bytes: int = 67_108_864
+    max_total_committed_bytes: int = 67_108_864
     terminal_retention: timedelta = timedelta(days=7)
-    uncollected_retention: timedelta = timedelta(days=30)
     tombstone_retention: timedelta = timedelta(days=30)
     max_tombstones: int = 4_096
 
     def __post_init__(self) -> None:
         for name in (
             "max_mailboxes",
+            "max_total_active_material_bytes",
             "max_total_evidence_bytes",
             "max_total_committed_bytes",
             "max_tombstones",
@@ -160,7 +161,7 @@ class MailboxLimits:
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive exact integer")
-        for name in ("terminal_retention", "uncollected_retention", "tombstone_retention"):
+        for name in ("terminal_retention", "tombstone_retention"):
             value = getattr(self, name)
             if type(value) is not timedelta or value <= timedelta(0):
                 raise ValueError(f"{name} must be a positive timedelta")
@@ -320,6 +321,9 @@ class MailboxSnapshot:
     result_present: bool
     claim_material_retained: bool
     result_credential_material_retained: bool
+    observed_at_utc: datetime
+    claim_deadline_utc: datetime
+    result_deadline_utc: datetime
 
     def __post_init__(self) -> None:
         _require_uuid4(self.mailbox_id, "mailbox_id")
@@ -337,3 +341,9 @@ class MailboxSnapshot:
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise ValueError(f"{field_name} must be an exact bool")
+        for field_name in (
+            "observed_at_utc",
+            "claim_deadline_utc",
+            "result_deadline_utc",
+        ):
+            _require_utc(getattr(self, field_name), field_name)

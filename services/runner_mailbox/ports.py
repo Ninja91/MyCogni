@@ -81,7 +81,9 @@ class MailboxRepository(Protocol):
         result_json: bytes,
         evidence_seals: tuple[EvidenceSeal, ...],
         clock: Clock,
-    ) -> MailboxSnapshot: ...
+    ) -> MailboxSnapshot:
+        """Atomically authenticate-wrap the full canonical result before retention."""
+        ...
 
     def collect(
         self,
@@ -118,4 +120,5 @@ class MailboxRepository(Protocol):
         self,
         mailbox_id: UUID,
         collection_credential_digest: bytes,
+        clock: Clock,
     ) -> MailboxSnapshot: ...

@@ -321,6 +321,9 @@ def test_public_snapshots_are_frozen_and_validate_exact_scalar_types(
             result_present=1,  # type: ignore[arg-type]
             claim_material_retained=False,
             result_credential_material_retained=False,
+            observed_at_utc=snapshot.observed_at_utc,
+            claim_deadline_utc=binding.claim_deadline_utc,
+            result_deadline_utc=binding.deadline_utc,
         )
 
 
@@ -409,6 +412,7 @@ def test_clock_rollback_cannot_extend_an_offered_mailbox(
     with pytest.raises(MailboxError) as uncertainty:
         offered.claim(binding, claim_credential=CLAIM_CREDENTIAL)
     _assert_denial(MailboxDenial.INTERNAL_UNCERTAINTY, uncertainty)
+    clock.current += timedelta(seconds=1)
     snapshot = offered.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     assert snapshot.state is MailboxState.OFFERED
     assert not snapshot.result_present

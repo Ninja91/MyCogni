@@ -38,6 +38,7 @@ from services.runner_mailbox.ports import Clock, FailureInjector
 
 _CREDENTIAL_CONTEXT = b"mycogni.runner-mailbox.credential.v1\x00"
 _WRAP_CONTEXT = b"mycogni.runner-mailbox.evidence-wrap.v1\x00"
+_RESULT_WRAP_CONTEXT = b"mycogni.runner-mailbox.result-wrap.v1\x00"
 
 
 def _validated_utc_now(clock: Clock) -> datetime:
@@ -75,6 +76,14 @@ class _WrappedEvidence:
 
 
 @dataclass(slots=True)
+class _WrappedResult:
+    payload_digest: str
+    byte_count: int
+    nonce: bytes = field(repr=False)
+    wrapped_payload: bytes = field(repr=False)
+
+
+@dataclass(slots=True)
 class _Record:
     binding: ActionBinding
     created_at: datetime
@@ -89,7 +98,7 @@ class _Record:
     result_credential: bytearray | None = field(default=None, repr=False)
     result_credential_digest: bytes | None = field(default=None, repr=False)
     evidence: dict[UUID, _WrappedEvidence] = field(default_factory=dict, repr=False)
-    result_json: bytes | None = field(default=None, repr=False)
+    result_envelope: _WrappedResult | None = field(default=None, repr=False)
     committed_at: datetime | None = None
     terminal_at: datetime | None = None
 
@@ -112,7 +121,7 @@ class VolatileMailboxRepository:
         self,
         failure_injector: FailureInjector | None = None,
         *,
-        maintenance_credential_digest: bytes | None = None,
+        maintenance_credential_digest: bytes,
         limits: MailboxLimits | None = None,
         storage_key: bytes | None = None,
     ) -> None:
@@ -120,14 +129,19 @@ class VolatileMailboxRepository:
         self._tombstones: dict[UUID, _Tombstone] = {}
         self._lock = RLock()
         self._failure = failure_injector or NoFailureInjector()
-        self._maintenance_credential_digest = bytes(
-            maintenance_credential_digest or secrets.token_bytes(32)
-        )
+        if (
+            type(maintenance_credential_digest) is not bytes
+            or len(maintenance_credential_digest) != 32
+        ):
+            raise ValueError("maintenance_credential_digest must be exactly 32 bytes")
+        self._maintenance_credential_digest = bytes(maintenance_credential_digest)
         self._limits = limits or MailboxLimits()
         key = storage_key or AESGCM.generate_key(bit_length=256)
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("storage_key must be exactly 32 bytes")
         self._aead = AESGCM(key)
+        self._installation_last_seen_utc: datetime | None = None
+        self._total_active_material_bytes = 0
         self._total_evidence_bytes = 0
         self._total_committed_bytes = 0
 
@@ -140,7 +154,7 @@ class VolatileMailboxRepository:
         clock: Clock,
     ) -> MailboxSnapshot:
         with self._lock:
-            now = _validated_utc_now(clock)
+            now = self._validated_installation_now(clock)
             if binding.mailbox_id in self._records:
                 raise MailboxError(MailboxDenial.ALREADY_EXISTS)
             if binding.mailbox_id in self._tombstones:
@@ -156,6 +170,15 @@ class VolatileMailboxRepository:
                     }
                 )
                 != 3
+            ):
+                raise MailboxError(MailboxDenial.INVALID_INPUT)
+            if any(
+                hmac.compare_digest(self._maintenance_credential_digest, digest)
+                for digest in (
+                    action_credential_digest,
+                    claim_credential_digest,
+                    collection_credential_digest,
+                )
             ):
                 raise MailboxError(MailboxDenial.INVALID_INPUT)
             if any(
@@ -178,6 +201,7 @@ class VolatileMailboxRepository:
                 collection_credential_digest=bytes(collection_credential_digest),
             )
             self._records[binding.mailbox_id] = record
+            self._advance_installation_time(now)
             return self._snapshot(record)
 
     def offer(
@@ -212,6 +236,10 @@ class VolatileMailboxRepository:
                     != 4
                 ):
                     raise MailboxError(MailboxDenial.INVALID_INPUT)
+                if hmac.compare_digest(
+                    self._maintenance_credential_digest, result_credential_digest
+                ):
+                    raise MailboxError(MailboxDenial.INVALID_INPUT)
                 if self._credential_in_use(
                     result_credential_digest, excluding=record.binding.mailbox_id
                 ):
@@ -220,12 +248,19 @@ class VolatileMailboxRepository:
                     raise MailboxError(MailboxDenial.EXPIRED)
                 if record.state is not MailboxState.EMPTY:
                     raise MailboxError(MailboxDenial.REPLAY)
+                active_bytes = len(envelope_json) + len(action_key) + len(result_credential)
+                if (
+                    self._total_active_material_bytes + active_bytes
+                    > self._limits.max_total_active_material_bytes
+                ):
+                    raise MailboxError(MailboxDenial.QUOTA_EXCEEDED)
                 record.envelope_json = bytes(envelope_json)
                 record.action_key = bytearray(action_key)
                 record.result_credential = bytearray(result_credential)
                 record.result_credential_digest = bytes(result_credential_digest)
                 record.state = MailboxState.OFFERED
-                record.last_seen_utc = now
+                self._observe_time(record, now)
+                self._total_active_material_bytes += active_bytes
                 return self._snapshot(record)
             finally:
                 _wipe(action_key)
@@ -254,7 +289,7 @@ class VolatileMailboxRepository:
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
             self._failure.hit(CrashPoint.BEFORE_CLAIM_COMMIT)
             record.state = MailboxState.CLAIMED_ONCE
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             try:
                 self._failure.hit(CrashPoint.AFTER_CLAIM_COMMIT)
                 return ClaimedAction(
@@ -306,7 +341,7 @@ class VolatileMailboxRepository:
             )
             self._failure.hit(CrashPoint.BEFORE_EVIDENCE_COMMIT)
             record.evidence[evidence.object_id] = item
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             self._total_evidence_bytes += item.byte_count
             self._failure.hit(CrashPoint.AFTER_EVIDENCE_COMMIT)
             return self._snapshot(record)
@@ -347,13 +382,25 @@ class VolatileMailboxRepository:
                 > self._limits.max_total_committed_bytes
             ):
                 raise MailboxError(MailboxDenial.QUOTA_EXCEEDED)
+            result_digest = "sha256:" + hashlib.sha256(result_json).hexdigest()
+            result_nonce = secrets.token_bytes(12)
+            wrapped_result = self._aead.encrypt(
+                result_nonce,
+                result_json,
+                self._result_aad(record.binding, result_digest),
+            )
             self._failure.hit(CrashPoint.BEFORE_RESULT_COMMIT)
-            record.result_json = bytes(result_json)
+            record.result_envelope = _WrappedResult(
+                payload_digest=result_digest,
+                byte_count=len(result_json),
+                nonce=result_nonce,
+                wrapped_payload=wrapped_result,
+            )
             record.state = MailboxState.RESULT_COMMITTED
             record.collection_state = CollectionState.READY
             record.result_credential_digest = None
             record.committed_at = now
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             self._total_committed_bytes += response_bytes
             self._failure.hit(CrashPoint.AFTER_RESULT_COMMIT)
             return self._snapshot(record)
@@ -372,17 +419,18 @@ class VolatileMailboxRepository:
             )
             if record.collection_state is CollectionState.ACKNOWLEDGED:
                 raise MailboxError(MailboxDenial.REPLAY)
-            if record.state is not MailboxState.RESULT_COMMITTED or record.result_json is None:
+            if record.state is not MailboxState.RESULT_COMMITTED or record.result_envelope is None:
                 raise MailboxError(MailboxDenial.INVALID_STATE)
             if record.collection_state not in {CollectionState.READY, CollectionState.DELIVERING}:
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
             evidence = tuple(
                 self._unwrap(record.binding.mailbox_id, item) for item in record.evidence.values()
             )
+            result_json = self._unwrap_result(record.binding, record.result_envelope)
             record.collection_state = CollectionState.DELIVERING
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             return CommittedBundle(
-                binding=record.binding, result_json=record.result_json, evidence=evidence
+                binding=record.binding, result_json=result_json, evidence=evidence
             )
 
     def acknowledge_collection(
@@ -398,6 +446,7 @@ class VolatileMailboxRepository:
                 record.collection_credential_digest, collection_credential_digest
             )
             if record.collection_state is CollectionState.ACKNOWLEDGED:
+                self._observe_time(record, now)
                 return self._snapshot(record)
             if (
                 record.state is not MailboxState.RESULT_COMMITTED
@@ -408,7 +457,7 @@ class VolatileMailboxRepository:
             self._release_record_payloads(record)
             record.collection_state = CollectionState.ACKNOWLEDGED
             record.terminal_at = now
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             self._failure.hit(CrashPoint.AFTER_COLLECTION_ACK)
             return self._snapshot(record)
 
@@ -435,22 +484,24 @@ class VolatileMailboxRepository:
             self._clear_action_material(record)
             record.state = MailboxState.ABANDONED
             record.terminal_at = now
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             return self._snapshot(record)
 
     def expire(self, maintenance_credential_digest: bytes, clock: Clock) -> tuple[UUID, ...]:
         with self._lock:
             self._require_maintenance(maintenance_credential_digest)
-            sampled = [
-                (record, self._validated_record_now(record, clock))
-                for record in self._records.values()
-            ]
+            now = self._validated_installation_now(clock)
+            for record in self._records.values():
+                if now < record.last_seen_utc:
+                    raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
             expired: list[UUID] = []
-            for record, now in sampled:
-                if self._expire_if_due(record, now):
+            for record in self._records.values():
+                was_expired = record.state is MailboxState.EXPIRED
+                if self._expire_if_due(record, now) and not was_expired:
                     expired.append(record.binding.mailbox_id)
                 else:
-                    record.last_seen_utc = now
+                    self._observe_time(record, now)
+            self._advance_installation_time(now)
             return tuple(sorted(expired, key=str))
 
     def garbage_collect(
@@ -458,46 +509,55 @@ class VolatileMailboxRepository:
     ) -> tuple[UUID, ...]:
         with self._lock:
             self._require_maintenance(maintenance_credential_digest)
-            now = _validated_utc_now(clock)
+            now = self._validated_installation_now(clock)
             for record in self._records.values():
                 if now < record.last_seen_utc:
                     raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            # The installation sweep is itself an observation of time. Advance
+            # every surviving record's high-water in the same locked transaction
+            # so a later caller cannot roll the clock back past a completed GC.
+            for record in self._records.values():
+                record.last_seen_utc = now
+            self._advance_installation_time(now)
+            for mailbox_id, tombstone in tuple(self._tombstones.items()):
+                if tombstone.expires_at <= now:
+                    del self._tombstones[mailbox_id]
             removed: list[UUID] = []
-            for mailbox_id, record in tuple(self._records.items()):
+            ordered_records = sorted(
+                self._records.items(),
+                key=lambda item: (
+                    item[1].terminal_at or now,
+                    str(item[0]),
+                ),
+            )
+            for mailbox_id, record in ordered_records:
                 terminal_due = (
                     record.terminal_at is not None
                     and now - record.terminal_at >= self._limits.terminal_retention
                 )
-                uncollected_due = (
-                    record.committed_at is not None
-                    and record.collection_state is not CollectionState.ACKNOWLEDGED
-                    and now - record.committed_at >= self._limits.uncollected_retention
-                )
-                if terminal_due or uncollected_due:
+                if terminal_due and len(self._tombstones) < self._limits.max_tombstones:
                     self._discard_record(record)
                     del self._records[mailbox_id]
                     self._tombstones[mailbox_id] = _Tombstone(
                         created_at=now, expires_at=now + self._limits.tombstone_retention
                     )
                     removed.append(mailbox_id)
-            for mailbox_id, tombstone in tuple(self._tombstones.items()):
-                if tombstone.expires_at <= now:
-                    del self._tombstones[mailbox_id]
-            if len(self._tombstones) > self._limits.max_tombstones:
-                oldest = sorted(
-                    self._tombstones,
-                    key=lambda item: (self._tombstones[item].created_at, str(item)),
-                )
-                for mailbox_id in oldest[: len(self._tombstones) - self._limits.max_tombstones]:
-                    del self._tombstones[mailbox_id]
             return tuple(sorted(removed, key=str))
 
-    def snapshot(self, mailbox_id: UUID, collection_credential_digest: bytes) -> MailboxSnapshot:
+    def snapshot(
+        self,
+        mailbox_id: UUID,
+        collection_credential_digest: bytes,
+        clock: Clock,
+    ) -> MailboxSnapshot:
         with self._lock:
             record = self._record(mailbox_id)
             self._require_credential(
                 record.collection_credential_digest, collection_credential_digest
             )
+            now = self._validated_record_now(record, clock)
+            if not self._expire_if_due(record, now):
+                self._observe_time(record, now)
             return self._snapshot(record)
 
     def _record(self, mailbox_id: UUID) -> _Record:
@@ -547,15 +607,29 @@ class VolatileMailboxRepository:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         self._require_credential(record.result_credential_digest, result_credential_digest)
 
-    @staticmethod
-    def _validated_record_now(record: _Record, clock: Clock) -> datetime:
+    def _validated_installation_now(self, clock: Clock) -> datetime:
         now = _validated_utc_now(clock)
+        if self._installation_last_seen_utc is not None and now < self._installation_last_seen_utc:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+        return now
+
+    def _validated_record_now(self, record: _Record, clock: Clock) -> datetime:
+        now = self._validated_installation_now(clock)
         if now < record.last_seen_utc:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         return now
 
+    def _advance_installation_time(self, now: datetime) -> None:
+        if self._installation_last_seen_utc is None or now > self._installation_last_seen_utc:
+            self._installation_last_seen_utc = now
+
+    def _observe_time(self, record: _Record, now: datetime) -> None:
+        record.last_seen_utc = now
+        self._advance_installation_time(now)
+
     def _expire_if_due(self, record: _Record, now: datetime) -> bool:
         if record.state is MailboxState.EXPIRED:
+            self._observe_time(record, now)
             return True
         deadline = (
             record.binding.claim_deadline_utc
@@ -569,7 +643,7 @@ class VolatileMailboxRepository:
             self._clear_action_material(record)
             record.state = MailboxState.EXPIRED
             record.terminal_at = now
-            record.last_seen_utc = now
+            self._observe_time(record, now)
             return True
         return False
 
@@ -578,8 +652,13 @@ class VolatileMailboxRepository:
         record.result_credential_digest = None
         self._release_record_payloads(record)
 
-    @staticmethod
-    def _clear_claim_delivery_material(record: _Record) -> None:
+    def _clear_claim_delivery_material(self, record: _Record) -> None:
+        active_bytes = (
+            (len(record.envelope_json) if record.envelope_json is not None else 0)
+            + (len(record.action_key) if record.action_key is not None else 0)
+            + (len(record.result_credential) if record.result_credential is not None else 0)
+        )
+        self._total_active_material_bytes -= active_bytes
         _wipe(record.action_key)
         _wipe(record.result_credential)
         record.action_key = None
@@ -589,12 +668,12 @@ class VolatileMailboxRepository:
     def _release_record_payloads(self, record: _Record) -> None:
         evidence_bytes = self._record_evidence_bytes(record)
         committed_bytes = (
-            len(record.result_json) if record.result_json is not None else 0
+            record.result_envelope.byte_count if record.result_envelope is not None else 0
         ) + evidence_bytes
         self._total_evidence_bytes -= evidence_bytes
         if record.committed_at is not None:
             self._total_committed_bytes -= committed_bytes
-        record.result_json = None
+        record.result_envelope = None
         record.evidence.clear()
 
     def _discard_record(self, record: _Record) -> None:
@@ -636,6 +715,32 @@ class VolatileMailboxRepository:
         )
 
     @staticmethod
+    def _result_aad(binding: ActionBinding, payload_digest: str) -> bytes:
+        return (
+            _RESULT_WRAP_CONTEXT
+            + binding.mailbox_id.bytes
+            + binding.action_id.bytes
+            + binding.attempt_id.bytes
+            + payload_digest.encode()
+        )
+
+    def _unwrap_result(self, binding: ActionBinding, item: _WrappedResult) -> bytes:
+        try:
+            payload = self._aead.decrypt(
+                item.nonce,
+                item.wrapped_payload,
+                self._result_aad(binding, item.payload_digest),
+            )
+        except InvalidTag:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
+        if (
+            len(payload) != item.byte_count
+            or "sha256:" + hashlib.sha256(payload).hexdigest() != item.payload_digest
+        ):
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+        return payload
+
+    @staticmethod
     def _snapshot(record: _Record) -> MailboxSnapshot:
         return MailboxSnapshot(
             mailbox_id=record.binding.mailbox_id,
@@ -643,8 +748,11 @@ class VolatileMailboxRepository:
             collection_state=record.collection_state,
             staged_evidence_count=len(record.evidence),
             staged_evidence_bytes=sum(item.byte_count for item in record.evidence.values()),
-            result_present=record.result_json is not None,
+            result_present=record.result_envelope is not None,
             claim_material_retained=record.action_key is not None
             or record.envelope_json is not None,
             result_credential_material_retained=record.result_credential is not None,
+            observed_at_utc=record.last_seen_utc,
+            claim_deadline_utc=record.binding.claim_deadline_utc,
+            result_deadline_utc=record.binding.deadline_utc,
         )

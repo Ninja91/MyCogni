@@ -318,7 +318,9 @@ class RunnerMailboxService:
         self._require_mailbox_id(mailbox_id)
         self._require_credential(collection_credential)
         return self._repository.snapshot(
-            mailbox_id, self._credential_digester.digest(collection_credential)
+            mailbox_id,
+            self._credential_digester.digest(collection_credential),
+            self._clock,
         )
 
     @staticmethod
