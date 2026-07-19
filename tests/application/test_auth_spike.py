@@ -325,6 +325,118 @@ def test_installation_requires_exactly_three_unique_roots_before_any_store_mutat
         assert store.record_counts()["roots"] == 3
 
 
+def test_installation_authority_namespaces_are_globally_disjoint_and_atomic() -> None:
+    first_installation = OpaqueId.new()
+    first_actor = OpaqueId.new()
+    first_profile = OpaqueId.new()
+    second_installation = OpaqueId.new()
+    second_actor = OpaqueId.new()
+    second_profile = OpaqueId.new()
+
+    def records(
+        installation: OpaqueId,
+        actor: OpaqueId,
+        profile: OpaqueId,
+        handles: tuple[OpaqueId, OpaqueId, OpaqueId] | None = None,
+    ) -> tuple[RootCapabilityRecord, ...]:
+        selected = handles or (OpaqueId.new(), OpaqueId.new(), OpaqueId.new())
+        return tuple(
+            RootCapabilityRecord(
+                handle=handle,
+                installation_id=installation,
+                actor_id=actor,
+                represented_profile_id=profile,
+                purpose=purpose,
+                digest=SecretDigest(hashlib.sha256(f"{installation}:{purpose}".encode()).digest()),
+            )
+            for handle, purpose in zip(selected, RootPurpose, strict=True)
+        )
+
+    first_roots = records(first_installation, first_actor, first_profile)
+    first_operator = RootCapabilityIssue(
+        OpaqueId.new(), SecretDigest(hashlib.sha256(b"first-operator").digest())
+    )
+    first_service = RootCapabilityIssue(
+        OpaqueId.new(), SecretDigest(hashlib.sha256(b"first-service").digest())
+    )
+    fresh_roots = records(second_installation, second_actor, second_profile)
+
+    def issue(handle: OpaqueId, label: bytes) -> RootCapabilityIssue:
+        return RootCapabilityIssue(handle, SecretDigest(hashlib.sha256(label).digest()))
+
+    shared_incoming_handle = OpaqueId.new()
+    collision_cases = (
+        (
+            records(
+                second_installation,
+                second_actor,
+                second_profile,
+                (first_roots[0].handle, fresh_roots[1].handle, fresh_roots[2].handle),
+            ),
+            issue(OpaqueId.new(), b"operator"),
+            issue(OpaqueId.new(), b"service"),
+        ),
+        (fresh_roots, issue(first_service.handle, b"operator-swap"), issue(OpaqueId.new(), b"s")),
+        (fresh_roots, issue(OpaqueId.new(), b"o"), issue(first_operator.handle, b"service-swap")),
+        (
+            records(
+                second_installation,
+                second_actor,
+                second_profile,
+                (first_operator.handle, fresh_roots[1].handle, fresh_roots[2].handle),
+            ),
+            issue(OpaqueId.new(), b"operator"),
+            issue(OpaqueId.new(), b"service"),
+        ),
+        (fresh_roots, issue(first_roots[1].handle, b"operator-root"), issue(OpaqueId.new(), b"s")),
+        (fresh_roots, issue(OpaqueId.new(), b"o"), issue(first_roots[2].handle, b"service-root")),
+        (
+            fresh_roots,
+            issue(first_service.handle, b"operator-combined"),
+            issue(first_operator.handle, b"service-combined"),
+        ),
+        (
+            fresh_roots,
+            issue(first_operator.handle, b"operator-repeat"),
+            issue(OpaqueId.new(), b"service-fresh"),
+        ),
+        (
+            fresh_roots,
+            issue(OpaqueId.new(), b"operator-fresh"),
+            issue(first_service.handle, b"service-repeat"),
+        ),
+        (
+            fresh_roots,
+            issue(shared_incoming_handle, b"same-incoming-operator"),
+            issue(shared_incoming_handle, b"same-incoming-service"),
+        ),
+    )
+
+    for second_roots, second_operator, second_service in collision_cases:
+        store = VolatileAuthDecisionStore()
+        store.initialize_installation(
+            installation_id=first_installation,
+            actor_id=first_actor,
+            represented_profile_id=first_profile,
+            records=first_roots,
+            operator_authority=first_operator,
+            service_identity=first_service,
+            now=NOW,
+        )
+        before = store.record_counts()
+        with pytest.raises(ValueError, match="authority"):
+            store.initialize_installation(
+                installation_id=second_installation,
+                actor_id=second_actor,
+                represented_profile_id=second_profile,
+                records=second_roots,
+                operator_authority=second_operator,
+                service_identity=second_service,
+                now=NOW,
+            )
+        assert store.record_counts() == before
+
+
 def test_bootstrap_is_short_lived_attempt_bounded_and_concurrently_one_use() -> None:
     service, clock, source, _store, setup = _service(
         policy=AuthPolicy(bootstrap_ttl_seconds=10, activation_delay_seconds=2, max_attempts=2)
@@ -628,6 +740,34 @@ def test_operator_wrong_purpose_and_capacity_guidance_is_exact_and_non_destructi
     assert "retry the dedicated reprovision ceremony" in transcript
     assert bootstrap.operator_code() not in (wrong_purpose_tty.getvalue() + transcript)
     assert service.authenticate_session(initial.session).value == initial.session.handle
+
+
+def test_dedicated_reprovision_wrong_purpose_consumes_no_authority_or_proof() -> None:
+    service, _clock, _source, _store, setup = _service()
+    actor, profile, roots = _provision(setup)
+    bootstrap = _allowed(service.begin_bootstrap(roots.initial_bootstrap))
+    tty = PseudoTty()
+    assert (
+        exchange_reprovision_on_tty(
+            service,
+            submitted_code=bootstrap.operator_code(),
+            operator_tty=tty,
+            operator_authority=setup.reprovision_operator_authority,
+        ).denial
+        is AuthDenial.WRONG_PURPOSE
+    )
+    transcript = tty.getvalue()
+    assert "no ceremony, root, session, or recovery authority was consumed" in transcript
+    assert "begin the dedicated reprovision flow" in transcript
+    assert "current offline reprovision route" in transcript
+    assert bootstrap.operator_code() not in transcript
+    assert service.reprovision_ceremony_counts() == {
+        "active": 0,
+        "tombstones": 0,
+        "total": 0,
+    }
+    exchange = _allowed(service.exchange_bootstrap(bootstrap))
+    assert (exchange.actor_id, exchange.represented_profile_id) == (actor, profile)
 
 
 def test_reprovision_ceremony_replay_survives_only_its_finite_horizon() -> None:

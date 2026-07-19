@@ -184,18 +184,31 @@ class VolatileAuthDecisionStore:
                 for record in records
             ):
                 raise ValueError("root capability bindings do not match trusted setup")
+            incoming_root_handles = {record.handle for record in records}
+            existing_composition_handles = {
+                handle
+                for binding in self._composition_bindings.values()
+                for handle in (
+                    binding.operator_handle,
+                    binding.service_handle,
+                )
+            }
+            if incoming_root_handles & (self._roots.keys() | existing_composition_handles):
+                raise ValueError("root authority handle collides with existing authority namespace")
             if (
                 type(operator_authority) is not RootCapabilityIssue
                 or type(service_identity) is not RootCapabilityIssue
                 or operator_authority.handle == service_identity.handle
             ):
                 raise ValueError("trusted setup requires distinct composition authority identities")
-            if any(
-                binding.operator_handle == operator_authority.handle
-                or binding.service_handle == service_identity.handle
-                for binding in self._composition_bindings.values()
+            incoming_composition_handles = {
+                operator_authority.handle,
+                service_identity.handle,
+            }
+            if incoming_composition_handles & (
+                self._roots.keys() | existing_composition_handles | incoming_root_handles
             ):
-                raise ValueError("composition authority identity is already bound")
+                raise ValueError("composition authority handle collides with authority namespace")
             self._installation_actors[installation_id] = actor_id
             self._actors[actor_id] = ActorRecord(
                 actor_id=actor_id,
@@ -1108,4 +1121,5 @@ class VolatileAuthDecisionStore:
                 "step_ups": len(self._step_ups),
                 "grant_provenance": len(self._grant_provenance),
                 "reprovision_ceremonies": len(self._reprovision_ceremonies),
+                "composition_bindings": len(self._composition_bindings),
             }

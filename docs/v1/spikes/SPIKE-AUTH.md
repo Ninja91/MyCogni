@@ -66,6 +66,10 @@ Missing/forged/foreign boundary identity, foreign service, cross-store/cross-ins
 and concurrent uses fail closed. There is no public Boolean or confirmation-shaped port that asserts
 confirmation.
 
+Root, operator, and service handles occupy one globally disjoint authority namespace. Installation setup
+rejects collisions with every existing root and both roles of every existing composition binding, including
+operator/service role swaps, before mutating any actor, root, or binding state.
+
 Ceremony authorizations have a 60-second default TTL, a 16-active-record default capacity, a 64-tombstone hard
 cap, and a five-minute replay horizon. Saturation denies before registration. Expired and used records become
 non-secret store-owned tombstones; explicit service GC and store authorization operations remove them after the replay horizon,
@@ -155,6 +159,8 @@ loss before handoff can leave no route. Declining occurs before consumption and 
 ordinary bootstrap exchange rejects this route as `wrong_purpose`; only the reprovision ceremony can consume
 it. The confirmed path additionally requires the boundary's opaque, bootstrap-bound, one-use authorization.
 The composition-held boundary identity is distinct from both the reprovision root and the bootstrap code.
+A wrong-purpose submission to the dedicated flow is rejected before proof registration; its operator guidance
+therefore states that no ceremony, root, session, or recovery authority was consumed.
 
 Input uses the port's `read_secret_no_echo`; there is no command-line argument, URL, query string, or ordinary
 stdout/stderr secret path. The test proves only that the injected channel does not echo. A production adapter
@@ -219,8 +225,10 @@ Focused regressions cover:
   redisplay, purpose-fixed code-only reprovision, generic-exchange rejection, forged ceremony denial,
   forged/missing operator-boundary denial, destructive decline preservation, one-use/replay/concurrent ceremony
   authorization, store-generic purpose-set impossibility, foreign service/operator and cross-store/installation
-  denial, post-proof crash closure, expiry/saturation/counts/bounded tombstones/replay-horizon GC, interrupted
-  reprovision redisplay, malformed grant denials, unknown/retired guidance, bounded GC, redacted
+  denial, global authority-namespace collision/swap rejection, atomic no-mutation setup failure, post-proof
+  crash closure, wrong-purpose zero-proof preservation, expiry/saturation/counts/bounded
+  tombstones/replay-horizon GC, interrupted reprovision redisplay, malformed grant denials,
+  unknown/retired guidance, bounded GC, redacted
   traceback/rendering, no URL/argv path, typed diagnostics, and the executable transcript.
 
 These tests are spike evidence, not canonical `VFY-AUTH-001`. That verification remains `PLANNED` until

@@ -316,9 +316,9 @@ def _exchange_bootstrap_on_tty(
         elif outcome.denial is AuthDenial.WRONG_PURPOSE:
             if reprovision:
                 guidance = (
-                    "submitted code is not a reprovision bootstrap; the short-lived ceremony "
-                    "authorization was consumed, but no root, session, or recovery authority "
-                    "was changed; use the dedicated reprovision ceremony with the current route"
+                    "submitted code is not a reprovision bootstrap; no ceremony, root, session, "
+                    "or recovery authority was consumed; begin the dedicated reprovision flow "
+                    "with the current offline reprovision route"
                 )
             else:
                 guidance = "use the dedicated reprovision ceremony; no authority was consumed"
