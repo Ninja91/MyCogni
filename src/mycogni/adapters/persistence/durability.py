@@ -431,7 +431,7 @@ def _quick_check(engine: Engine, lease: SQLiteWriterLease) -> str:
     with engine.connect() as connection:
         rows = tuple(str(row[0]) for row in connection.execute(text("PRAGMA quick_check")))
     if rows != ("ok",):
-        raise SQLiteRecoveryError(f"SQLite quick_check failed: {rows!r}")
+        raise SQLiteRecoveryError("SQLite quick_check failed")
     return rows[0]
 
 
@@ -543,11 +543,13 @@ class SQLiteRuntime:
                     ),
                 ),
             )
-        except BaseException:
+        except BaseException as error:
             if engine is not None:
                 engine.dispose()
             lease.release()
-            raise
+            if isinstance(error, SQLiteRecoveryError):
+                raise
+            raise SQLiteRecoveryError("SQLite startup validation failed") from None
 
     def close_cleanly(self) -> None:
         """Checkpoint, validate, dispose, then durably remove the dirty marker."""
@@ -560,7 +562,11 @@ class SQLiteRuntime:
                 raise SQLiteRecoveryError(f"clean-shutdown checkpoint incomplete: {checkpoint!r}")
             _quick_check(self.engine, self.lease)
         except BaseException as error:
-            failure = error
+            failure = (
+                error
+                if isinstance(error, SQLiteRecoveryError)
+                else SQLiteRecoveryError("clean-shutdown validation failed")
+            )
         finally:
             self.engine.dispose()
 

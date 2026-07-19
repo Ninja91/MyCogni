@@ -102,7 +102,8 @@ def test_online_migration_connection_uses_required_policy(tmp_path: Path) -> Non
     finally:
         event.remove(Pool, "checkout", observe_checkout)
 
-    assert observed == [(1, "wal", 2, expected_timeout, database_path)]
+    assert len(observed) >= 4
+    assert all(item == (1, "wal", 2, expected_timeout, database_path) for item in observed)
 
 
 @pytest.mark.parametrize(

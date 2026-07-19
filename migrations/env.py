@@ -5,14 +5,12 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
 
 from mycogni.adapters.persistence import (
     Base,
     SQLiteProcessRole,
+    SQLiteRuntime,
     SQLiteSettings,
-    SQLiteWriterLease,
-    create_sqlite_engine,
 )
 
 config = context.config
@@ -54,23 +52,19 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations against the explicitly configured database."""
     settings = _database_settings()
-    lease = SQLiteWriterLease.acquire(settings, role=SQLiteProcessRole.MIGRATION)
-    connectable = create_sqlite_engine(settings, writer_lease=lease, poolclass=pool.NullPool)
+    with (
+        SQLiteRuntime.open(settings, role=SQLiteProcessRole.MIGRATION) as runtime,
+        runtime.engine.connect() as connection,
+    ):
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            render_as_batch=True,
+        )
 
-    try:
-        with connectable.connect() as connection:
-            context.configure(
-                connection=connection,
-                target_metadata=target_metadata,
-                compare_type=True,
-                render_as_batch=True,
-            )
-
-            with context.begin_transaction():
-                context.run_migrations()
-    finally:
-        connectable.dispose()
-        lease.release()
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 if context.is_offline_mode():
