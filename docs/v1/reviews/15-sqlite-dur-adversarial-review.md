@@ -1,14 +1,16 @@
 # SQLITE-DUR-001 adversarial review and remediation chronology
 
 Review targets: integrated decision/evidence commit `0fff920`; first
-remediation `1dfd256`; second remediation `7cb58fa` with evidence `d5ffc53`
+remediation `1dfd256`; second remediation `7cb58fa` with evidence `d5ffc53`;
+final-round remediation `02f91ce` with evidence `9ed5e28`
 
-Remediation commits: `1dfd256`; `7cb58fa`; latest remediation `02f91ce`
+Remediation commits: `1dfd256`; `7cb58fa`; `02f91ce`; latest remediation
+`f01b3c5`
 
-Current verdict: **latest backend and architecture REJECT findings remediated;
-independent re-review pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`.
-Reviewer names below are role labels, not model identities, human
-qualifications, attestations or certifications.
+Current verdict: **edge final REJECT finding remediated; independent re-review
+pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role
+labels, not model identities, human qualifications, attestations or
+certifications.
 
 ## Independent review passes against `0fff920`
 
@@ -154,10 +156,35 @@ Neither final review recorded acceptance.
 The focused lane after latest remediation is 79 passing tests with Ruff and
 mypy clean. This is implementation evidence, not a review verdict.
 
+## Edge final review against `02f91ce` — REJECT (P1: 1)
+
+The backend reviewer accepted its exact target, but the independent edge pass
+found a cleanup/shutdown interleaving that still lost recovery evidence:
+
+1. A UoW commit succeeded and `Session.close()` performed its real connection
+   checkin, then paused before raising a synthetic cleanup failure. Clean close
+   could seal, validate and read `READY` during that delay, remove the marker and
+   release. The delayed cleanup callback then published pause without a lease or
+   latch; a replacement runtime started `READY`.
+
+The edge review recorded REJECT, not acceptance.
+
+## Cleanup/shutdown remediation in `f01b3c5`
+
+| Edge finding | Integrated disposition and deterministic evidence |
+| --- | --- |
+| Pause lost after real checkin | Readiness admission is serialized and each runtime-owned UoW reserves the single application-work lock from entry through commit/rollback, real session close, PII-free cleanup-failure pause callback and terminal release. |
+| Shutdown crosses pending cleanup | Clean close and abandon atomically deny new admission, then must acquire the same work reservation and hold it through seal, validation, marker handling and lease release. They never block on it while holding the readiness lock. |
+| Exact forced interleaving | A deterministic regression delays after real checkin and before close failure. Shutdown fails with marker/latch/lease retained; the callback publishes `storage_io_failure`, commit returns known success with one row, and retry removes only the dirty marker while the recovery latch survives. |
+| Reservation release correctness | Failed entry and failed/successful commit/rollback paths terminalize and release the work reservation exactly once; manual commit plus context exit cannot double-release. |
+
+The focused lane after this remediation is 80 passing tests with Ruff and mypy
+clean. This remains implementation evidence only.
+
 ## Residual risk and next decision
 
 This record does not convert any REJECT into ACCEPT. An independent pass must
-review commit `02f91ce` and record its own commit-bound verdict.
+review commit `f01b3c5` and record its own commit-bound verdict.
 
 SQLAlchemy hooks prevent an inherited SQLAlchemy connection from executing in a
 forked child, but cannot revoke a raw SQLite/file descriptor inherited outside

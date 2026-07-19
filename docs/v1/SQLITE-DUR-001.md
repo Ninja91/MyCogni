@@ -6,7 +6,7 @@ Implementation role: Luna-labelled Principal Core/Data Engineer (role label
 only; no model identity attestation)
 
 Integrated implementation commits: `1d67f87`, `b0c4b38`, `103c977`,
-`1dfd256`, `7cb58fa`, `02f91ce`
+`1dfd256`, `7cb58fa`, `02f91ce`, `f01b3c5`
 
 Decision/evidence commits: `0fff920`, plus the documentation commit containing
 this revision
@@ -49,7 +49,7 @@ ADR-0012 freezes the local-lite SQLite contract:
 
 ## Deterministic executable evidence
 
-The focused suite contains 79 tests across database policy, migrations and
+The focused suite contains 80 tests across database policy, migrations and
 durability. It covers:
 
 - required PRAGMA readback and rejection of an unexpected physical target;
@@ -90,6 +90,10 @@ durability. It covers:
 - known-success commit and rollback followed by close failure, proving the UoW
   is terminal, data outcome remains unambiguous, original body errors are not
   masked, and runtime/external work pauses;
+- a forced cleanup/shutdown interleaving after real connection checkin but before
+  delayed close failure, proving the UoW reservation still blocks shutdown,
+  marker/latch/lease remain, pause publishes before reservation release, the row
+  exists exactly once and retry retains recovery-required state;
 - transient directory-fsync failure after marker unlink, proving the marker is
   recreated and a recovery latch preserved while ownership remains held;
 - a recovery latch that survives a later clean restart, blocks migration/no-op
@@ -141,8 +145,9 @@ abandon-pause and shutdown checkout-race behavior; `7cb58fa` remediates that
 second pass. Final backend and architecture reviews still rejected
 validation/release ordering, concurrent runtime lifecycle and UoW retry
 ambiguity; `02f91ce` remediates those findings, but independent commit-bound
-re-review and the required host conformance evidence remain open. It does not
-promote `JOB-STATE-001`, `MIG-001`, `BAK-001`, any dispatch journal, or any live
-external action. See
+re-review still rejected a cleanup-pause/shutdown race; `f01b3c5` remediates it,
+but another independent commit-bound re-review and the required host conformance
+evidence remain open. It does not promote `JOB-STATE-001`, `MIG-001`, `BAK-001`,
+any dispatch journal, or any live external action. See
 `docs/v1/reviews/15-sqlite-dur-adversarial-review.md` for chronology and
 disposition.

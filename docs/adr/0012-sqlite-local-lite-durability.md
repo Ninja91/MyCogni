@@ -56,6 +56,9 @@ and the same unit cannot be reused after failure or cleanup error. When commit
 or rollback is known successful, a later session-close failure pauses runtime
 and external work through a PII-free callback but does not turn success into an
 ambiguous exception that invites retry or masks an existing body exception.
+Admission and readiness publication share a lock, and the one application-work
+reservation remains held through SQLite checkin, session close, cleanup-failure
+pause publication and terminal release.
 
 ### Connection policy
 
@@ -140,7 +143,12 @@ release is serialized as `ACTIVE`/`SEALED` → `RELEASING` → `INACTIVE` before
 during and after `LOCK_UN`; re-entry is denied while releasing and an unlock
 failure restores the prior lifecycle. A separate runtime lifecycle lock rejects
 concurrent clean-close/abandon callers before either can unseal or release for
-the other.
+the other. Both shutdown paths first atomically deny new application admission,
+then must acquire the same application-work reservation and hold it through
+lease release. A UoW whose real checkin has completed but whose cleanup outcome
+is pending therefore wins the reservation: shutdown preserves marker/latch and
+ownership, the cleanup callback publishes pause, and only a later retry may
+close.
 
 `SQLITE_FULL`, `SQLITE_IOERR`, corruption/not-a-database, unexpected writer
 contention and blocked shutdown produce fixed typed, PII-free operator states,
