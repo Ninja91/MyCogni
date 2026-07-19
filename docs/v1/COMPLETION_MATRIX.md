@@ -147,7 +147,8 @@ simulator and network-deny foundations:
 3. obtain the externally rooted authenticated PF-002 semantic-review
    attestation now that amd64/arm64 build and hardened runtime evidence exists;
 4. preserve SQLITE-DUR-001's implemented software contract while obtaining
-   independent review/host conformance, and start SPIKE-KEY;
+   independent review/host conformance, and implement SPIKE-KEY under ADR-0013's no-fallback,
+   strict-wrap and owner-only-provider charter;
 5. retain SPIKE-EGRESS and SPIKE-BROWSER behind the accepted NET boundary, and add
    connector SDK minimum/latest Pydantic coverage before any public SDK release.
 
@@ -228,7 +229,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-KEY | SPIKE-KEY | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: SPIKE-KEY | SPIKE-KEY | `IN_PROGRESS` | ADR-0013, `spikes/SPIKE-KEY.md`, `reviews/16-spike-key-design-adversarial-review.md`; native owner-file/strict-wrap contract implemented with 59 focused tests after two-hat design review | exact-target three-hat code review, native process/host evidence, macOS Keychain and rootless-Linux/Docker-Desktop conformance remain open; no KEY-001/KEY-002 claim |
 | Canonical inventory: SPIKE-RUNNER | SPIKE-RUNNER | `IN_PROGRESS` | `b2bfa15`, `reviews/13-spike-runner-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 843 focused tests on both runtimes | authenticated package acceptance, persistent adapter/restart evidence and runner-specific OCI containment remain open; PF-002 proves only trusted-core packaging |
 | Canonical inventory: TRUST-001 | TRUST-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: UPDATE-001 | UPDATE-001 | `NOT_STARTED` | — | follow work-package dependency order |

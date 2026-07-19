@@ -40,7 +40,7 @@ One core image exposes `serve`, `worker`, `scheduler`, and local `all-in-one` ro
 Domain code depends on typed ports:
 
 - `VaultPort`: release a policy-approved attribute bundle by opaque action reference;
-- `SecretPort`: wrap/unwrap independent profile keys without persisting the install/cloud KEK;
+- `SecretPort`: create and context-bind independent profile keys through one explicit KEK provider/reference without returning or persisting the install/cloud KEK; no provider fallback or runtime provisioning;
 - `ActorPort`: authenticate, step up, and validate actor/profile/scope/revocation epoch;
 - `BrokerRegistryPort`: resolve versioned, monotonic, unexpired capability metadata;
 - `ConnectorPort`: invoke one digest-pinned artifact action;

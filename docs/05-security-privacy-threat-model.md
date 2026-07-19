@@ -56,11 +56,11 @@ Confidentiality, integrity, and availability all matter. A compromise can expose
 
 ## Cryptographic design
 
-- Generate a random installation/cloud key-encryption key (KEK) at setup and hold it in OS keychain, mounted secret, or KMS—not application data/evidence backups.
+- Generate a random installation/cloud key-encryption key (KEK) only through an explicit administration ceremony and hold it in one explicitly configured provider/reference—not application data/evidence backups. There is no provider discovery, fallback, environment-variable KEK, runtime replacement or legacy guessing; native owner-only file, macOS helper, container key-only volume and cloud KMS are separate conformance profiles under ADR-0013.
 - Generate an independent random profile data-encryption key (DEK) per profile; never derive it from the KEK.
 - Wrap each profile DEK with the KEK; classify the wrapped-key catalog and include it in the managed online-consistent encrypted-state archive while keeping KEK/recovery material separate.
 - Derive field, evidence, blind-index, session, and event-authentication keys below the profile DEK with context-bound HKDF.
-- Encrypt with a reviewed authenticated-encryption library/algorithm selected during implementation review; AES-256-GCM with unique nonces is the portability baseline, XChaCha20-Poly1305 a candidate.
+- Wrap 32-byte profile DEKs with strict AES-256-GCM format/AAD v1 and unique 96-bit nonces under ADR-0013. Any later suite is a new reviewed format, not runtime algorithm negotiation.
 - Bind ciphertext to tenant/install, table/object, record, profile, schema version, field/purpose, and key version as associated data.
 - Rotation rewraps profile DEKs first; purpose/algorithm changes may re-encrypt. Interrupted rotation is resumable and versioned.
 - Profile deletion destroys the live wrapped DEK and indexes/session keys only after external-action reconciliation. Reports cover live state and known managed archives that can recover the DEK, plus an external-copy caveat.

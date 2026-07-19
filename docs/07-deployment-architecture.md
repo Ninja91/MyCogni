@@ -54,16 +54,28 @@ Outbound:
 - private, loopback, link-local, and cloud metadata destinations are denied for custom URLs.
 - WebSocket, QUIC, DoH, downloads, and undeclared protocols are denied in the default connector/browser profile.
 
-## Secret sources
+## Secret providers
 
-Supported order:
+Composition selects exactly one named provider profile and exact non-secret key reference. There
+is no provider discovery or fallback, and KEKs are never accepted from environment variables.
+Routine startup never creates, overwrites, rotates, chmods or repairs key material; missing,
+locked, unsafe, corrupt or wrong material keeps key-dependent work paused.
 
-1. cloud KMS/secret manager or Docker secret file descriptor;
-2. OS keychain helper for local use;
-3. root-readable file mounted read-only;
-4. environment variables only as a compatibility fallback with a warning.
+The M0 executable baseline is a separately pre-provisioned owner-only file for native macOS/Linux
+operation. It is exact-owner, regular, single-link, mode `0400` or `0600`, descriptor-opened
+without following symlinks and structurally disjoint from all data, evidence and managed-backup
+roots. A future macOS Security.framework provider is a host-native helper, not a facility exposed
+to the Linux container.
 
-Example files contain names, never real values. Startup refuses default keys, world-readable secret files, missing persistent storage, or a public bind without explicit authentication configuration.
+The rootless-container candidate is a distinct key-only named volume provisioned for UID `65532`,
+with directory `0700`, key `0400`, and a read-only core mount separate from data/evidence. It is
+not supported until rootless Linux Engine and Docker Desktop pass separate exact-host matrices.
+Compose file secrets do not by themselves prove portable UID/mode behavior or encryption at rest.
+Linux Secret Service is an experimental explicit desktop helper, never the headless/NAS baseline.
+Cloud KMS remains a post-v1 cloud-small profile. See ADR-0013 and the SPIKE-KEY evidence document.
+
+Example files contain names, never real values. Startup also refuses default keys, missing
+persistent storage, or a public bind without explicit authentication configuration.
 
 ## Backup and recovery
 
