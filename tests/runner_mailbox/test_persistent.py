@@ -7,7 +7,7 @@ import multiprocessing
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from uuid import UUID
@@ -20,6 +20,7 @@ from services.runner_mailbox import (
     EvidenceUpload,
     MailboxDenial,
     MailboxError,
+    MailboxLimits,
     MailboxState,
     PersistentMailboxRepository,
     RunnerMailboxService,
@@ -336,6 +337,33 @@ def test_state_frame_rejects_epoch_substitution_and_sqlite_is_hardened(tmp_path:
         connection.close()
 
 
+def test_state_frame_rejects_subsecond_retention_policy_substitution(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    digester = Sha256CredentialDigester()
+    baseline = MailboxLimits(terminal_retention=timedelta(seconds=1, microseconds=1))
+    repository = PersistentMailboxRepository(
+        path,
+        maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+        storage_key=_STORAGE_KEY,
+        installation_epoch=_INSTALLATION_EPOCH,
+        restore_epoch=_RESTORE_EPOCH,
+        limits=baseline,
+    )
+    repository.close()
+    with pytest.raises(MailboxError) as substituted:
+        PersistentMailboxRepository(
+            path,
+            maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+            storage_key=_STORAGE_KEY,
+            installation_epoch=_INSTALLATION_EPOCH,
+            restore_epoch=_RESTORE_EPOCH,
+            limits=MailboxLimits(
+                terminal_retention=timedelta(seconds=1, microseconds=2)
+            ),
+        )
+    assert substituted.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork regression")
 def test_inherited_repository_is_denied_before_child_touches_parent_sqlite_connection(
     tmp_path: Path,
@@ -354,3 +382,167 @@ def test_inherited_repository_is_denied_before_child_touches_parent_sqlite_conne
     _, status = os.waitpid(child, 0)
     assert os.waitstatus_to_exitcode(status) == 0
     repository.close()
+
+
+def test_existing_hardlink_is_rejected_before_sqlite_or_chmod_mutation(tmp_path: Path) -> None:
+    source = tmp_path / "operator-file"
+    source.write_bytes(b"synthetic-operator-content")
+    source.chmod(0o640)
+    database = tmp_path / "runner.sqlite"
+    os.link(source, database)
+    before = source.stat()
+    with pytest.raises(MailboxError) as denied:
+        _repository(database)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    after = source.stat()
+    assert source.read_bytes() == b"synthetic-operator-content"
+    assert after.st_mode == before.st_mode
+    assert after.st_nlink == 2
+
+
+def _generation(path: Path) -> int:
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            "SELECT generation FROM runner_mailbox_state WHERE singleton = 1"
+        ).fetchone()
+        assert row is not None and type(row[0]) is int
+        return row[0]
+    finally:
+        connection.close()
+
+
+def test_unchanged_unauthorized_denial_does_not_rewrite_frame(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service, binding = _offered(path, clock, _action())
+    before = _generation(path)
+    with pytest.raises(MailboxError) as denied:
+        service.snapshot(binding.mailbox_id, collection_credential=b"x" * 32)
+    assert denied.value.denial is MailboxDenial.UNAUTHORIZED
+    assert _generation(path) == before
+    service._repository.close()  # type: ignore[attr-defined]
+
+
+def test_begin_contention_is_finite_backpressure_and_does_not_poison(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service, binding = _offered(path, clock, _action())
+    blocker = sqlite3.connect(path, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(MailboxError) as denied:
+            service.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
+        assert denied.value.denial is MailboxDenial.CONTENDED
+        assert service._repository.recovery_required is False  # type: ignore[attr-defined]
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+    assert (
+        service.snapshot(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL).state
+        is MailboxState.OFFERED
+    )
+    service._repository.close()  # type: ignore[attr-defined]
+
+
+@dataclass(slots=True)
+class RaiseAfterCommit:
+    armed: bool = False
+
+    def before_commit(self) -> None:
+        return None
+
+    def after_commit(self) -> None:
+        if self.armed:
+            raise sqlite3.OperationalError("synthetic post-commit uncertainty")
+
+
+def test_post_commit_uncertainty_poison_can_be_closed_idempotently(tmp_path: Path) -> None:
+    hook = RaiseAfterCommit()
+    digester = Sha256CredentialDigester()
+    repository = PersistentMailboxRepository(
+        tmp_path / "runner.sqlite",
+        maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+        storage_key=_STORAGE_KEY,
+        installation_epoch=_INSTALLATION_EPOCH,
+        restore_epoch=_RESTORE_EPOCH,
+        persistence_hook=hook,
+    )
+    service = RunnerMailboxService(
+        repository,
+        StaticClock(datetime(2030, 1, 1, tzinfo=UTC)),
+        digester,
+        FixedCredentialSource(),
+    )
+    binding = _binding(service, _action())
+    hook.armed = True
+    with pytest.raises(MailboxError) as uncertain:
+        service.open_empty(
+            binding,
+            action_credential=ACTION_KEY,
+            claim_credential=CLAIM_CREDENTIAL,
+            collection_credential=COLLECTION_CREDENTIAL,
+        )
+    assert uncertain.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert repository.recovery_required is True
+    repository.close()
+    repository.close()
+
+
+def test_oversize_outer_frame_fails_closed_before_authentication(tmp_path: Path) -> None:
+    limits = MailboxLimits(
+        max_mailboxes=1,
+        max_total_active_material_bytes=1,
+        max_total_evidence_bytes=1,
+        max_total_committed_bytes=1,
+        max_tombstones=1,
+    )
+    path = tmp_path / "runner.sqlite"
+    digester = Sha256CredentialDigester()
+    repository = PersistentMailboxRepository(
+        path,
+        maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+        storage_key=_STORAGE_KEY,
+        installation_epoch=_INSTALLATION_EPOCH,
+        restore_epoch=_RESTORE_EPOCH,
+        limits=limits,
+    )
+    repository.close()
+    oversized = b"z" * (8_388_608 + 20)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "UPDATE runner_mailbox_state SET ciphertext = ?, ciphertext_digest = ? "
+            "WHERE singleton = 1",
+            (oversized, hashlib.sha256(oversized).digest()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(MailboxError) as denied:
+        PersistentMailboxRepository(
+            path,
+            maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+            storage_key=_STORAGE_KEY,
+            installation_epoch=_INSTALLATION_EPOCH,
+            restore_epoch=_RESTORE_EPOCH,
+            limits=limits,
+        )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+def test_exhausted_generation_requires_operator_key_rotation(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    repository = _repository(path)
+    repository.close()
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "UPDATE runner_mailbox_state SET generation = 100000000 WHERE singleton = 1"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(MailboxError) as denied:
+        _repository(path)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY

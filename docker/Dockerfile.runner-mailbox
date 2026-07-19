@@ -1,0 +1,57 @@
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv
+
+FROM docker.io/library/python@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS build
+
+COPY --from=uv /uv /uvx /bin/
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_DEV=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/opt/mycogni-runner/.venv
+
+WORKDIR /build
+
+COPY pyproject.toml uv.lock build-constraints.txt README.md LICENSE NOTICE ./
+COPY packages/mycogni-connector-sdk ./packages/mycogni-connector-sdk
+COPY packages/mycogni-runner-mailbox-runtime ./packages/mycogni-runner-mailbox-runtime
+COPY services/runner_mailbox ./services/runner_mailbox
+
+RUN uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime \
+    && PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('services.runner_mailbox') is not None; assert importlib.util.find_spec('mycogni') is None" \
+    && rm -rf /root/.cache/uv \
+    && chown -R 0:0 /opt/mycogni-runner /build/services \
+    && chmod -R a-w /opt/mycogni-runner /build/services
+
+FROM docker.io/library/python@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS runner-mailbox
+
+ARG BUILD_CREATED="1970-01-01T00:00:00Z"
+ARG VERSION="0.0.0"
+ARG VCS_REF="unknown"
+
+LABEL org.opencontainers.image.created="${BUILD_CREATED}" \
+      org.opencontainers.image.description="MyCogni synthetic runner mailbox sidecar probe" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/Ninja91/MyCogni" \
+      org.opencontainers.image.title="MyCogni runner mailbox" \
+      org.opencontainers.image.version="${VERSION}"
+
+ENV HOME=/tmp/mycogni-runner \
+    PATH=/opt/mycogni-runner/.venv/bin:/usr/local/bin:/usr/bin:/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/opt/mycogni-runner \
+    PYTHONUNBUFFERED=1 \
+    TMPDIR=/tmp/mycogni-runner
+
+RUN install -d -o 0 -g 0 -m 0555 /opt/mycogni-runner \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni-runner /tmp/mycogni-runner
+
+COPY --from=build /opt/mycogni-runner/.venv /opt/mycogni-runner/.venv
+COPY --from=build /build/services /opt/mycogni-runner/services
+
+WORKDIR /var/lib/mycogni-runner
+USER 65532:65532
+
+ENTRYPOINT ["/opt/mycogni-runner/.venv/bin/python", "-m", "mycogni_runner_mailbox_runtime.container_probe"]
+CMD ["--state", "/var/lib/mycogni-runner/probe.sqlite"]

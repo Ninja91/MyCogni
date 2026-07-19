@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mycogni-runner-mailbox-runtime"
+version = "0.0.0"
+description = "Locked dependency anchor for the isolated MyCogni runner mailbox artifact"
+requires-python = ">=3.12,<3.14"
+license = "Apache-2.0"
+dependencies = [
+  "cryptography>=44,<47",
+  "mycogni-connector-sdk",
+]
+
+[tool.uv.sources]
+mycogni-connector-sdk = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mycogni_runner_mailbox_runtime"]

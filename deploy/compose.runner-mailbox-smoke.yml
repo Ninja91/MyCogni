@@ -1,14 +1,15 @@
-# Runner-only containment probe.  It has no connector, broker, core, vault or
-# Docker-socket mount and no network namespace connection.  The named volume is
-# deliberately the one writable durable state location; an empty first mount
-# inherits the image's 65532-owned directory.  This is a synthetic hardening
-# probe, not a runnable real-broker connector profile.
+# Synthetic runner-mailbox sidecar containment probe. The required image value
+# must be an exact local sha256 image ID; a tag is rejected by the validator.
+# There is no connector, broker, trusted-core, vault or Docker-socket mount.
 services:
   mycogni-runner-mailbox-smoke:
-    image: mycogni/core:0.0.0
+    image: ${MYCOGNI_RUNNER_IMAGE:?set MYCOGNI_RUNNER_IMAGE to an exact sha256 image ID}
+    pull_policy: never
     user: "65532:65532"
     read_only: true
     network_mode: none
+    ipc: private
+    cgroup: private
     cap_drop:
       - ALL
     security_opt:
@@ -27,21 +28,8 @@ services:
         read_only: false
         volume:
           nocopy: false
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        test "$(id -u)" = 65532
-        test ! -w /opt/mycogni
-        test -w /var/lib/mycogni-runner
-        test -w /tmp/mycogni-runner
-        test ! -e /var/run/docker.sock
-        grep -Eq '^Seccomp:[[:space:]]*2$' /proc/self/status
-        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('169.254.169.254',80)) != 0"
-        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('192.168.65.2',80)) != 0"
-        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('1.1.1.1',53)) != 0"
-        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(socket.AF_INET6); s.settimeout(.2); assert s.connect_ex(('fd00:ec2::254',80)) != 0"
-        printf '%s\n' 'runner mailbox containment smoke passed'
+    command: ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
 volumes:
   runner-mailbox-state:
+    name: mycogni-runner-mailbox-state-smoke
     driver: local

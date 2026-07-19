@@ -17,3 +17,11 @@
 !packages/mycogni-connector-sdk/README.md
 !packages/mycogni-connector-sdk/src/
 !packages/mycogni-connector-sdk/src/**
+!packages/mycogni-runner-mailbox-runtime/
+!packages/mycogni-runner-mailbox-runtime/pyproject.toml
+!packages/mycogni-runner-mailbox-runtime/src/
+!packages/mycogni-runner-mailbox-runtime/src/**
+
+!services/
+!services/runner_mailbox/
+!services/runner_mailbox/**

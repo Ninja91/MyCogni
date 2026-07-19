@@ -65,6 +65,7 @@ class MailboxDenial(StrEnum):
     EVIDENCE_UNREFERENCED = "evidence_unreferenced"
     EVIDENCE_LIMIT = "evidence_limit"
     QUOTA_EXCEEDED = "quota_exceeded"
+    CONTENDED = "contended"
     INTERNAL_UNCERTAINTY = "internal_uncertainty"
 
 
@@ -85,6 +86,7 @@ _SAFE_MESSAGES: dict[MailboxDenial, str] = {
     MailboxDenial.EVIDENCE_UNREFERENCED: "staged evidence is not referenced by the result",
     MailboxDenial.EVIDENCE_LIMIT: "mailbox response exceeds its aggregate bound",
     MailboxDenial.QUOTA_EXCEEDED: "mailbox installation capacity is exhausted",
+    MailboxDenial.CONTENDED: "mailbox writer is temporarily contended",
     MailboxDenial.INTERNAL_UNCERTAINTY: "mailbox operation ended with internal uncertainty",
 }
 

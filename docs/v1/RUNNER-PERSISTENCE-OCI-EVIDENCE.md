@@ -1,43 +1,64 @@
-# SPIKE-RUNNER persistent-state and containment evidence — 2026-07-19
+# SPIKE-RUNNER persistent-state and OCI evidence — 2026-07-19
+
+## Scope and current truth
+
+`PersistentMailboxRepository` is a POSIX local-lite adapter for the existing
+finite mailbox state machine. `docker/Dockerfile.runner-mailbox` builds a real,
+separate synthetic mailbox artifact: it installs the connector contract and
+runner-mailbox runtime anchor, copies `services/runner_mailbox`, and build-time
+asserts the trusted `mycogni` application package is absent. The executable is
+only a fixed-input containment probe. It accepts no action or credential input.
+
+This does **not** close the untrusted connector gap. There is still no accepted
+connector artifact, credential-delivery channel, egress gateway topology,
+signed publication, or live-broker capability.
 
 ## Executable state evidence
 
-`PersistentMailboxRepository` persists a bounded, canonical JSON state frame in
-SQLite rather than serializing Python objects. The encrypted frame is committed
-inside `BEGIN IMMEDIATE`; two independent spawned processes were allowed one
-claim winner only. Focused tests also close/reopen offered, claimed, committed
-and acknowledged state; kill a child immediately before SQLite commit (the
-offer remains) and immediately after commit before reply (the claim persists);
-and deny inherited parent repositories after `fork`.
+The adapter persists one bounded canonical JSON v1 frame under AES-GCM in a
+SQLite `BEGIN IMMEDIATE` transaction. Tests cover restart across every retained
+state, independent-process one-claim serialization, process loss immediately
+before and after commit, ciphertext canaries, epoch substitution, fork refusal,
+pre-open hardlink rejection without mutation, unchanged-denial no-write,
+finite non-poisoning contention, post-commit poison/idempotent close, maximum
+frame rejection and finite generation/key-rotation exhaustion.
 
-Focused Python 3.12 evidence:
+Current locked-lane counts are populated only from commands below; the exact
+source-bound Docker image ID and runtime transcript are recorded after the
+implementation commit is built with its exact revision label.
+
+## Reproduction
 
 ```text
-tests/runner_mailbox/test_persistent.py: 8 passed
-tests/architecture/test_runner_containment.py: 7 passed
-mypy -p services.runner_mailbox: Success (6 source files)
+uv run --all-packages --frozen --python 3.12.12 ruff check .
+uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 ruff check .
+uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment.py
+
+docker buildx build --platform linux/arm64 --load \
+  --tag mycogni/runner-mailbox:local \
+  --build-arg VCS_REF=<exact-implementation-commit> \
+  --build-arg BUILD_CREATED=<UTC-RFC3339> \
+  --file docker/Dockerfile.runner-mailbox .
+docker image inspect mycogni/runner-mailbox:local --format '{{.Id}}'
+python3 scripts/verify_runner_containment_runtime.py \
+  --image sha256:<exact-local-image-id> \
+  --revision <exact-implementation-commit>
 ```
 
-The DB/WAL canary test proves the synthetic action value is absent from durable
-bytes. This is a narrow ciphertext-at-rest test, not a general logs, backups,
-swap or secure-erasure claim.
+The runtime verifier refuses tags and dirty pre-existing smoke state. It checks
+the image revision label, entrypoint, absence of Compose environment injection,
+UID, read-only root, network/IPC/PID/cgroup isolation, capabilities, security
+options, resource/restart policy, exact mounts, probe sentinel and exit status.
+It then removes the container and named volume and proves both are absent.
 
-## Docker Desktop local reproduction
+## Nonclaims
 
-On Docker Desktop 4.82.0 / Engine 29.6.1, native linux/arm64 built local image
-ID `sha256:45ff4e740f0b0e6703f1ed715bed3c2495545eee6ff9bb7f1b139ec2e49a5012`
-from this worktree. The runner-only Compose profile completed its in-container
-checks (UID 65532, immutable application path, writable runner volume/tmpfs,
-absent Docker socket, seccomp mode 2 and failed metadata/host-gateway/public
-IPv4/IPv6 connection probes).
-
-Docker inspect reported `NetworkMode=none`, `ReadonlyRootfs=true`,
-`CapDrop=[ALL]`, `SecurityOpt=[no-new-privileges:true]`, private cgroup and IPC
-namespaces, no published ports, `PidsLimit=64`, `Memory=536870912`,
-`NanoCpus=1000000000`, init enabled, restart policy `no`, one local named volume
-at `/var/lib/mycogni-runner`, and a 32 MiB noexec/nosuid/nodev tmpfs. The Engine
-default seccomp filter was active (`Seccomp: 2` inside the container).
-
-This was a synthetic trusted-sidecar containment smoke. Its image is a local
-tag, not a signed immutable published runner artifact, and it has no untrusted
-connector sidecar. It must not be cited as connector OCI acceptance.
+Local Docker Desktop evidence is not multi-architecture publication, signature,
+SBOM/provenance, manifest freshness, rootless/user-namespace conformance,
+physical power-loss qualification, backup recovery, external rollback detection,
+secure erasure, malicious connector cleanup, or connector OCI acceptance. Public
+IPv6 and ULA IPv6 are separate probes; neither is described as link-local.

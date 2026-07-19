@@ -6,6 +6,7 @@ requires-python = ">=3.12, <3.14"
 members = [
     "mycogni",
     "mycogni-connector-sdk",
+    "mycogni-runner-mailbox-runtime",
 ]
 
 [[package]]
@@ -580,6 +581,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.10,<3" }]
+
+[[package]]
+name = "mycogni-runner-mailbox-runtime"
+version = "0.0.0"
+source = { editable = "packages/mycogni-runner-mailbox-runtime" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "mycogni-connector-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=44,<47" },
+    { name = "mycogni-connector-sdk", editable = "packages/mycogni-connector-sdk" },
+]
 
 [[package]]
 name = "mypy"

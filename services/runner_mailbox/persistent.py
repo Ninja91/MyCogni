@@ -21,9 +21,11 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 from base64 import b64decode, b64encode
 from binascii import Error as BinasciiError
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -66,6 +68,10 @@ _OUTER_KEY_CONTEXT = b"mycogni.runner-mailbox.sqlite-frame-key.v1\x00"
 _INNER_KEY_CONTEXT = b"mycogni.runner-mailbox.persistent-inner-key.v1\x00"
 _CONFIG_CONTEXT = b"mycogni.runner-mailbox.persistent-config.v1\x00"
 _MAX_FRAME_OVERHEAD = 8_388_608
+# A state-changing transition consumes one independently random 96-bit outer
+# nonce and at most one new inner retained-material nonce.  Operators must rotate
+# the storage key and start a reviewed new lineage before this generation.
+_MAX_FRAME_GENERATION = 100_000_000
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runner_mailbox_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -138,13 +144,16 @@ class PersistentMailboxRepository:
         self._lock = RLock()
         self._owner_pid = os.getpid()
         self._poisoned = False
+        self._closed = False
         try:
+            self._main_file_identity = self._prepare_database_file()
             self._connection = sqlite3.connect(
                 str(self._path), isolation_level=None, check_same_thread=False, timeout=1.0
             )
+            self._validate_managed_files()
             self._configure_connection()
             self._connection.execute(_SCHEMA)
-            self._secure_managed_files()
+            self._validate_managed_files()
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 row = self._row()
@@ -162,17 +171,32 @@ class PersistentMailboxRepository:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
 
     def close(self) -> None:
-        """Close only after a bounded WAL checkpoint; failures remain fail-closed."""
+        """Idempotently close; poisoned instances skip all mutating/checkpoint work."""
 
         with self._lock:
-            self._require_live_owner()
+            if os.getpid() != self._owner_pid:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            if self._closed:
+                return
+            if self._poisoned:
+                self._close_quietly()
+                return
             try:
                 checkpoint = self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 if checkpoint != (0, 0, 0):
                     raise sqlite3.DatabaseError("checkpoint incomplete")
                 self._connection.close()
+                self._closed = True
             except sqlite3.DatabaseError:
+                self._poisoned = True
+                self._close_quietly()
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
+
+    @property
+    def recovery_required(self) -> bool:
+        """Finite operator disposition after an ambiguous storage boundary."""
+
+        return self._poisoned
 
     def create(
         self,
@@ -300,20 +324,34 @@ class PersistentMailboxRepository:
 
         with self._lock:
             self._require_live_owner()
+            write_attempted = False
             try:
-                self._connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as error:
+                    if self._is_contention(error):
+                        raise MailboxError(MailboxDenial.CONTENDED) from None
+                    raise
                 row = self._row()
                 if row is None:
                     raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
                 generation, repository = self._load_repository(row)
+                before = self._encode_state(repository)
+                pending: MailboxError | InjectedCrash | None = None
+                value: _T
                 try:
                     value = operation(repository)
                 except (MailboxError, InjectedCrash) as error:
+                    pending = error
+                after = self._encode_state(repository)
+                if before == after:
+                    self._connection.execute("ROLLBACK")
+                else:
+                    write_attempted = True
                     self._write_repository(repository, generation + 1)
                     self._commit_then_reply()
-                    raise error
-                self._write_repository(repository, generation + 1)
-                self._commit_then_reply()
+                if pending is not None:
+                    raise pending
                 return value
             except (MailboxError, InjectedCrash) as error:
                 if self._connection.in_transaction:
@@ -321,8 +359,15 @@ class PersistentMailboxRepository:
                 if isinstance(error, MailboxError) and error.denial is MailboxDenial.INTERNAL_UNCERTAINTY:
                     self._poisoned = True
                 raise error
+            except sqlite3.OperationalError as error:
+                if not write_attempted and self._is_contention(error):
+                    if self._connection.in_transaction:
+                        self._connection.execute("ROLLBACK")
+                    raise MailboxError(MailboxDenial.CONTENDED) from None
+                self._poisoned = True
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
             except (OSError, sqlite3.DatabaseError, ValueError):
-                if self._connection.in_transaction:
+                if not write_attempted and self._connection.in_transaction:
                     self._connection.execute("ROLLBACK")
                 self._poisoned = True
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
@@ -364,13 +409,14 @@ class PersistentMailboxRepository:
         if (
             frame_version != _FRAME_VERSION
             or generation < 0
+            or generation >= _MAX_FRAME_GENERATION
             or len(nonce) != 12
             or len(ciphertext_digest) != 32
             or not ciphertext
-            or hashlib.sha256(ciphertext).digest() != ciphertext_digest
+            or len(ciphertext) > self._max_ciphertext_bytes()
         ):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        if len(ciphertext) > self._max_ciphertext_bytes():
+        if hashlib.sha256(ciphertext).digest() != ciphertext_digest:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         try:
             serialized = self._aead.decrypt(nonce, ciphertext, self._aad(generation))
@@ -393,7 +439,7 @@ class PersistentMailboxRepository:
         return generation, repository
 
     def _write_repository(self, repository: VolatileMailboxRepository, generation: int) -> None:
-        if generation < 0:
+        if generation < 0 or generation >= _MAX_FRAME_GENERATION:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         self._validate_totals(repository)
         serialized = self._encode_state(repository)
@@ -446,8 +492,10 @@ class PersistentMailboxRepository:
                 limits.max_total_committed_bytes,
                 limits.terminal_retention.days,
                 limits.terminal_retention.seconds,
+                limits.terminal_retention.microseconds,
                 limits.tombstone_retention.days,
                 limits.tombstone_retention.seconds,
+                limits.tombstone_retention.microseconds,
                 limits.max_tombstones,
             )
         )
@@ -770,8 +818,43 @@ class PersistentMailboxRepository:
         if quick_check != ("ok",):
             raise sqlite3.DatabaseError("SQLite integrity check failed")
 
-    def _secure_managed_files(self) -> None:
-        """Reject path substitution before using the SQLite connection.
+    def _prepare_database_file(self) -> tuple[int, int]:
+        """Create or verify the main file before SQLite can open or mutate it."""
+
+        self._validate_private_ancestors()
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDWR | nofollow
+        try:
+            descriptor = os.open(self._path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            descriptor = os.open(self._path, flags)
+        try:
+            info = os.fstat(descriptor)
+            path_info = self._path.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or info.st_mode & 0o077
+                or (info.st_dev, info.st_ino) != (path_info.st_dev, path_info.st_ino)
+            ):
+                raise OSError("unsafe database file")
+            return info.st_dev, info.st_ino
+        finally:
+            os.close(descriptor)
+
+    def _validate_private_ancestors(self) -> None:
+        parent = self._path.parent
+        for candidate in (parent, *parent.parents):
+            info = candidate.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise OSError("unsafe database ancestor")
+        parent_info = parent.stat()
+        if parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o077:
+            raise OSError("unsafe database directory")
+
+    def _validate_managed_files(self) -> None:
+        """Reject path substitution before and after SQLite configuration.
 
         This is intentionally narrower than the application-wide SQLite owner
         lease: runner state is its own sidecar store, so one transaction writer
@@ -779,22 +862,21 @@ class PersistentMailboxRepository:
         non-symlink parent and current-user-owned regular database sidecars.
         """
 
-        parent = self._path.parent
-        for candidate in (parent, *parent.parents):
-            info = candidate.lstat()
-            if candidate.is_symlink() or not candidate.is_dir():
-                raise OSError("unsafe database ancestor")
-        if parent.stat().st_uid != os.getuid() or parent.stat().st_mode & 0o022:
-            raise OSError("unsafe database directory")
+        self._validate_private_ancestors()
         for path in (self._path, self._path.with_name(self._path.name + "-wal"), self._path.with_name(self._path.name + "-shm")):
             if not path.exists():
                 continue
-            if path.is_symlink() or not path.is_file():
+            info = path.lstat()
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or info.st_mode & 0o077
+            ):
                 raise OSError("unsafe database file")
-            os.chmod(path, 0o600)
-            info = path.stat()
-            if info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
-                raise OSError("unsafe database file")
+            if path == self._path and (info.st_dev, info.st_ino) != self._main_file_identity:
+                raise OSError("database file changed identity")
 
     @staticmethod
     def _require_secret(name: str, value: bytes) -> None:
@@ -805,17 +887,16 @@ class PersistentMailboxRepository:
     def _validate_path(value: Path) -> Path:
         if not isinstance(value, Path) or not value.is_absolute() or value.name in {"", ".", ".."}:
             raise ValueError("database_path must be an absolute file path")
-        parent = value.parent
-        if not parent.is_dir() or parent.is_symlink():
-            raise ValueError("database parent must be an existing non-symlink directory")
-        mode = parent.stat().st_mode
-        if mode & 0o022:
-            raise ValueError("database parent must not be group or world writable")
-        if value.exists() and (value.is_symlink() or not value.is_file()):
-            raise ValueError("database_path must be a regular non-symlink file")
         return value
+
+    @staticmethod
+    def _is_contention(error: sqlite3.Error) -> bool:
+        code = getattr(error, "sqlite_errorcode", None)
+        return type(code) is int and code & 0xFF in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
 
     def _close_quietly(self) -> None:
         connection = getattr(self, "_connection", None)
-        if connection is not None:
-            connection.close()
+        if connection is not None and not self._closed:
+            with suppress(sqlite3.Error):
+                connection.close()
+        self._closed = True

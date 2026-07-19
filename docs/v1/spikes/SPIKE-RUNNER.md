@@ -1,7 +1,7 @@
 # SPIKE-RUNNER — finite mailbox and protocol decision slice
 
-Status: successor persistent-state and trusted-sidecar containment evidence is
-implemented, awaiting independent adversarial re-review. This is not package
+Status: successor persistent-state and separate synthetic mailbox-artifact
+containment evidence is implemented, awaiting independent adversarial re-review. This is not package
 acceptance, untrusted-connector OCI isolation evidence, or a runnable connector
 service. See ADR-0014 and `RUNNER-PERSISTENCE-OCI-EVIDENCE.md`.
 
@@ -221,19 +221,19 @@ overflow without shortening replay retention.
   password KDF.
 - No signature, SBOM, provenance, manifest freshness, revocation, authorization,
   image lookup, or runtime digest is verified here.
-- A trusted-sidecar Compose smoke has local Docker evidence for read-only root,
+- A separate synthetic mailbox-artifact Compose smoke has local Docker evidence for read-only root,
   default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
   namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
-  It is not an untrusted connector artifact, direct-egress test, action-scoped
+  It contains no trusted-core package, but is not an untrusted connector artifact, direct-egress test, action-scoped
   credential topology, wall-time watchdog or cleanup proof.
 - NET-001 remains a source/runtime safety belt, not kernel containment.
 - A valid connector result remains an untrusted attempt fact, never proof of
   transport, acknowledgement, compliance, absence, or removal.
 
-PF-002 must record effective multi-architecture image and runtime evidence,
-malicious containment probes, storage/log cleanup, restart/orphan recovery, and
-resource termination. Failure to prove those controls rejects the sidecar proposal
-before an ADR can be accepted.
+Connector OCI acceptance must separately record effective multi-architecture
+artifact evidence, malicious containment probes, storage/log cleanup,
+restart/orphan recovery, action-scoped credentials, fenced egress and resource
+termination. ADR-0014 accepts only the synthetic mailbox successor boundary.
 
 ## Verification
 
@@ -241,11 +241,11 @@ Run the locked toolchain on both supported Python versions:
 
 ```text
 uv run --all-packages --frozen --python 3.12.12 ruff check .
-uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 uv run --all-packages --frozen --python 3.13.11 ruff check .
-uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 ```
 
 Exact counts and full-repository results belong in the independent review for the
@@ -253,7 +253,10 @@ reviewed commit. Passing focused tests does not complete PF-002 or accept V1.
 
 ## Rollback
 
-Remove `services/runner_mailbox/`, its focused tests, and this spike note; revert
-the connector-protocol evidence-field rename and regenerated schema snapshot; then
-remove the service from static guards/type-check targets. Preserve negative review
-evidence and never reuse synthetic credentials.
+Revert only the successor additions: ADR-0014/index row, `persistent.py` and its
+export, `CONTENDED`, persistent/OCI-focused tests, runtime anchor and lock entry,
+runner Dockerfile/bake target, Compose profile, both containment validators,
+evidence/roadmap/site changes and `.dockerignore`/container-skeleton additions.
+Preserve the pre-existing domain/service/volatile runner slice, its tests and
+review 13. Remove only the project-scoped smoke container/volume and local runner
+image; preserve negative review evidence and never reuse synthetic credentials.

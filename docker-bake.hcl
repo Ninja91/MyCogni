@@ -25,3 +25,15 @@ target "core" {
     VCS_REF       = VCS_REF
   }
 }
+
+target "runner-mailbox" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.runner-mailbox"
+  platforms  = ["linux/amd64", "linux/arm64"]
+  tags       = ["mycogni/runner-mailbox:${VERSION}"]
+  args = {
+    BUILD_CREATED = BUILD_CREATED
+    VERSION       = VERSION
+    VCS_REF       = VCS_REF
+  }
+}
