@@ -6,16 +6,20 @@ Third target: `4f6f0ca5f5b445660e85e0fcf24bc36a38e1a4cc`.
 Fourth target: `211c9ee53c0300af2ee8ee970351dca82fb6a3fc`.
 Fifth target: `a0ae32ab7e6076fa8e9683ea06f8869f04fca8c8`.
 Sixth target: `89baaa31e0540196a669509ed77e193e78afdf64`.
+Accepted seventh target: `35eda238d7d508b232f7df5ddc74dcf0f817d598`.
 
-Current verdict: **REJECT**. The initial target had one P0 plus overlapping P1/P2 findings. The
+Current verdict: **ACCEPT for exact target `35eda238d7d508b232f7df5ddc74dcf0f817d598`**
+with P0 0, P1 0 and P2 0 from each of three independent lanes. This is code-level acceptance,
+not package completion, host/provider conformance, authenticated attestation or independent human
+cryptographic certification. The initial target had one P0 plus overlapping P1/P2 findings. The
 second target closed those findings but introduced an incomplete AES-key nonce/accounting domain.
 The third target closed that split-domain issue but retained an incomplete authenticated-sentinel
 nonce ledger. The fourth target completed record commitments but accounted authenticated records
 too late and retained source-validation/evidence gaps. The fifth target closed those paths but
 retained an activation race and unsynchronized handle state. The sixth target closed those
 findings but lacked an in-flight publication check. All six were rejected and none may be
-described as code-level accepted. The next
-candidate remains unreviewed until a new exact commit and three clean verdicts are recorded.
+described as code-level accepted. The seventh target closes the reviewed findings and is the only
+accepted exact source target in this review record.
 
 This is an AI-assisted source review, not independent human cryptographic certification. Three
 read-only reviewers inspected the same commit independently and made no file, network or Docker
@@ -274,13 +278,26 @@ post-validation, recheck the latch under the domain lock immediately before publ
 that check as the operation linearization point. Add barrier-controlled in-flight wrap and unwrap
 tests; invalidate an outstanding handle if its provider/domain later enters recovery.
 
-## Seventh candidate before new exact review
+## Seventh exact target `35eda23` — ACCEPT
 
-The next remediation performs the final domain-locked check after full source post-validation and
+The accepted target performs the final domain-locked check after full source post-validation and
 constructs the wrapped record or handle within that critical section. Outstanding handles consult
 provider/domain recovery state before activation. Barrier-controlled tests latch the domain while
 encrypt/decrypt is paused and prove no record or handle is returned.
 
 The focused key lane reports `106 passed`; the combined key plus site-guard lane reports `121
-passed`. The candidate remains unreviewed until committed and inspected independently by three
-new reviewers.
+passed`. All three independent exact-target lanes returned **ACCEPT**:
+
+- code/specification quality: P0 0, P1 0, P2 0;
+- backend/infra/edge reliability: P0 0, P1 0, P2 0;
+- product/operator/open source: P0 0, P1 0, P2 0.
+
+Ruff, strict mypy, import contracts, site/claim/safety/threat/network/governance guards and diff
+hygiene passed. The broader sandbox lane reported 1,093 passes and only the same three UV
+subprocess checks blocked by the Codex sandbox; GitHub's locked CPython 3.12.12/3.13.11 lanes are
+authoritative for those checks.
+
+This acceptance does not close durable cross-process/restart accounting, rotation/catalog CAS,
+backup/deletion drills, native host restart/recovery, macOS ACL/mount-alias qualification,
+Keychain/rootless-Linux/Docker Desktop/cloud-KMS profiles, authenticated package attestation or
+the documented Python/OpenSSL memory-copy limitations.

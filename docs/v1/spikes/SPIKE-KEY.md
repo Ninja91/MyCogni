@@ -5,9 +5,10 @@ second target `b74afdb` was rejected for an incomplete AES-key nonce domain; thi
 `4f6f0ca` was rejected for an incomplete authenticated-sentinel nonce ledger; fourth target
 `211c9ee` was rejected for late authenticated-record accounting and provider/source validation
 gaps; fifth target `a0ae32a` was rejected for a record-to-activation race and concurrent handle
-state; sixth target `89baaa3` was rejected for missing in-flight publication checks. The current
-remediation candidate passes its expanded focused local suite, but a clean new exact-target
-review is still pending; no rejected or unreviewed result is acceptance.
+state; sixth target `89baaa3` was rejected for missing in-flight publication checks. Seventh exact
+target `35eda238d7d508b232f7df5ddc74dcf0f817d598` has three clean code-level ACCEPT verdicts with
+P0/P1/P2 all zero. Package status remains `IN_PROGRESS` until the named host, durability, recovery
+and authenticated-attestation gates close.
 macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
 backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
 `SPIKE-BACKUP`, `THR-KEYS-001` or `VFY-KEYS-001`.
@@ -132,7 +133,7 @@ pins, clears a latch, or overwrites the live source/catalog.
 
 | Profile | M0 state | Exact evidence still required |
 | --- | --- | --- |
-| native owner-only file, source/fixture level | implemented; exact-target review pending | real operator path, process restart/recovery and named macOS/Linux host evidence |
+| native owner-only file, source/fixture level | implemented; exact target `35eda23` code-level ACCEPT | real operator path, process restart/recovery and named macOS/Linux host evidence |
 | macOS Security.framework helper | open | signed host-native helper, accessibility choice, create/read/delete/update behavior and restart/recovery drill |
 | rootless Linux Engine key-only volume | named blocker | UID `65532`, directory `0700`, key `0400`, read-only core mount, separate volume and restart/recovery drill |
 | Docker Desktop key-only volume | named blocker | separate exact-host matrix; Linux-container Keychain access is not assumed |
@@ -145,7 +146,7 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The current remediation candidate's 106-test focused suite covers strict construction and rendering, a
+The accepted target's 106-test focused suite covers strict construction and rendering, a
 hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
@@ -164,7 +165,8 @@ symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive 
 foreign-owned intermediate ancestors, configured-directory rename/replacement and typed post-use
 syscall failures. Test values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the
 focused launcher reports `106 passed`;
-Ruff and strict source mypy also pass. New exact review and both locked CI runtimes remain required.
+Ruff and strict source mypy also pass. Exact source review is clean; both locked CI runtimes and
+the named host/provider conformance rows remain required.
 
 Reproduce the focused lane from the repository root using a private temporary directory whose
 ancestors are not group/world writable (the provider deliberately rejects a `/tmp` ancestry):
