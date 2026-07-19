@@ -10,10 +10,10 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import platform
 import sqlite3
 import stat
 import subprocess
-import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -134,12 +134,13 @@ class SystemFilesystemProbe:
             resolved = path.resolve(strict=True)
         except OSError:
             raise SQLiteStorageUnsupported("cannot resolve the database directory") from None
-        if sys.platform.startswith("linux"):
+        system = platform.system()
+        if system == "Linux":
             return self._inspect_linux(resolved)
-        if sys.platform == "darwin":
+        if system == "Darwin":
             return self._inspect_macos(resolved)
         raise SQLiteStorageUnsupported(
-            f"SQLITE-DUR-001 has no filesystem probe for platform {sys.platform!r}"
+            f"SQLITE-DUR-001 has no filesystem probe for platform {system!r}"
         )
 
     @staticmethod
