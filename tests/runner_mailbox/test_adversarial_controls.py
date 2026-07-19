@@ -161,6 +161,43 @@ def test_maintenance_authority_is_mandatory_exact_and_never_implicitly_generated
             )
 
 
+def test_storage_key_is_generated_only_for_explicit_none() -> None:
+    repository = VolatileMailboxRepository(
+        maintenance_credential_digest=Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL),
+        storage_key=None,
+    )
+    assert repository._records == {}  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    (
+        b"",
+        bytearray(),
+        False,
+        0,
+        "",
+        (),
+        [],
+        {},
+        set(),
+        memoryview(b""),
+        b"x" * 31,
+        b"x" * 33,
+        bytearray(b"x" * 32),
+        memoryview(b"x" * 32),
+    ),
+)
+def test_falsey_or_malformed_explicit_storage_key_never_falls_back_to_generation(
+    malformed: object,
+) -> None:
+    with pytest.raises(ValueError, match="exactly 32 bytes"):
+        VolatileMailboxRepository(
+            maintenance_credential_digest=Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL),
+            storage_key=malformed,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize("role_index", (0, 1, 2, 3))
 def test_maintenance_authority_is_separate_from_every_action_role_before_mutation(
     action_payload: dict[str, Any], clock: FakeClock, role_index: int
@@ -812,6 +849,17 @@ def test_sensitive_payload_is_wrapped_immediately_and_collection_requires_ack(
     assert record.result_envelope is not None
     assert result_json not in repr(record).encode()
     assert result_json not in record.result_envelope.wrapped_payload
+    canonical_result = (
+        ResultEnvelope.model_validate_json(result_json, strict=True).model_dump_json().encode()
+    )
+    plaintext_result_digest = hashlib.sha256(canonical_result).digest()
+    retained_result = (
+        record.result_envelope.storage_digest
+        + record.result_envelope.semantic_mac
+        + record.result_envelope.wrapped_payload
+    )
+    assert plaintext_result_digest not in retained_result
+    assert plaintext_result_digest.hex().encode() not in retained_result
     first = service.collect(binding.mailbox_id, collection_credential=collection_credential)
     second = service.collect(binding.mailbox_id, collection_credential=collection_credential)
     assert first == second
@@ -827,7 +875,7 @@ def test_sensitive_payload_is_wrapped_immediately_and_collection_requires_ack(
     assert after_ack.staged_evidence_count == 0
 
 
-@pytest.mark.parametrize("tamper", ("wrapped_body", "digest_metadata"))
+@pytest.mark.parametrize("tamper", ("wrapped_body", "storage_digest", "semantic_mac"))
 def test_wrapped_result_authentication_detects_body_or_metadata_tampering(
     action_payload: dict[str, Any], clock: FakeClock, tamper: str
 ) -> None:
@@ -847,11 +895,100 @@ def test_wrapped_result_authentication_detects_body_or_metadata_tampering(
         wrapped.wrapped_payload = (
             bytes([wrapped.wrapped_payload[0] ^ 1]) + wrapped.wrapped_payload[1:]
         )
+        wrapped.storage_digest = hashlib.sha256(wrapped.wrapped_payload).digest()
+    elif tamper == "storage_digest":
+        wrapped.storage_digest = b"0" * 32
     else:
-        wrapped.payload_digest = "sha256:" + "0" * 64
+        wrapped.semantic_mac = b"0" * 32
     with pytest.raises(MailboxError) as denied:
         service.collect(binding.mailbox_id, collection_credential=collection_credential)
     assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+@pytest.mark.parametrize("tamper", ("wrapped_body", "storage_digest", "semantic_mac"))
+def test_wrapped_evidence_authentication_detects_body_or_metadata_tampering(
+    action_payload: dict[str, Any], clock: FakeClock, tamper: str
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, _, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"predictable-sensitive-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    wrapped = repository._records[binding.mailbox_id].evidence[upload.object_id]  # type: ignore[attr-defined]
+    if tamper == "wrapped_body":
+        wrapped.wrapped_payload = (
+            bytes([wrapped.wrapped_payload[0] ^ 1]) + wrapped.wrapped_payload[1:]
+        )
+        wrapped.storage_digest = hashlib.sha256(wrapped.wrapped_payload).digest()
+    elif tamper == "storage_digest":
+        wrapped.storage_digest = b"0" * 32
+    else:
+        wrapped.semantic_mac = b"0" * 32
+    result_payload = {
+        "protocol_version": 1,
+        "action_id": str(binding.action_id),
+        "attempt_id": str(binding.attempt_id),
+        "result": "candidate_observed",
+        "reason_code": "exact_match",
+        "evidence": [
+            {
+                "kind": upload.kind,
+                "mailbox_object_id": str(upload.object_id),
+                "payload_digest": upload.payload_digest,
+                "byte_count": len(upload.payload),
+            }
+        ],
+        "disclosures": [],
+        "next": {"kind": "user_review"},
+    }
+    with pytest.raises(MailboxError) as denied:
+        service.commit_result(binding, encode(result_payload), result_credential=result_credential)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+def test_low_entropy_dictionary_guesses_do_not_match_retained_sensitive_metadata(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, _, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    canary = b"john smith|123 main street"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(canary).hexdigest(),
+        payload=canary,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    wrapped = record.evidence[upload.object_id]
+    retained = (
+        repr(record).encode()
+        + wrapped.storage_digest
+        + wrapped.semantic_mac
+        + wrapped.wrapped_payload
+    )
+    guesses = (
+        b"john smith",
+        b"123 main street",
+        b"john smith|123 main street",
+        b"jane smith|123 main street",
+    )
+    for guess in guesses:
+        digest = hashlib.sha256(guess).digest()
+        assert digest not in retained
+        assert digest.hex().encode() not in retained
+    assert upload.payload_digest.encode() not in retained
 
 
 def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(

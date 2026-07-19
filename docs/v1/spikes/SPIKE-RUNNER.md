@@ -127,14 +127,20 @@ All rejected matrix cells leave state, evidence, and credentials unconsumed.
 ## Sensitive evidence and byte accounting
 
 Connector evidence is named an **untrusted sensitive payload**, not ciphertext.
-`payload_digest` detects mismatch but proves neither origin nor encryption. The
-storage adapter must immediately wrap and authenticate bytes under a mailbox-owned
-storage key before retention, then authenticate and unwrap only for core
-collection. The full canonical result envelope is subject to the same rule; the
-repository retains only its bounded size, digest, nonce, and authenticated wrapped
-body rather than plaintext result fields. The volatile adapter demonstrates this
-contract with AES-256-GCM and binding/metadata-associated data. Its process-local
-key is intentionally not a production key-management design.
+The connector's `payload_digest` detects an ingress mismatch but proves neither
+origin nor encryption. It is recomputed, placed inside the authenticated encrypted
+frame, and never retained as an unkeyed digest of predictable plaintext. The
+storage adapter immediately wraps bytes under a mailbox-owned key before retention,
+then authenticates and unwraps only for core collection.
+
+The full canonical result envelope is subject to the same rule. Retained metadata
+contains only bounded byte count, nonce, a SHA-256 corruption hash over randomized
+ciphertext, a keyed HMAC over safe associated data plus the encrypted-frame
+semantics, and the authenticated wrapped body. The HMAC prevents offline dictionary
+matching of low-entropy names or addresses without the storage key; the unkeyed
+hash never covers plaintext. The volatile adapter demonstrates this contract with
+AES-256-GCM and binding/metadata-associated data. Its process-local key is
+intentionally not a production key-management design.
 
 Raw payload bodies are absent from repr, snapshots, and finite error text. Tests use
 PII canaries to prove the volatile record retains authenticated wrapped bytes rather
@@ -184,6 +190,9 @@ overflow without shortening replay retention.
 - AES-GCM here proves the adapter contract only. Production requires durable
   envelope-key management, rotation, restore-epoch invalidation, backup policy,
   and restart/crash recovery.
+- An explicit storage key is accepted only when it is exact immutable 32-byte
+  material. Only explicit `None` generates an ephemeral key; falsey or malformed
+  values fail instead of silently replacing operator input.
 - Python bytes, allocator copies, swap, crash dumps, and host memory are not
   guaranteed zeroized.
 - SHA-256 credential digests assume uniformly random credentials; they are not a
