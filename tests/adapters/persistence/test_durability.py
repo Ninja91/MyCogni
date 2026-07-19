@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -316,6 +317,58 @@ def test_raw_lease_release_refuses_checked_out_connection(tmp_path: Path) -> Non
         lease.release()
 
 
+def test_post_unlock_close_error_is_logically_released(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.persistence import durability
+
+    settings = _settings(tmp_path / "close-error.sqlite")
+    lease = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    descriptors = {lease._descriptor, lease._directory_descriptor}
+    real_close = durability.os.close
+
+    def fail_managed_close(descriptor: int) -> None:
+        if descriptor in descriptors:
+            raise OSError("synthetic descriptor cleanup failure")
+        real_close(descriptor)
+
+    monkeypatch.setattr(durability.os, "close", fail_managed_close)
+    lease.release()
+    assert lease.owned_by_current_process() is False
+
+    monkeypatch.setattr(durability.os, "close", real_close)
+    replacement = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    replacement.release()
+    for descriptor in descriptors:
+        with suppress(OSError):
+            real_close(descriptor)
+
+
+def test_shutdown_seal_denies_checkout_without_accounting_underflow(tmp_path: Path) -> None:
+    database_path = tmp_path / "sealed.sqlite"
+    runtime = _open_runtime(database_path)
+    runtime.lease.seal_for_shutdown()
+    try:
+        with pytest.raises(SQLiteOwnershipError, match="sealed for shutdown"):
+            runtime.engine.connect()
+        assert runtime.lease.has_checked_out_connections() is False
+    finally:
+        assert runtime.lease.unseal_after_failed_shutdown() is True
+
+    with runtime.engine.connect() as connection:
+        assert connection.scalar(text("SELECT 1")) == 1
+    runtime.close_cleanly()
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
 def test_forked_inherited_connection_fails_before_execution(tmp_path: Path) -> None:
     runtime = _open_runtime(tmp_path / "fork.sqlite")
@@ -619,6 +672,165 @@ def test_leaked_checkout_blocks_shutdown_and_second_owner(tmp_path: Path) -> Non
         leaked.close()
 
     runtime.close_cleanly()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_checkout_race_at_shutdown_preserves_marker_and_latch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "checkout-race.sqlite"
+    runtime = _open_runtime(database_path)
+    begin_checkout = threading.Event()
+    checkout_held = threading.Event()
+    release_checkout = threading.Event()
+    real_seal = runtime.lease.seal_for_shutdown
+
+    def seal_after_racing_checkout() -> None:
+        begin_checkout.set()
+        assert checkout_held.wait(timeout=2)
+        real_seal()
+
+    monkeypatch.setattr(runtime.lease, "seal_for_shutdown", seal_after_racing_checkout)
+
+    def race_checkout() -> None:
+        assert begin_checkout.wait(timeout=2)
+        with runtime.engine.connect():
+            checkout_held.set()
+            assert release_checkout.wait(timeout=2)
+
+    contender = threading.Thread(target=race_checkout)
+    contender.start()
+    try:
+        with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
+            runtime.close_cleanly()
+        assert runtime.marker_path.exists() is True
+        assert runtime.recovery_latch_path.exists() is True
+        assert runtime.readiness.external_actions_must_remain_paused is True
+        assert runtime.readiness.operator_state is SQLiteOperatorState.SHUTDOWN_BLOCKED
+        runtime.lease.assert_active(database_path)
+    finally:
+        release_checkout.set()
+        contender.join(timeout=2)
+    assert not contender.is_alive()
+
+    runtime.close_cleanly()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_abandon_latch_fsync_failure_pauses_and_retains_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.persistence import durability
+
+    database_path = tmp_path / "abandon-fsync.sqlite"
+    runtime = _open_runtime(database_path)
+    real_fsync_directory = durability._fsync_directory
+    calls = 0
+
+    def fail_latch_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise SQLiteRecoveryError("synthetic latch directory fsync failure")
+        real_fsync_directory(descriptor)
+
+    monkeypatch.setattr(durability, "_fsync_directory", fail_latch_directory_fsync)
+    with pytest.raises(SQLiteRecoveryError, match="latch directory fsync failure"):
+        runtime.abandon()
+
+    assert runtime.readiness.accepting_new_work is False
+    assert runtime.readiness.external_actions_must_remain_paused is True
+    assert runtime.readiness.operator_state is SQLiteOperatorState.SHUTDOWN_BLOCKED
+    runtime.lease.assert_active(database_path)
+    with pytest.raises(SQLiteOwnershipError, match="already has an owner"):
+        SQLiteWriterLease.acquire(
+            _settings(database_path),
+            role=SQLiteProcessRole.ALL_IN_ONE,
+            probe=FixedFilesystemProbe("ext4"),
+        )
+
+    runtime.abandon()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_abandon_checkout_race_preserves_recovery_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "abandon-race.sqlite"
+    runtime = _open_runtime(database_path)
+    begin_checkout = threading.Event()
+    checkout_held = threading.Event()
+    release_checkout = threading.Event()
+    real_seal = runtime.lease.seal_for_shutdown
+
+    def seal_after_racing_checkout() -> None:
+        begin_checkout.set()
+        assert checkout_held.wait(timeout=2)
+        real_seal()
+
+    monkeypatch.setattr(runtime.lease, "seal_for_shutdown", seal_after_racing_checkout)
+
+    def race_checkout() -> None:
+        assert begin_checkout.wait(timeout=2)
+        with runtime.engine.connect():
+            checkout_held.set()
+            assert release_checkout.wait(timeout=2)
+
+    contender = threading.Thread(target=race_checkout)
+    contender.start()
+    try:
+        with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
+            runtime.abandon()
+        assert runtime.marker_path.exists() is True
+        assert runtime.recovery_latch_path.exists() is True
+        assert runtime.readiness.external_actions_must_remain_paused is True
+        runtime.lease.assert_active(database_path)
+    finally:
+        release_checkout.set()
+        contender.join(timeout=2)
+    assert not contender.is_alive()
+
+    runtime.abandon()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
+def test_abandon_release_failure_retains_evidence_and_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "abandon-release.sqlite"
+    runtime = _open_runtime(database_path)
+    real_release = runtime.lease.release
+    failed = False
+
+    def fail_release_once() -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise SQLiteOwnershipError("synthetic release failure")
+        real_release()
+
+    monkeypatch.setattr(runtime.lease, "release", fail_release_once)
+    with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
+        runtime.abandon()
+
+    assert runtime.marker_path.exists() is True
+    assert runtime.recovery_latch_path.exists() is True
+    assert runtime.readiness.external_actions_must_remain_paused is True
+    runtime.lease.assert_active(database_path)
+
+    runtime.abandon()
     recovered = _open_runtime(database_path)
     assert recovered.startup.requires_reconciliation is True
     recovered.close_cleanly()

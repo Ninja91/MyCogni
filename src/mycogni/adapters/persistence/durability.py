@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -358,6 +359,7 @@ class SQLiteWriterLease:
         self._active = True
         self._engine_bound = False
         self._checked_out = 0
+        self._shutdown_sealed = False
         self._checkout_lock = threading.Lock()
 
     @classmethod
@@ -428,7 +430,7 @@ class SQLiteWriterLease:
                 raise
             raise SQLiteOwnershipError("SQLite writer-lease acquisition failed") from None
 
-    def assert_active(self, database_path: Path) -> None:
+    def _assert_owned_unlocked(self, database_path: Path) -> None:
         if not self._active or self._owner_pid != os.getpid():
             raise SQLiteOwnershipError(
                 "SQLite writer lease is inactive or belongs to another process"
@@ -436,13 +438,25 @@ class SQLiteWriterLease:
         if database_path != self.database_path:
             raise SQLiteOwnershipError("SQLite writer lease is bound to a different database")
 
+    def assert_owned(self, database_path: Path) -> None:
+        """Verify ownership while allowing internal shutdown state operations."""
+        with self._checkout_lock:
+            self._assert_owned_unlocked(database_path)
+
+    def assert_active(self, database_path: Path) -> None:
+        """Verify that normal connection work remains admitted."""
+        with self._checkout_lock:
+            self._assert_owned_unlocked(database_path)
+            if self._shutdown_sealed:
+                raise SQLiteOwnershipError("SQLite writer lease is sealed for shutdown")
+
     @property
     def database_name(self) -> str:
         return self._database_name
 
     @property
     def directory_descriptor(self) -> int:
-        self.assert_active(self.database_path)
+        self.assert_owned(self.database_path)
         return self._directory_descriptor
 
     def bind_engine(self, database_path: Path) -> None:
@@ -452,8 +466,10 @@ class SQLiteWriterLease:
         self._engine_bound = True
 
     def register_checkout(self) -> None:
-        self.assert_active(self.database_path)
         with self._checkout_lock:
+            self._assert_owned_unlocked(self.database_path)
+            if self._shutdown_sealed:
+                raise SQLiteOwnershipError("SQLite writer lease is sealed for shutdown")
             self._checked_out += 1
 
     def register_checkin(self) -> None:
@@ -466,25 +482,61 @@ class SQLiteWriterLease:
         with self._checkout_lock:
             return self._checked_out != 0
 
+    def seal_for_shutdown(self) -> None:
+        """Atomically deny future work only when no connection is checked out."""
+        with self._checkout_lock:
+            self._assert_owned_unlocked(self.database_path)
+            if self._checked_out != 0:
+                raise SQLiteOwnershipError(
+                    "SQLite shutdown cannot seal with checked-out connections"
+                )
+            self._shutdown_sealed = True
+
+    def unseal_after_failed_shutdown(self) -> bool:
+        """Re-admit maintenance work only while this process still owns the lease."""
+        with self._checkout_lock:
+            if not self._active or self._owner_pid != os.getpid():
+                return False
+            self._shutdown_sealed = False
+            return True
+
+    def owned_by_current_process(self) -> bool:
+        with self._checkout_lock:
+            return self._active and self._owner_pid == os.getpid()
+
     def release(self) -> None:
-        if not self._active:
-            return
-        if self._owner_pid != os.getpid():
-            raise SQLiteOwnershipError(
-                "forked child cannot release its parent's SQLite writer lease"
-            )
-        if self.has_checked_out_connections():
-            raise SQLiteOwnershipError(
-                "SQLite writer lease cannot release with checked-out connections"
-            )
+        with self._checkout_lock:
+            if not self._active:
+                return
+            if self._owner_pid != os.getpid():
+                raise SQLiteOwnershipError(
+                    "forked child cannot release its parent's SQLite writer lease"
+                )
+            if self._checked_out != 0:
+                raise SQLiteOwnershipError(
+                    "SQLite writer lease cannot release with checked-out connections"
+                )
+            previously_sealed = self._shutdown_sealed
+            self._shutdown_sealed = True
         try:
             fcntl.flock(self._descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(self._descriptor)
-            os.close(self._directory_descriptor)
+        except BaseException:
+            with self._checkout_lock:
+                if self._active:
+                    self._shutdown_sealed = previously_sealed
+            raise
+        with self._checkout_lock:
             self._active = False
-            with _ACTIVE_PATHS_LOCK:
-                _ACTIVE_PATHS.discard(self.database_path)
+        with _ACTIVE_PATHS_LOCK:
+            _ACTIVE_PATHS.discard(self.database_path)
+        # LOCK_UN is the ownership boundary. close(2) may report an error even
+        # when the descriptor is already closed, so cleanup after a successful
+        # unlock is best effort and cannot truthfully turn release into a
+        # retained-ownership failure.
+        with suppress(OSError):
+            os.close(self._descriptor)
+        with suppress(OSError):
+            os.close(self._directory_descriptor)
 
     def __enter__(self) -> Self:
         self.assert_active(self.database_path)
@@ -600,6 +652,9 @@ def _create_state_file(
     label: str,
 ) -> None:
     if _read_state_file(lease, name, expected=payload, label=label):
+        # A previous create may have failed only at the directory-fsync step.
+        # Re-sync the directory so retry can establish durable presence.
+        _fsync_directory(lease.directory_descriptor)
         return
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -702,6 +757,20 @@ class SQLiteRuntime:
         self.readiness.accepting_new_work = False
         self.readiness.external_actions_must_remain_paused = True
         self.readiness.operator_state = state
+
+    def _preserve_recovery_state(self) -> None:
+        _create_state_file(
+            self.lease,
+            self._marker_name,
+            payload=_DIRTY_MARKER,
+            label="dirty marker",
+        )
+        _create_state_file(
+            self.lease,
+            self._recovery_latch_name,
+            payload=_RECOVERY_LATCH,
+            label="recovery latch",
+        )
 
     def assert_accepting_new_work(self) -> None:
         """Fail closed before every supported application UoW boundary."""
@@ -842,82 +911,59 @@ class SQLiteRuntime:
             if checkpoint != SQLiteCheckpoint(0, 0, 0):
                 raise SQLiteRecoveryError(f"clean-shutdown checkpoint incomplete: {checkpoint!r}")
             _quick_check(self.engine, self.lease)
-            if self.lease.has_checked_out_connections():
-                raise SQLiteRecoveryError("clean shutdown still has checked-out connections")
+            self.lease.seal_for_shutdown()
         except BaseException:
             try:
-                _create_state_file(
-                    self.lease,
-                    self._recovery_latch_name,
-                    payload=_RECOVERY_LATCH,
-                    label="recovery latch",
-                )
+                self._preserve_recovery_state()
             finally:
                 self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+                self.lease.unseal_after_failed_shutdown()
             raise SQLiteRecoveryError(
                 "clean-shutdown validation failed; ownership retained"
             ) from None
 
-        if self.readiness.operator_state is not SQLiteOperatorState.READY:
-            _create_state_file(
-                self.lease,
-                self._recovery_latch_name,
-                payload=_RECOVERY_LATCH,
-                label="recovery latch",
-            )
-        self.engine.dispose()
         try:
-            _remove_state_file(self.lease, self._marker_name, label="dirty marker")
-        except BaseException:
-            try:
-                _create_state_file(
-                    self.lease,
-                    self._marker_name,
-                    payload=_DIRTY_MARKER,
-                    label="dirty marker",
-                )
+            if self.readiness.operator_state is not SQLiteOperatorState.READY:
                 _create_state_file(
                     self.lease,
                     self._recovery_latch_name,
                     payload=_RECOVERY_LATCH,
                     label="recovery latch",
                 )
-            except BaseException:
-                self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
-                raise SQLiteRecoveryError(
-                    "clean shutdown lost its recovery marker; writer lease retained"
-                ) from None
+            self.engine.dispose()
+            _remove_state_file(self.lease, self._marker_name, label="dirty marker")
+            self.lease.release()
+        except BaseException:
             self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
+            if self.lease.owned_by_current_process():
+                try:
+                    self._preserve_recovery_state()
+                finally:
+                    self.lease.unseal_after_failed_shutdown()
             raise SQLiteRecoveryError(
                 "clean shutdown could not durably remove its marker; ownership retained"
             ) from None
-        self.lease.release()
         self._closed = True
 
     def abandon(self) -> None:
         """Release resources but leave the marker to force recovery next start."""
         if self._closed:
             return
-        self.readiness.accepting_new_work = False
-        if self.lease.has_checked_out_connections():
-            self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+        self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+        self._preserve_recovery_state()
+        try:
+            self.lease.seal_for_shutdown()
+        except BaseException:
             raise SQLiteRecoveryError(
                 "cannot abandon runtime with checked-out connections; ownership retained"
-            )
-        _create_state_file(
-            self.lease,
-            self._marker_name,
-            payload=_DIRTY_MARKER,
-            label="dirty marker",
-        )
-        _create_state_file(
-            self.lease,
-            self._recovery_latch_name,
-            payload=_RECOVERY_LATCH,
-            label="recovery latch",
-        )
-        self.engine.dispose()
-        self.lease.release()
+            ) from None
+        try:
+            self.engine.dispose()
+            self.lease.release()
+        except BaseException:
+            if self.lease.owned_by_current_process():
+                self.lease.unseal_after_failed_shutdown()
+            raise SQLiteRecoveryError("runtime abandon failed; ownership retained") from None
         self._closed = True
 
     def __enter__(self) -> Self:

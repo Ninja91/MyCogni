@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from types import TracebackType
 
 from sqlalchemy import Engine
@@ -50,12 +51,13 @@ class SqlAlchemyUnitOfWork:
         try:
             self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         except BaseException:
-            try:
-                self._session.rollback()
-            finally:
-                self._session.close()
-                self._session = None
-                self._terminal = True
+            session = self.session
+            self._session = None
+            self._terminal = True
+            with suppress(BaseException):
+                session.rollback()
+            with suppress(BaseException):
+                session.close()
             raise
         return self
 
@@ -72,6 +74,10 @@ class SqlAlchemyUnitOfWork:
 
     def _finish(self, *, commit: bool) -> None:
         session = self.session
+        # Terminal state is published before any driver cleanup. A failing
+        # commit, rollback, or close must never leave this UoW reusable.
+        self._session = None
+        self._terminal = True
         try:
             if commit:
                 self._readiness_guard()
@@ -79,16 +85,12 @@ class SqlAlchemyUnitOfWork:
             else:
                 session.rollback()
         except BaseException:
-            try:
+            with suppress(BaseException):
                 session.rollback()
-            finally:
+            with suppress(BaseException):
                 session.close()
-                self._session = None
-                self._terminal = True
             raise
         session.close()
-        self._session = None
-        self._terminal = True
 
     def commit(self) -> None:
         """Commit and terminally close the active transaction."""

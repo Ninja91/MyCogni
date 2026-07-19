@@ -12,10 +12,11 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import ConnectionPoolEntry
 
-from mycogni.adapters.persistence.durability import SQLiteWriterLease
+from mycogni.adapters.persistence.durability import SQLiteOwnershipError, SQLiteWriterLease
 
 MIN_BUSY_TIMEOUT_MS = 1
 MAX_BUSY_TIMEOUT_MS = 30_000
+_LEASE_COUNTED_KEY = "mycogni.sqlite_writer_lease_counted"
 
 
 class Base(DeclarativeBase):
@@ -164,11 +165,21 @@ def create_sqlite_engine(
     def assert_lease() -> None:
         writer_lease.assert_active(settings.database_path)
 
-    def register_checkout() -> None:
+    def register_checkout(record: ConnectionPoolEntry) -> None:
+        record_info = record.record_info
+        if record_info is None:
+            raise SQLiteOwnershipError("SQLite connection record has no persistent metadata")
+        if record_info.get(_LEASE_COUNTED_KEY) is True:
+            raise SQLiteOwnershipError("SQLite connection was already counted as checked out")
         writer_lease.register_checkout()
+        record_info[_LEASE_COUNTED_KEY] = True
 
-    def register_checkin() -> None:
-        writer_lease.register_checkin()
+    def register_checkin(record: ConnectionPoolEntry) -> None:
+        record_info = record.record_info
+        if record_info is None:
+            raise SQLiteOwnershipError("SQLite connection record has no persistent metadata")
+        if record_info.pop(_LEASE_COUNTED_KEY, False) is True:
+            writer_lease.register_checkin()
 
     def configure_connection(
         connection: sqlite3.Connection,
@@ -190,9 +201,9 @@ def create_sqlite_engine(
     event.listen(
         engine,
         "checkout",
-        lambda connection, record, proxy: register_checkout(),
+        lambda connection, record, proxy: register_checkout(record),
     )
-    event.listen(engine, "checkin", lambda connection, record: register_checkin())
+    event.listen(engine, "checkin", lambda connection, record: register_checkin(record))
     event.listen(
         engine,
         "before_cursor_execute",

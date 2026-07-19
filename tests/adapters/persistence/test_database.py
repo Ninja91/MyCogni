@@ -187,3 +187,41 @@ def test_unit_of_work_rolls_back_when_body_raises(tmp_path: Path) -> None:
             assert connection.scalar(select(synthetic_records.c.id)) is None
     finally:
         runtime.close_cleanly()
+
+
+def test_unit_of_work_close_failure_after_commit_is_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SQLiteRuntime.open(
+        _settings(tmp_path / "close-failure.sqlite"),
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    metadata = MetaData()
+    records = Table("synthetic_close_failure", metadata, Column("id", Integer, primary_key=True))
+    metadata.create_all(runtime.engine)
+    unit_of_work = runtime.unit_of_work()
+    try:
+        with (
+            pytest.raises(RuntimeError, match="synthetic close failure"),
+            unit_of_work,
+        ):
+            unit_of_work.session.execute(insert(records).values(id=1))
+            session = unit_of_work.session
+            real_close = session.close
+
+            def fail_after_close() -> None:
+                real_close()
+                raise RuntimeError("synthetic close failure")
+
+            monkeypatch.setattr(session, "close", fail_after_close)
+            unit_of_work.commit()
+
+        with pytest.raises(RuntimeError, match="not active"):
+            unit_of_work.commit()
+        with pytest.raises(RuntimeError, match="terminal"):
+            unit_of_work.__enter__()
+        with runtime.engine.connect() as connection:
+            assert connection.scalar(select(records.c.id)) == 1
+    finally:
+        runtime.close_cleanly()
