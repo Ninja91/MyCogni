@@ -1,14 +1,14 @@
 # SQLITE-DUR-001 adversarial review and remediation chronology
 
 Review targets: integrated decision/evidence commit `0fff920`; first
-remediation commit `1dfd256`
+remediation `1dfd256`; second remediation `7cb58fa` with evidence `d5ffc53`
 
-Remediation commits: `1dfd256`; second remediation `7cb58fa`
+Remediation commits: `1dfd256`; `7cb58fa`; latest remediation `02f91ce`
 
-Current verdict: **second REJECT findings remediated; independent re-review
-pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`. Reviewer names below are role
-labels, not model identities, human qualifications, attestations or
-certifications.
+Current verdict: **latest backend and architecture REJECT findings remediated;
+independent re-review pending**. `SQLITE-DUR-001` remains `IN_PROGRESS`.
+Reviewer names below are role labels, not model identities, human
+qualifications, attestations or certifications.
 
 ## Independent review passes against `0fff920`
 
@@ -120,10 +120,44 @@ The focused acceptance lane after second remediation is 72 passing tests with
 Ruff and mypy clean. The exact commands are recorded in
 `docs/v1/SQLITE-DUR-001.md`.
 
+## Final backend review against `7cb58fa` — REJECT (P1: 2)
+
+1. Clean close still ran truncate checkpoint and `quick_check` before acquiring
+   the shutdown seal. A direct checkout could write and return after those
+   validations but before sealing; the deterministic reproduction then removed
+   the marker while leaving a 4,152-byte WAL.
+2. `release()` called `LOCK_UN` before changing its logical active/sealed state.
+   During that unlocked-but-logically-owned interval, ownership checks and a
+   concurrent release could re-enter the transition.
+
+## Final architecture review against `7cb58fa` + `d5ffc53` — REJECT (P1: 2)
+
+1. Lease release was serialized, but `SQLiteRuntime.close_cleanly()` and
+   `abandon()` had no whole-operation lifecycle exclusion. Concurrent callers
+   could unseal or release resources for the other caller.
+2. A known-success commit followed by `Session.close()` failure raised a generic
+   exception. A job runner could retry an already committed operation. The same
+   cleanup behavior after rollback could mask an original context-body error.
+
+Neither final review recorded acceptance.
+
+## Latest remediation in `02f91ce`
+
+| Final-round finding | Integrated disposition and deterministic evidence |
+| --- | --- |
+| Validation before seal | Clean close seals first, then a one-shot permit admits exactly one designated connection held across truncate checkpoint and `quick_check`. A forced checkout writes and returns immediately before seal; later validation leaves no WAL frames and restart is clean. |
+| Broad maintenance privilege | The permit is bound to the sealing thread, consumed by one checkout and held on the fixed single-connection pool for both validations. Non-designated checkout is denied during/after maintenance. |
+| Unlocked-but-active release | Explicit `ACTIVE`/`SEALED` → `RELEASING` → `INACTIVE` state is changed under the checkout lock before `LOCK_UN`. Ownership/work and concurrent release are denied while releasing; unlock failure restores the prior sealed state. A barrier test pauses immediately after real unlock. |
+| Concurrent runtime lifecycle | A runtime lifecycle lock rejects concurrent close/abandon callers before they can unseal, dispose or release for each other; both operation orderings have deterministic regressions. |
+| Known-success cleanup ambiguity | UoW terminalizes before cleanup. Successful commit or rollback remains success if later close fails, while a no-argument PII-free callback pauses runtime/external work. Failed commit still raises, rollback cleanup is best effort, and an original context-body exception is not masked. |
+
+The focused lane after latest remediation is 79 passing tests with Ruff and
+mypy clean. This is implementation evidence, not a review verdict.
+
 ## Residual risk and next decision
 
-This record does not convert either REJECT into ACCEPT. An independent pass must
-review commit `7cb58fa` and record its own commit-bound verdict.
+This record does not convert any REJECT into ACCEPT. An independent pass must
+review commit `02f91ce` and record its own commit-bound verdict.
 
 SQLAlchemy hooks prevent an inherited SQLAlchemy connection from executing in a
 forked child, but cannot revoke a raw SQLite/file descriptor inherited outside

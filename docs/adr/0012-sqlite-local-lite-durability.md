@@ -39,16 +39,23 @@ pool override, so worker/scheduler transactions cannot use concurrent SQLite
 connections. The lease counts checked-out connections and refuses release while
 any remain. A shutdown seal uses the same lock as checkout accounting: it can be
 set only at a zero count, then denies future checkout and SQL/transaction work
-through release. Per-record counting prevents a denied checkout from producing
-a false checkin decrement. Engine hooks verify the owning PID and active lease
-before connection configuration, every statement and every
-begin/commit/rollback boundary.
+through release. Clean close seals before privileged validation, then consumes a
+one-shot permit for exactly one designated connection held across both the
+truncate checkpoint and `quick_check`; a write that completed before sealing is
+therefore included in validation, while no non-designated checkout can enter
+afterward. Per-record counting prevents a denied checkout from producing a false
+checkin decrement. Engine hooks verify the owning PID and active lease before
+connection configuration, every statement and every begin/commit/rollback
+boundary.
 
 The runtime owns the supported application unit-of-work factory. It checks
 readiness before entry and commit, starts each unit with `BEGIN IMMEDIATE`, and
 makes commit, rollback and failed entry terminal before fallible session cleanup.
 An unexpected `SQLITE_BUSY` or `SQLITE_LOCKED` therefore fails readiness closed
-and the same unit cannot be reused after failure or cleanup error.
+and the same unit cannot be reused after failure or cleanup error. When commit
+or rollback is known successful, a later session-close failure pauses runtime
+and external work through a PII-free callback but does not turn success into an
+ambiguous exception that invites retry or masks an existing body exception.
 
 ### Connection policy
 
@@ -128,7 +135,12 @@ marker is restored before returning the failure and the seal is lifted only if
 the same process still owns the lease. There is no marker-age shortcut and clean
 shutdown never clears the recovery latch. Successful kernel `LOCK_UN` is the
 definitive ownership-release boundary; descriptor close errors after that point
-are best-effort cleanup and cannot be reported as retained ownership.
+are best-effort cleanup and cannot be reported as retained ownership. Lease
+release is serialized as `ACTIVE`/`SEALED` → `RELEASING` → `INACTIVE` before,
+during and after `LOCK_UN`; re-entry is denied while releasing and an unlock
+failure restores the prior lifecycle. A separate runtime lifecycle lock rejects
+concurrent clean-close/abandon callers before either can unseal or release for
+the other.
 
 `SQLITE_FULL`, `SQLITE_IOERR`, corruption/not-a-database, unexpected writer
 contention and blocked shutdown produce fixed typed, PII-free operator states,

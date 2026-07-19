@@ -6,7 +6,7 @@ Implementation role: Luna-labelled Principal Core/Data Engineer (role label
 only; no model identity attestation)
 
 Integrated implementation commits: `1d67f87`, `b0c4b38`, `103c977`,
-`1dfd256`, `7cb58fa`
+`1dfd256`, `7cb58fa`, `02f91ce`
 
 Decision/evidence commits: `0fff920`, plus the documentation commit containing
 this revision
@@ -49,7 +49,7 @@ ADR-0012 freezes the local-lite SQLite contract:
 
 ## Deterministic executable evidence
 
-The focused suite contains 72 tests across database policy, migrations and
+The focused suite contains 79 tests across database policy, migrations and
 durability. It covers:
 
 - required PRAGMA readback and rejection of an unexpected physical target;
@@ -77,10 +77,19 @@ durability. It covers:
 - deterministic close and abandon checkout races proving the atomic seal leaves
   marker/latch evidence and ownership intact when checkout wins, plus denial
   without checkout-accounting underflow when sealing wins;
+- a checkout that writes and returns immediately before sealing, proving sealed
+  validation runs afterward on one designated held connection and leaves no
+  residual WAL frames;
 - abandon latch-directory-sync and lease-release failures proving pause is set
   before persistence and retry evidence/ownership remain available;
 - post-`LOCK_UN` descriptor cleanup failure proving successful unlock is the
   truthful ownership boundary and a replacement owner can acquire;
+- a paused-after-unlock release transition, concurrent-release denial and
+  unlock-failure restoration of the prior sealed state;
+- concurrent clean-close/abandon denial at the runtime lifecycle boundary;
+- known-success commit and rollback followed by close failure, proving the UoW
+  is terminal, data outcome remains unambiguous, original body errors are not
+  masked, and runtime/external work pauses;
 - transient directory-fsync failure after marker unlink, proving the marker is
   recreated and a recovery latch preserved while ownership remains held;
 - a recovery latch that survives a later clean restart, blocks migration/no-op
@@ -129,8 +138,11 @@ had about 2.3 GiB free. No test consumed the host disk.
 independent role-based reviews rejected the first implementation; commit
 `1dfd256` remediated those findings. A second pass rejected terminal-cleanup,
 abandon-pause and shutdown checkout-race behavior; `7cb58fa` remediates that
-second pass, but independent commit-bound re-review and the required host
-conformance evidence remain open. It does not promote `JOB-STATE-001`,
-`MIG-001`, `BAK-001`, any dispatch journal, or any live external action. See
+second pass. Final backend and architecture reviews still rejected
+validation/release ordering, concurrent runtime lifecycle and UoW retry
+ambiguity; `02f91ce` remediates those findings, but independent commit-bound
+re-review and the required host conformance evidence remain open. It does not
+promote `JOB-STATE-001`, `MIG-001`, `BAK-001`, any dispatch journal, or any live
+external action. See
 `docs/v1/reviews/15-sqlite-dur-adversarial-review.md` for chronology and
 disposition.
