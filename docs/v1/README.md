@@ -19,7 +19,7 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 ## Current program state
 
 - **Program state:** M0 implementation is active; executable foundations and a deterministic reserved-domain simulator exist, but there is no working remover.
-- **Current milestone:** M0 — executable foundation; accepted-source foundations are integrated. SPIKE-KEY targets `2a144bf`, `b74afdb` and `4f6f0ca` were rejected after P0/P1 findings. The current remediation candidate passes 80 focused tests, but clean new exact-target review, host conformance and authenticated external attestations are still required, so formal promotion remains fail-closed.
+- **Current milestone:** M0 — executable foundation; accepted-source foundations are integrated. SPIKE-KEY targets `2a144bf`, `b74afdb`, `4f6f0ca` and `211c9ee` were rejected after P0/P1 findings. The current remediation candidate passes 98 focused tests, but clean new exact-target review, host conformance and authenticated external attestations are still required, so formal promotion remains fail-closed.
 - **Current public claim:** architecture plus synthetic developer-foundation evidence only; no accepted Docker image, live connector, real-broker submission, verified removal, or supported deployment.
 - **Planning envelope for a release candidate:** week 32 with three experienced implementation lanes, subject to M0 velocity and reviewer/canary latency.
 - **Earliest stable V1 eligibility:** week 40 or later, after at least twelve weeks and a mature day-90 denominator for the automatic cohort.

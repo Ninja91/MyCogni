@@ -3,11 +3,13 @@
 Initial target: `2a144bf3a586cbaf05517f84e7c5ae9295e1ace4`.
 Second target: `b74afdb67a435d5a4cc37bd78b30917e5e72a944`.
 Third target: `4f6f0ca5f5b445660e85e0fcf24bc36a38e1a4cc`.
+Fourth target: `211c9ee53c0300af2ee8ee970351dca82fb6a3fc`.
 
 Current verdict: **REJECT**. The initial target had one P0 plus overlapping P1/P2 findings. The
 second target closed those findings but introduced an incomplete AES-key nonce/accounting domain.
 The third target closed that split-domain issue but retained an incomplete authenticated-sentinel
-nonce ledger. All three were rejected and none may be described as code-level accepted. The next
+nonce ledger. The fourth target completed record commitments but accounted authenticated records
+too late and retained source-validation/evidence gaps. All four were rejected and none may be described as code-level accepted. The next
 candidate remains unreviewed until a new exact commit and three clean verdicts are recorded.
 
 This is an AI-assisted source review, not independent human cryptographic certification. Three
@@ -170,16 +172,55 @@ live-provider/configuration rejection.
 - the visible static-site badge retained `2026-07-18` while its matrix, data attribute and current
   narrative used `2026-07-19`, and the site guard did not enforce equality.
 
-## Fourth candidate before new exact review
+## Fourth exact target `211c9ee` — REJECT
 
-The remediation candidate stores domain-separated commitments over canonical sentinel AAD and
+The fourth target stored domain-separated commitments over canonical sentinel AAD and
 ciphertext, permits exact record recomposition, latches distinct-record same-nonce reuse, and
 accounts authenticated records before later composition rejection. Backend failures are finite
 and redacted, while post-use source-latch precedence is preserved. Static-site snapshot dates are
 guarded against the completion matrix.
 
-The focused key lane reports `80 passed`; the combined key plus site-guard lane reports `92
+The focused key lane reported `80 passed`; the combined key plus site-guard lane reported `92
 passed`. New tests cover exact and distinct sentinel recomposition, nonce reservation by a
 concurrently rejected provider, readiness/unwrap backend failures, source-latch precedence and
-site-date mutation. This candidate remains unreviewed until committed and inspected independently
-by three new reviewers.
+site-date mutation.
+
+Three independent exact-target reviews returned **REJECT**:
+
+- code/specification quality: P0 0, P1 1, P2 1;
+- backend/infra/edge: P0 0, P1 1, P2 2;
+- product/operator/open source: P0 0, P1 1, P2 1.
+
+### Fourth-target P1
+
+- Sentinel accounting occurred only after `_material_session` completed post-use validation. A
+  record could authenticate successfully, then fail fixed-plaintext or source post-validation,
+  without reserving its already-used nonce.
+- Intermediate directories rejected group/world writers but accepted a `0755` component owned by
+  another local UID, whose owner could rename or replace the next component.
+
+Required remediation: separate authenticated-record accounting from provider activation; account
+immediately after valid AEAD output and before fixed-value/source checks; then activate only after
+source post-validation. Require every opened ancestor to be owned by root or the effective UID,
+while retaining a private effective-UID final parent.
+
+### Fourth-target P2
+
+- Invalid AEAD result types/lengths escaped or were misclassified; validate inside the finite
+  backend boundary and map to unavailable.
+- “Concurrent” evidence used overlapping objects sequentially; add barrier-controlled activation,
+  rejected-record accounting, collision-order and wrap-cap contention tests.
+- The site guard compared date strings but accepted an impossible calendar date; parse ISO dates
+  and mutation-test the visible, data-attribute and narrative forms.
+
+## Fifth candidate before new exact review
+
+The next remediation records a validated authenticated sentinel under the key-domain lock before
+fixed-plaintext and source post-validation, while final provider activation remains after full
+source validation. It validates every backend return type/length, enforces trusted ownership for
+every opened ancestor, adds real thread-contention evidence, and parses the synchronized site date
+as an actual ISO calendar date.
+
+The focused key lane reports `98 passed`; the combined key plus site-guard lane reports `113
+passed`. The candidate remains unreviewed until committed and inspected independently by three
+new reviewers.

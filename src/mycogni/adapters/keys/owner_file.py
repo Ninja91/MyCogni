@@ -252,13 +252,20 @@ class OwnerFileSecretProvider:
                             KeyReadinessState.RECOVERY_REQUIRED,
                             SourceStatus.UNAVAILABLE,
                         )
+                    if type(plaintext) is not bytes or len(plaintext) != len(_READINESS_PLAINTEXT):
+                        self._latch_recovery(SourceStatus.UNAVAILABLE)
+                        return KeyReadiness(
+                            KeyReadinessState.RECOVERY_REQUIRED,
+                            SourceStatus.UNAVAILABLE,
+                        )
+                    self._record_authenticated_sentinel(snapshot)
                     if not hmac.compare_digest(plaintext, _READINESS_PLAINTEXT):
                         self._latch_recovery(SourceStatus.READABLE)
                         return KeyReadiness(
                             KeyReadinessState.RECOVERY_REQUIRED,
                             SourceStatus.READABLE,
                         )
-                self._bind_key_domain(snapshot)
+                self._activate_key_domain(snapshot)
                 self._source_pin = snapshot
             except SecretProviderError as error:
                 source_status = self._source_status_for(error.code)
@@ -289,6 +296,8 @@ class OwnerFileSecretProvider:
                         profile_material,
                         self._profile_aad(binding),
                     )
+                    if type(ciphertext) is not bytes or len(ciphertext) != PROFILE_DEK_BYTES + 16:
+                        _fail(SecretFailureCode.UNAVAILABLE)
                 except SecretProviderError:
                     raise
                 except Exception:
@@ -330,6 +339,8 @@ class OwnerFileSecretProvider:
                         wrapped.ciphertext,
                         self._profile_aad(expected_binding),
                     )
+                    if type(plaintext) is not bytes or len(plaintext) != PROFILE_DEK_BYTES:
+                        _fail(SecretFailureCode.UNAVAILABLE)
             except SecretProviderError:
                 raise
             except InvalidTag:
@@ -338,8 +349,6 @@ class OwnerFileSecretProvider:
                 _fail(SecretFailureCode.CATALOG_KEY_MISMATCH)
             except Exception:
                 _fail(SecretFailureCode.UNAVAILABLE)
-        if len(plaintext) != PROFILE_DEK_BYTES:
-            _fail(SecretFailureCode.MALFORMED_RECORD)
         return ProfileDekHandle(
             plaintext,
             _issuer_token=self._handle_issuer,
@@ -361,8 +370,8 @@ class OwnerFileSecretProvider:
             _fail(SecretFailureCode.READINESS_REQUIRED)
         return self._source_pin
 
-    def _bind_key_domain(self, snapshot: _SourcePin) -> None:
-        """Bind this provider to process-wide accounting for the actual AES key."""
+    def _record_authenticated_sentinel(self, snapshot: _SourcePin) -> None:
+        """Account for a sentinel immediately after its AEAD authentication."""
         domain = snapshot.material_digest
         with _REGISTRY_LOCK:
             state = _PROCESS_WRAP_STATES.get(domain)
@@ -384,6 +393,14 @@ class OwnerFileSecretProvider:
                 # Account for an authenticated record before any later composition
                 # rejection: this nonce has already been used under the AES key.
                 state.sentinel_records[sentinel_nonce] = sentinel_commitment
+
+    def _activate_key_domain(self, snapshot: _SourcePin) -> None:
+        """Activate a fully revalidated provider in its process-wide key domain."""
+        domain = snapshot.material_digest
+        with _REGISTRY_LOCK:
+            state = _PROCESS_WRAP_STATES.get(domain)
+            if state is None:
+                _fail(SecretFailureCode.UNAVAILABLE)
             if state.limit != self._process_wrap_limit:
                 _fail(SecretFailureCode.PROVIDER_MISMATCH)
             existing = _LIVE_KEY_PROVIDERS.get(domain)
@@ -472,6 +489,18 @@ class OwnerFileSecretProvider:
             return False
         return True
 
+    @staticmethod
+    def _validate_ancestor(metadata: os.stat_result, *, final_parent: bool) -> None:
+        trusted_owners = {0, os.geteuid()}
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mode & 0o022
+            or metadata.st_uid not in trusted_owners
+        ):
+            _fail(SecretFailureCode.UNSAFE_STORAGE)
+        if final_parent and (metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077):
+            _fail(SecretFailureCode.UNSAFE_STORAGE)
+
     def _open_private_parent(self) -> tuple[int, _DirectoryIdentity]:
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
         nofollow = flags | getattr(os, "O_NOFOLLOW", 0)
@@ -479,6 +508,8 @@ class OwnerFileSecretProvider:
         try:
             descriptor = os.open(self._key_path.anchor, nofollow)
             parts = self._key_path.parent.parts[1:]
+            anchor_metadata = self._safe_fstat(descriptor)
+            self._validate_ancestor(anchor_metadata, final_parent=not parts)
             for index, part in enumerate(parts):
                 child = os.open(part, nofollow, dir_fd=descriptor)
                 if not self._close(descriptor):
@@ -486,12 +517,10 @@ class OwnerFileSecretProvider:
                     _fail(SecretFailureCode.UNAVAILABLE)
                 descriptor = child
                 metadata = self._safe_fstat(descriptor)
-                if not stat.S_ISDIR(metadata.st_mode) or metadata.st_mode & 0o022:
-                    _fail(SecretFailureCode.UNSAFE_STORAGE)
-                if index == len(parts) - 1 and (
-                    metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077
-                ):
-                    _fail(SecretFailureCode.UNSAFE_STORAGE)
+                self._validate_ancestor(
+                    metadata,
+                    final_parent=index == len(parts) - 1,
+                )
             metadata = self._safe_fstat(descriptor)
             return descriptor, self._directory_identity(metadata)
         except SecretProviderError:

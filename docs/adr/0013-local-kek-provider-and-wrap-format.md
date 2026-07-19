@@ -78,6 +78,9 @@ file with one link, exact `0400` or `0600` mode and exact versioned length, reje
 unsafe ancestors, and retraverses the configured path to revalidate parent and file identity
 around use. The key path must be structurally
 disjoint in both directions from every configured data, evidence and managed-archive root.
+Every opened directory from the filesystem anchor through the final parent must be owned by root
+or the effective UID and must not be group/world writable; the final parent must additionally be
+private and owned by the effective UID.
 The provider captures its creator process, checks before entropy/locks/record work and rejects use
 after fork. A raw fork child cannot construct or use a provider and must `exec`/restart before
 recomposition, so inherited global locks are never entered. A second live provider for the same
@@ -92,8 +95,10 @@ domain across provider recomposition. Every authenticated readiness-sentinel non
 domain-separated commitment over its canonical AAD and ciphertext. Exact recomposition of the
 same persisted sentinel is idempotent; a distinct authenticated record at the same nonce, or a
 sentinel/profile collision, permanently latches new wrapping off. An authenticated sentinel is
-accounted under the domain lock before a later live-provider or configuration rejection because
-its nonce has already been used under that AES key. It never retries after an ambiguous
+accounted under the domain lock immediately after successful authentication, before fixed-value
+comparison, source post-validation, or a later live-provider/configuration rejection, because its
+nonce has already been used under that AES key. Provider activation remains separate and occurs
+only after post-validation succeeds. It never retries after an ambiguous
 cryptographic/provider failure.
 Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
 KEY-001/KEY-002 and remain prerequisites for production wrapping.
@@ -129,7 +134,8 @@ staged recovery verifies it before committing any provider/catalog transition.
 AEAD authentication failure is reported neutrally and latches recovery. Other cryptographic
 backend exceptions map to redacted unavailable state, never malformed caller input. If source
 revalidation also fails after an AEAD authentication failure, the stronger current source latch
-is preserved rather than overwritten by the neutral authentication result.
+is preserved rather than overwritten by the neutral authentication result. Backend return values
+must be exact `bytes` values of the format-defined length; other shapes map to unavailable.
 
 Future rotation follows `PREPARED -> ACTIVE -> RETIRING -> RETIRED`. Rewrapping preserves the
 same profile DEK and compare-and-swaps its catalog record. Old KEKs remain recoverable until every

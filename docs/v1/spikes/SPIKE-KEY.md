@@ -2,8 +2,9 @@
 
 Status: `IN_PROGRESS`. Initial exact target `2a144bf` was rejected with one P0 split-key finding;
 second target `b74afdb` was rejected for an incomplete AES-key nonce domain; third target
-`4f6f0ca` was rejected for an incomplete authenticated-sentinel nonce ledger. The current
-remediation candidate passes its expanded focused local suite, but a clean new exact-target
+`4f6f0ca` was rejected for an incomplete authenticated-sentinel nonce ledger; fourth target
+`211c9ee` was rejected for late authenticated-record accounting and provider/source validation
+gaps. The current remediation candidate passes its expanded focused local suite, but a clean new exact-target
 review is still pending; no rejected or unreviewed result is acceptance.
 macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
 backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
@@ -70,7 +71,8 @@ is denied and cannot split the wrap cap or nonce ledger. Sentinel nonces are res
 domain before profile wrapping. The nonce ledger stores a commitment to each authenticated
 sentinel's canonical AAD and ciphertext: exact persisted-record recomposition is idempotent, while
 a different authenticated record at the same nonce latches reuse. Authentication is accounted
-before a subsequent live-provider/configuration rejection. Durable accounting across
+immediately before fixed-value comparison, source post-validation and subsequent
+live-provider/configuration rejection; final provider activation is separate. Durable accounting across
 processes/restarts is deferred to KEY-001 and is a production blocker, not an implied property of
 the spike.
 
@@ -82,6 +84,8 @@ truncates, overwrites, chmods or repairs it. Every operation checks:
 
 - creator PID still matches before input, entropy or lock work and after lock acquisition;
 - all path ancestors are non-symlinks and not unsafe writable locations;
+- every opened ancestor is owned by root or the effective UID, and the final parent is private
+  and owned by the effective UID;
 - configured key path and every managed root are neither equal nor ancestors/descendants;
 - no-follow/close-on-exec descriptor open succeeds;
 - descriptor is a regular file owned by the expected effective UID;
@@ -95,7 +99,7 @@ file does not resume it. Failures use finite redacted categories. Exceptions, re
 diagnostics must not reveal the path, key bytes, nonce, ciphertext, AAD or backend error text.
 Unexpected cryptographic backend failures map to unavailable; neutral authentication failure
 cannot overwrite a stronger source-removal or unsafe-source latch discovered during post-use
-revalidation.
+revalidation. Invalid backend result types or lengths also map to unavailable.
 POSIX owner/mode checks are source/fixture evidence only; macOS ACLs and mount aliases remain
 exact-host qualification blockers.
 
@@ -134,7 +138,7 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The current remediation candidate's 80-test focused suite covers strict construction and rendering, a
+The current remediation candidate's 98-test focused suite covers strict construction and rendering, a
 hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
@@ -142,12 +146,15 @@ mutation, readiness-before-use/restart, initial-failure and replace-then-restore
 exhaustion, process-domain duplicate accounting across installation/path recomposition, committed
 sentinel records, exact persisted-sentinel recomposition, distinct-record same-nonce refusal,
 rejected-concurrent-provider nonce reservation, reserved sentinel/profile nonces, concurrent
-same-material provider denial, raw-fork constructor/use with inherited held locks,
+same-material provider activation with barrier-controlled contention, concurrent wrap-cap
+enforcement, raw-fork constructor/use with inherited held locks,
 corrupted/wrong-purpose/identity-substituted sentinels, injected backend failure mapping,
+invalid backend result shapes, authenticated unexpected-plaintext and post-use-failure accounting,
 post-use source-latch precedence, 32 randomized round trips,
 symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive overlap,
-configured-directory rename/replacement and typed post-use syscall failures. Test values are
-synthetic. On Darwin arm64 with locked CPython 3.12.12, the focused launcher reports `80 passed`;
+foreign-owned intermediate ancestors, configured-directory rename/replacement and typed post-use
+syscall failures. Test values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the
+focused launcher reports `98 passed`;
 Ruff and strict source mypy also pass. New exact review and both locked CI runtimes remain required.
 
 Reproduce the focused lane from the repository root using a private temporary directory whose

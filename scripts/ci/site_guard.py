@@ -6,6 +6,7 @@ import hashlib
 import re
 import sys
 from collections import Counter
+from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -159,6 +160,10 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         errors.append("completion matrix has no parseable snapshot date")
     elif status_panel is not None:
         expected_date = matrix_date_match.group(1)
+        try:
+            date.fromisoformat(expected_date)
+        except ValueError:
+            errors.append(f"completion matrix snapshot date is invalid: {expected_date!r}")
         observed_dates = {
             "data-status-date": [status_panel.get("data-status-date", "")],
             "visible status date": visible_status_dates,
