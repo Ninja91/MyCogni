@@ -22,6 +22,7 @@ from mycogni.adapters.keys.owner_file import (
 from mycogni.application.keys import (
     ActiveKekRef,
     KeyReadinessState,
+    ProfileDekHandle,
     ProfileKeyBinding,
     SecretFailureCode,
     SecretProviderError,
@@ -893,6 +894,160 @@ def test_same_key_provider_activation_contention_is_bounded_and_accounts_loser(
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
 
 
+def test_activation_rechecks_nonce_latch_after_record_to_activation_race(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_path, managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    shared_nonce = b"c" * 12
+    first = _provider(
+        provider_paths,
+        readiness_sentinel=_sentinel(material, nonce=shared_nonce),
+    )
+
+    other_key_directory = key_path.parent.parent / "racing-other-keys"
+    other_key_directory.mkdir(mode=0o700)
+    other_key_path = other_key_directory / "installation.kek"
+    _EXPECTED_KEY_MATERIAL[other_key_path] = material
+    _provision(other_key_path, material)
+    other_managed = managed_root.parent / "racing-other-managed"
+    other_managed.mkdir(mode=0o700)
+    other_installation = _id("20000000-0000-4000-8000-000000000082")
+    other_sentinel_id = _id("20000000-0000-4000-8000-000000000084")
+    second = OwnerFileSecretProvider(
+        key_path=other_key_path,
+        active_kek=ACTIVE_KEK,
+        installation_id=other_installation,
+        catalog_id=CATALOG_ID,
+        sentinel_id=other_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            installation_id=other_installation,
+            sentinel_id=other_sentinel_id,
+            nonce=shared_nonce,
+        ),
+        managed_roots=(other_managed,),
+    )
+    before_first_activation = threading.Event()
+    release_first_activation = threading.Event()
+    real_activate = OwnerFileSecretProvider._activate_key_domain
+
+    def gated_activate(
+        candidate: OwnerFileSecretProvider,
+        snapshot: object,
+    ) -> None:
+        if candidate is first:
+            before_first_activation.set()
+            assert release_first_activation.wait(timeout=2)
+        real_activate(candidate, snapshot)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(OwnerFileSecretProvider, "_activate_key_domain", gated_activate)
+    first_results: list[object] = []
+    first_thread = threading.Thread(target=lambda: first_results.append(first.readiness()))
+    first_thread.start()
+    assert before_first_activation.wait(timeout=2)
+
+    second_result = second.readiness()
+    release_first_activation.set()
+    first_thread.join(timeout=2)
+
+    assert not first_thread.is_alive(), "record-to-activation race deadlocked"
+    assert first_results[0].state is KeyReadinessState.RECOVERY_REQUIRED  # type: ignore[attr-defined]
+    assert second_result.state is KeyReadinessState.RECOVERY_REQUIRED
+
+
+def test_later_domain_nonce_latch_invalidates_active_provider_unwrap(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_path, managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    shared_nonce = b"d" * 12
+    provider = _provider(
+        provider_paths,
+        readiness_sentinel=_sentinel(material, nonce=shared_nonce),
+    )
+    _ready(provider)
+    from mycogni.adapters.keys import owner_file
+
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"e" * 12)
+    wrapped = provider.create_profile_key(BINDING)
+
+    other_key_directory = key_path.parent.parent / "latched-other-keys"
+    other_key_directory.mkdir(mode=0o700)
+    other_key_path = other_key_directory / "installation.kek"
+    _EXPECTED_KEY_MATERIAL[other_key_path] = material
+    _provision(other_key_path, material)
+    other_managed = managed_root.parent / "latched-other-managed"
+    other_managed.mkdir(mode=0o700)
+    other_installation = _id("20000000-0000-4000-8000-000000000092")
+    other_sentinel_id = _id("20000000-0000-4000-8000-000000000094")
+    other = OwnerFileSecretProvider(
+        key_path=other_key_path,
+        active_kek=ACTIVE_KEK,
+        installation_id=other_installation,
+        catalog_id=CATALOG_ID,
+        sentinel_id=other_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            installation_id=other_installation,
+            sentinel_id=other_sentinel_id,
+            nonce=shared_nonce,
+        ),
+        managed_roots=(other_managed,),
+    )
+    assert other.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+
+    with pytest.raises(SecretProviderError) as caught:
+        provider.unwrap_profile_key(wrapped, BINDING)
+    assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
+
+
+def test_nonce_collision_preserves_simultaneous_post_use_source_failure(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    key_path, _managed_root = provider_paths
+    material = _EXPECTED_KEY_MATERIAL[key_path]
+    shared_nonce = b"f" * 12
+    provider = _provider(
+        provider_paths,
+        readiness_sentinel=_sentinel(material, nonce=shared_nonce),
+    )
+    _ready(provider)
+    del provider
+    gc.collect()
+
+    replacement_sentinel_id = _id("20000000-0000-4000-8000-000000000095")
+    replacement = _provider(
+        provider_paths,
+        sentinel_id=replacement_sentinel_id,
+        readiness_sentinel=_sentinel(
+            material,
+            sentinel_id=replacement_sentinel_id,
+            nonce=shared_nonce,
+        ),
+    )
+
+    class RemovingCipher:
+        def __init__(self, key: object) -> None:
+            self._delegate = AESGCM(bytes(key))  # type: ignore[arg-type]
+
+        def decrypt(self, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+            plaintext = self._delegate.decrypt(nonce, ciphertext, aad)
+            key_path.unlink()
+            return plaintext
+
+    monkeypatch.setattr(owner_file, "AESGCM", RemovingCipher)
+    readiness = replacement.readiness()
+
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is SourceStatus.UNAVAILABLE
+
+
 def test_concurrent_wrap_attempts_cannot_exceed_process_cap(
     provider_paths: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -1082,7 +1237,7 @@ def test_sentinel_nonce_is_reserved_from_profile_wraps(
     with pytest.raises(SecretProviderError) as latched:
         provider.create_profile_key(BINDING)
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
-    assert latched.value.code is SecretFailureCode.NONCE_REUSE
+    assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
 def test_profile_nonce_is_reserved_from_later_sentinel_record(
@@ -1159,6 +1314,38 @@ def test_forked_child_fails_before_inherited_held_lock(
         assert os.read(read_fd, 128) == b"forked_process"
     finally:
         provider._state_lock.release()
+        os.close(read_fd)
+        os.waitpid(child, 0)
+
+
+def test_forked_profile_key_handle_fails_before_inherited_lock() -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("requires POSIX fork")
+    issuer = object()
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+    state_lock = handle._ProfileDekHandle__state_lock  # type: ignore[attr-defined]
+    read_fd, write_fd = os.pipe()
+    state_lock.acquire()
+    child = os.fork()
+    if child == 0:
+        os.close(read_fd)
+        try:
+            handle.__enter__()
+        except RuntimeError:
+            os.write(write_fd, b"rejected")
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        readable, _, _ = select.select([read_fd], [], [], 2.0)
+        assert readable, "forked child blocked on inherited handle lock"
+        assert os.read(read_fd, 32) == b"rejected"
+    finally:
+        state_lock.release()
         os.close(read_fd)
         os.waitpid(child, 0)
 

@@ -34,7 +34,9 @@ recomposition; restoring the old file cannot clear the latch. First-sentinel cre
 a separate explicit empty-install administration boundary and is absent from routine runtime.
 
 The port creates a fresh random 32-byte profile DEK, wraps it, and opens it only as a short-lived,
-context-managed, issuer/process-bound handle. The handle permits one callback then closes. The
+context-managed, issuer/process-bound handle. A synchronized state machine permits one callback
+then closes, including under concurrent entry/use/close. PID checks run before inherited handle
+locks so raw-fork use cannot block. The
 callback can still copy material or reach a Python backing object, so this is only an
 accidental-exposure reduction, not an opaque capability or same-process security boundary. A
 later paired profile-crypto boundary will own consumption. Routine callers cannot ask for
@@ -98,7 +100,9 @@ sentinel/profile collision, permanently latches new wrapping off. An authenticat
 accounted under the domain lock immediately after successful authentication, before fixed-value
 comparison, source post-validation, or a later live-provider/configuration rejection, because its
 nonce has already been used under that AES key. Provider activation remains separate and occurs
-only after post-validation succeeds. It never retries after an ambiguous
+only after post-validation succeeds; activation atomically rechecks the record commitment and
+domain latch. A later domain nonce-reuse latch invalidates both wrap and unwrap on an already-live
+provider. It never retries after an ambiguous
 cryptographic/provider failure.
 Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
 KEY-001/KEY-002 and remain prerequisites for production wrapping.
@@ -136,6 +140,8 @@ backend exceptions map to redacted unavailable state, never malformed caller inp
 revalidation also fails after an AEAD authentication failure, the stronger current source latch
 is preserved rather than overwritten by the neutral authentication result. Backend return values
 must be exact `bytes` values of the format-defined length; other shapes map to unavailable.
+The same current-source precedence applies when bookkeeping and source post-validation fail in
+one readiness operation.
 
 Future rotation follows `PREPARED -> ACTIVE -> RETIRING -> RETIRED`. Rewrapping preserves the
 same profile DEK and compare-and-swaps its catalog record. Old KEKs remain recoverable until every

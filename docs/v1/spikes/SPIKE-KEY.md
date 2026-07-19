@@ -4,7 +4,8 @@ Status: `IN_PROGRESS`. Initial exact target `2a144bf` was rejected with one P0 s
 second target `b74afdb` was rejected for an incomplete AES-key nonce domain; third target
 `4f6f0ca` was rejected for an incomplete authenticated-sentinel nonce ledger; fourth target
 `211c9ee` was rejected for late authenticated-record accounting and provider/source validation
-gaps. The current remediation candidate passes its expanded focused local suite, but a clean new exact-target
+gaps; fifth target `a0ae32a` was rejected for a record-to-activation race and concurrent handle
+state. The current remediation candidate passes its expanded focused local suite, but a clean new exact-target
 review is still pending; no rejected or unreviewed result is acceptance.
 macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
 backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
@@ -44,8 +45,9 @@ owner-only key source outside every managed archive root
 
 Raw KEK bytes never cross the application port. Ordinary runtime code has no key-create,
 sentinel-create, overwrite, provider-discovery or fallback operation. `Sensitive[T]` remains only
-a rendering guard and is not used as an access-control claim. The profile-DEK handle limits one
-activation/callback and then closes, but callback code can copy bytes or reach a Python backing
+a rendering guard and is not used as an access-control claim. The profile-DEK handle synchronizes
+entry, one activation/callback and close, and rejects forked use before inherited locks, but
+callback code can copy bytes or reach a Python backing
 object; it is not an opaque capability or same-process security boundary.
 
 ## Record and AAD contract
@@ -72,7 +74,9 @@ domain before profile wrapping. The nonce ledger stores a commitment to each aut
 sentinel's canonical AAD and ciphertext: exact persisted-record recomposition is idempotent, while
 a different authenticated record at the same nonce latches reuse. Authentication is accounted
 immediately before fixed-value comparison, source post-validation and subsequent
-live-provider/configuration rejection; final provider activation is separate. Durable accounting across
+live-provider/configuration rejection; final provider activation is separate and atomically
+rechecks the exact commitment plus the domain latch. A later latch denies both wrap and unwrap on
+an already-active provider. Durable accounting across
 processes/restarts is deferred to KEY-001 and is a production blocker, not an implied property of
 the spike.
 
@@ -138,7 +142,7 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The current remediation candidate's 98-test focused suite covers strict construction and rendering, a
+The current remediation candidate's 104-test focused suite covers strict construction and rendering, a
 hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
@@ -147,14 +151,15 @@ exhaustion, process-domain duplicate accounting across installation/path recompo
 sentinel records, exact persisted-sentinel recomposition, distinct-record same-nonce refusal,
 rejected-concurrent-provider nonce reservation, reserved sentinel/profile nonces, concurrent
 same-material provider activation with barrier-controlled contention, concurrent wrap-cap
-enforcement, raw-fork constructor/use with inherited held locks,
+enforcement, record-to-activation collision races, later-latch unwrap denial, combined
+bookkeeping/source-failure precedence, raw-fork provider/handle use with inherited held locks,
 corrupted/wrong-purpose/identity-substituted sentinels, injected backend failure mapping,
 invalid backend result shapes, authenticated unexpected-plaintext and post-use-failure accounting,
-post-use source-latch precedence, 32 randomized round trips,
+post-use source-latch precedence, synchronized concurrent handle entry/use/close, 32 randomized round trips,
 symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive overlap,
 foreign-owned intermediate ancestors, configured-directory rename/replacement and typed post-use
 syscall failures. Test values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the
-focused launcher reports `98 passed`;
+focused launcher reports `104 passed`;
 Ruff and strict source mypy also pass. New exact review and both locked CI runtimes remain required.
 
 Reproduce the focused lane from the repository root using a private temporary directory whose

@@ -268,8 +268,7 @@ class OwnerFileSecretProvider:
                 self._activate_key_domain(snapshot)
                 self._source_pin = snapshot
             except SecretProviderError as error:
-                source_status = self._source_status_for(error.code)
-                self._latch_recovery(source_status)
+                source_status = self._latch_or_preserve_recovery(error.code)
                 return KeyReadiness(
                     KeyReadinessState.RECOVERY_REQUIRED,
                     source_status,
@@ -366,8 +365,13 @@ class OwnerFileSecretProvider:
     def _require_ready(self) -> _SourcePin:
         if self._recovery_latched:
             _fail(SecretFailureCode.RECOVERY_REQUIRED)
-        if self._source_pin is None or self._wrap_state is None:
+        state = self._wrap_state
+        if self._source_pin is None or state is None:
             _fail(SecretFailureCode.READINESS_REQUIRED)
+        with state.lock:
+            if state.nonce_reuse_latched:
+                self._latch_recovery(SourceStatus.READABLE)
+                _fail(SecretFailureCode.RECOVERY_REQUIRED)
         return self._source_pin
 
     def _record_authenticated_sentinel(self, snapshot: _SourcePin) -> None:
@@ -401,18 +405,35 @@ class OwnerFileSecretProvider:
             state = _PROCESS_WRAP_STATES.get(domain)
             if state is None:
                 _fail(SecretFailureCode.UNAVAILABLE)
-            if state.limit != self._process_wrap_limit:
-                _fail(SecretFailureCode.PROVIDER_MISMATCH)
-            existing = _LIVE_KEY_PROVIDERS.get(domain)
-            if existing is not None and existing is not self:
-                _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
-            _LIVE_KEY_PROVIDERS[domain] = self
-            self._wrap_state = state
+            with state.lock:
+                sentinel_nonce = self._readiness_sentinel.nonce
+                expected_commitment = self._sentinel_record_commitment()
+                actual_commitment = state.sentinel_records.get(sentinel_nonce)
+                if (
+                    state.nonce_reuse_latched
+                    or actual_commitment is None
+                    or not hmac.compare_digest(actual_commitment, expected_commitment)
+                ):
+                    _fail(SecretFailureCode.NONCE_REUSE)
+                if state.limit != self._process_wrap_limit:
+                    _fail(SecretFailureCode.PROVIDER_MISMATCH)
+                existing = _LIVE_KEY_PROVIDERS.get(domain)
+                if existing is not None and existing is not self:
+                    _fail(SecretFailureCode.PROVIDER_ALREADY_ACTIVE)
+                _LIVE_KEY_PROVIDERS[domain] = self
+                self._wrap_state = state
 
     def _latch_recovery(self, source_status: SourceStatus) -> None:
         self._recovery_latched = True
         self._latched_source_status = source_status
         self._source_pin = None
+
+    def _latch_or_preserve_recovery(self, code: SecretFailureCode) -> SourceStatus:
+        if self._recovery_latched:
+            return self._latched_source_status
+        source_status = self._source_status_for(code)
+        self._latch_recovery(source_status)
+        return source_status
 
     @staticmethod
     def _source_status_for(code: SecretFailureCode) -> SourceStatus:
@@ -652,8 +673,7 @@ class OwnerFileSecretProvider:
                                 )
                             _fail(SecretFailureCode.UNSAFE_STORAGE)
                 except SecretProviderError as post_error:
-                    if required_pin is not None:
-                        self._latch_recovery(self._source_status_for(post_error.code))
+                    self._latch_recovery(self._source_status_for(post_error.code))
                     if operation_error is None:
                         raise
                 if operation_error is not None:

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NoReturn, SupportsIndex
@@ -273,6 +275,7 @@ class ProfileDekHandle:
         "__issuer_token",
         "__material",
         "__pid",
+        "__state_lock",
         "__used",
     )
 
@@ -294,12 +297,17 @@ class ProfileDekHandle:
         self.__issuer_token = _issuer_token
         self.__issuer_check = _issuer_check
         self.__pid = os.getpid() if _pid is None else _pid
+        self.__state_lock = threading.RLock()
         self.__active = False
         self.__closed = False
         self.__used = False
 
-    def _assert_issuer(self) -> None:
-        if self.__closed or os.getpid() != self.__pid:
+    def _assert_process(self) -> None:
+        if os.getpid() != self.__pid:
+            raise RuntimeError("profile key handle is not available")
+
+    def _assert_issuer_locked(self) -> None:
+        if self.__closed:
             raise RuntimeError("profile key handle is not available")
         try:
             accepted = self.__issuer_check(self.__issuer_token, self.__pid)
@@ -309,30 +317,42 @@ class ProfileDekHandle:
             raise RuntimeError("profile key handle is not available")
 
     def __enter__(self) -> ProfileDekHandle:
-        self._assert_issuer()
-        if self.__active:
-            raise RuntimeError("profile key handle is not available")
-        self.__active = True
-        return self
+        self._assert_process()
+        with self.__state_lock:
+            self._assert_process()
+            self._assert_issuer_locked()
+            if self.__active:
+                raise RuntimeError("profile key handle is not available")
+            self.__active = True
+            return self
 
     def use[T](self, operation: Callable[[memoryview], T]) -> T:
         """Run a synchronous operation against a temporary read-only view."""
-        self._assert_issuer()
-        if not self.__active or self.__used:
-            raise RuntimeError("profile key handle is not active")
-        if not callable(operation):
-            raise TypeError("profile key operation must be callable")
-        self.__used = True
-        try:
-            return operation(memoryview(self.__material).toreadonly())
-        finally:
-            self.close()
+        self._assert_process()
+        with self.__state_lock:
+            self._assert_process()
+            self._assert_issuer_locked()
+            if not self.__active or self.__used:
+                raise RuntimeError("profile key handle is not active")
+            if not callable(operation):
+                raise TypeError("profile key operation must be callable")
+            self.__used = True
+            try:
+                return operation(memoryview(self.__material).toreadonly())
+            finally:
+                self._close_locked()
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
 
     def close(self) -> None:
         """Invalidate the handle and overwrite its owned mutable buffer."""
+        self._assert_process()
+        with self.__state_lock:
+            self._assert_process()
+            self._close_locked()
+
+    def _close_locked(self) -> None:
         if not self.__closed:
             self.__material[:] = b"\x00" * len(self.__material)
             self.__closed = True
@@ -355,4 +375,5 @@ class ProfileDekHandle:
 
     def __del__(self) -> None:
         if hasattr(self, "_ProfileDekHandle__closed"):
-            self.close()
+            with suppress(Exception):
+                self.close()

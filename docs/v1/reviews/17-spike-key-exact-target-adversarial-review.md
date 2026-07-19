@@ -4,12 +4,15 @@ Initial target: `2a144bf3a586cbaf05517f84e7c5ae9295e1ace4`.
 Second target: `b74afdb67a435d5a4cc37bd78b30917e5e72a944`.
 Third target: `4f6f0ca5f5b445660e85e0fcf24bc36a38e1a4cc`.
 Fourth target: `211c9ee53c0300af2ee8ee970351dca82fb6a3fc`.
+Fifth target: `a0ae32ab7e6076fa8e9683ea06f8869f04fca8c8`.
 
 Current verdict: **REJECT**. The initial target had one P0 plus overlapping P1/P2 findings. The
 second target closed those findings but introduced an incomplete AES-key nonce/accounting domain.
 The third target closed that split-domain issue but retained an incomplete authenticated-sentinel
 nonce ledger. The fourth target completed record commitments but accounted authenticated records
-too late and retained source-validation/evidence gaps. All four were rejected and none may be described as code-level accepted. The next
+too late and retained source-validation/evidence gaps. The fifth target closed those paths but
+retained an activation race and unsynchronized handle state. All five were rejected and none may
+be described as code-level accepted. The next
 candidate remains unreviewed until a new exact commit and three clean verdicts are recorded.
 
 This is an AI-assisted source review, not independent human cryptographic certification. Three
@@ -213,14 +216,49 @@ while retaining a private effective-UID final parent.
 - The site guard compared date strings but accepted an impossible calendar date; parse ISO dates
   and mutation-test the visible, data-attribute and narrative forms.
 
-## Fifth candidate before new exact review
+## Fifth exact target `a0ae32a` — REJECT
 
-The next remediation records a validated authenticated sentinel under the key-domain lock before
+The fifth target records a validated authenticated sentinel under the key-domain lock before
 fixed-plaintext and source post-validation, while final provider activation remains after full
 source validation. It validates every backend return type/length, enforces trusted ownership for
 every opened ancestor, adds real thread-contention evidence, and parses the synchronized site date
 as an actual ISO calendar date.
 
-The focused key lane reports `98 passed`; the combined key plus site-guard lane reports `113
+The focused key lane reported `98 passed`; the combined key plus site-guard lane reported `113
+passed`.
+
+The publication/product lane returned **ACCEPT** with P0 0, P1 0, P2 0. The two implementation
+lanes returned **REJECT**:
+
+- code/specification quality: P0 0, P1 0, P2 1;
+- backend/infra/edge: P0 0, P1 1, P2 1.
+
+### Fifth-target P1
+
+Provider activation did not recheck `nonce_reuse_latched` under the domain lock. Another provider
+could latch conflicting record reuse between the first provider's record step and activation, yet
+the first could still report ready. Required remediation: activation atomically verifies the
+unlatched state and exact commitment before registering the provider, and a later latch must deny
+both wrap and unwrap for an already-active provider.
+
+### Fifth-target P2
+
+- An operation error during initial readiness could mask a simultaneous source post-validation
+  failure and overwrite unavailable/unsafe with readable. Preserve the current source latch even
+  when record bookkeeping failed first.
+- `ProfileDekHandle` check-and-set state was not synchronized. Concurrent callbacks could both
+  receive a key view despite the one-callback contract. Synchronize enter/use/close, hold coherent
+  state through the callback, and check PID before inherited locks.
+
+## Sixth candidate before new exact review
+
+The next remediation makes activation recheck the exact record and domain latch atomically,
+invalidates all active-provider key use after a later latch, preserves simultaneous post-use
+source failure, and implements a synchronized one-callback handle with fork-before-lock behavior.
+Barrier-controlled tests cover record-to-activation collision, later-latch unwrap denial,
+combined bookkeeping/source failure, concurrent handle entry/use/close and a forked child facing
+an inherited held handle lock.
+
+The focused key lane reports `104 passed`; the combined key plus site-guard lane reports `119
 passed`. The candidate remains unreviewed until committed and inspected independently by three
 new reviewers.

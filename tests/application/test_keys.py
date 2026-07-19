@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+import threading
 from dataclasses import replace
 
 import pytest
@@ -152,6 +153,82 @@ def test_profile_key_handle_allows_exactly_one_callback_and_auto_closes() -> Non
     assert bytes(retained_views[0]) == b"\x00" * 32
     assert retained_copies[0] == b"p" * 32
     # The retained immutable copy proves best-effort backing-buffer scrubbing is not zeroization.
+
+
+def test_profile_key_handle_concurrent_enter_and_use_allows_one_callback() -> None:
+    issuer = object()
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+    barrier = threading.Barrier(3)
+    outcomes: list[str] = []
+    outcome_lock = threading.Lock()
+
+    def consume() -> None:
+        barrier.wait()
+        try:
+            with handle as active:
+                active.use(bytes)
+            outcome = "used"
+        except RuntimeError:
+            outcome = "rejected"
+        with outcome_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "profile key handle contention deadlocked"
+
+    assert outcomes.count("used") == 1
+    assert outcomes.count("rejected") == 1
+
+
+def test_profile_key_handle_concurrent_close_waits_for_callback() -> None:
+    issuer = object()
+    handle = ProfileDekHandle(
+        b"p" * 32,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, pid: token is issuer and pid > 0,
+    )
+    handle.__enter__()
+    callback_started = threading.Event()
+    release_callback = threading.Event()
+    close_started = threading.Event()
+    close_finished = threading.Event()
+    retained: list[bytes] = []
+
+    def operation(view: memoryview) -> None:
+        callback_started.set()
+        assert release_callback.wait(timeout=2)
+        retained.append(bytes(view))
+
+    use_thread = threading.Thread(target=lambda: handle.use(operation))
+    use_thread.start()
+    assert callback_started.wait(timeout=2)
+
+    def close() -> None:
+        close_started.set()
+        handle.close()
+        close_finished.set()
+
+    close_thread = threading.Thread(target=close)
+    close_thread.start()
+    assert close_started.wait(timeout=2)
+    assert not close_finished.is_set()
+    release_callback.set()
+    use_thread.join(timeout=2)
+    close_thread.join(timeout=2)
+
+    assert not use_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert close_finished.is_set()
+    assert retained == [b"p" * 32]
 
 
 def test_profile_key_handle_rejects_foreign_issuer_fork_copy_and_serialization(
