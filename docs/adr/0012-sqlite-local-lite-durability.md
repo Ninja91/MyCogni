@@ -34,10 +34,17 @@ PID, file age, modification time or wall clock. The kernel releases ownership
 when the descriptor/process ends.
 
 One lease binds exactly one SQLAlchemy Engine. The application Engine uses a
-one-connection pool with no overflow, so worker/scheduler transactions cannot
-use concurrent SQLite connections. Every application unit of work starts with
-`BEGIN IMMEDIATE`; an unexpected `SQLITE_BUSY` or `SQLITE_LOCKED` therefore
-means an unsupported writer bypassed the contract and fails readiness closed.
+fixed one-connection `QueuePool` with no overflow and exposes no caller-selected
+pool override, so worker/scheduler transactions cannot use concurrent SQLite
+connections. The lease counts checked-out connections and refuses release while
+any remain. Engine hooks verify the owning PID and active lease before connection
+configuration, every statement and every begin/commit/rollback boundary.
+
+The runtime owns the supported application unit-of-work factory. It checks
+readiness before entry and commit, starts each unit with `BEGIN IMMEDIATE`, and
+makes commit, rollback and failed entry terminal. An unexpected `SQLITE_BUSY` or
+`SQLITE_LOCKED` therefore fails readiness closed and the same unit cannot be
+reused after failure.
 
 ### Connection policy
 
@@ -61,11 +68,18 @@ writer lease is active. A clean shutdown requires a non-busy
 
 ### Storage eligibility
 
-The database must use an absolute path in an existing non-symlink private
-directory with mode `0700` or stricter. Existing database, WAL and shared-memory
-targets must be regular, non-symlink and not group/world writable.
+The database must use an absolute path below existing, non-symlink directory
+ancestors and a private database directory owned by the service user with mode
+`0700` or stricter. The database, WAL, shared-memory, writer-lock, dirty-marker
+and recovery-latch names, when present, must be current-user-owned regular files
+with exactly one hard link and no group/world write bits. Validation and state
+file operations use a retained directory descriptor, directory-relative calls
+and `O_NOFOLLOW` where the host supports them. Path-bearing `OSError` causes are
+replaced with fixed operator-safe errors.
 
 The initial filesystem-type eligibility allowlist is APFS, Btrfs, ext4 and XFS.
+On macOS the probe parses `/sbin/mount`, validates reported mount points and
+selects the longest real ancestor; an unmocked Darwin test exercises this source.
 Unknown types and known network, ephemeral, overlay or host-sharing types fail
 closed, including NFS, SMB/CIFS, 9p, tmpfs, overlayfs, FUSE and virtiofs. Docker
 Desktop host bind mounts commonly appear as virtiofs and are therefore
@@ -82,27 +96,35 @@ power-interruption method. The implementation does not claim that `fsync`,
 ### Dirty shutdown and readiness
 
 After ownership and storage checks, the owner creates a fixed-schema, PII-free
-dirty marker and fsyncs the file and parent directory before database use.
-Startup always runs `quick_check`. If the marker already existed, startup also
-runs a passive WAL checkpoint and reports:
+dirty marker and fsyncs the file and parent directory before database use. The
+marker records an open lifecycle; a separate fixed-schema recovery-required
+latch records an unresolved operator decision. An inherited dirty marker
+durably creates the latch before database work. Startup always runs
+`quick_check`; a dirty start also runs a passive WAL checkpoint and reports:
 
 - `recovery_required`;
 - not accepting new work;
 - external actions must remain paused.
 
 Committed WAL transactions may recover; an open transaction must roll back.
-That fact never resolves an external-action outcome. Domain reconciliation and
-step-up resume remain separate successor work.
+That fact never resolves an external-action outcome. The latch survives clean
+restarts and no-op operation, has no public clear API, and blocks migrations.
+Domain reconciliation plus an independently reviewed step-up/clear operation
+remain separate successor work.
 
-Only successful clean-shutdown checks may remove and directory-fsync the marker.
-The writer lock remains held through removal. If removal/fsync fails, the marker
-is recreated and fsynced before releasing ownership; if it cannot be preserved,
-the process retains the lock and fails closed. There is no marker-age shortcut.
+Only successful clean-shutdown checks may remove and directory-fsync the dirty
+marker. The writer lock remains held through removal. Checkpoint, integrity,
+checked-out-connection, marker removal or directory-sync failure pauses the
+runtime, preserves/creates the recovery latch, and retains the Engine and writer
+lease for safe retry. A second owner remains excluded. If marker removal cannot
+be proven, the dirty marker is restored before returning the failure. There is
+no marker-age shortcut and clean shutdown never clears the recovery latch.
 
-`SQLITE_FULL`, `SQLITE_IOERR`, corruption/not-a-database, and unexpected writer
-contention produce fixed PII-free operator states, stop accepting new work and
-keep external actions paused. Raw exception text and filesystem paths are not
-retained in readiness state.
+`SQLITE_FULL`, `SQLITE_IOERR`, corruption/not-a-database, unexpected writer
+contention and blocked shutdown produce fixed typed, PII-free operator states,
+stop accepting new work and keep external actions paused. Startup recovery
+exceptions carry the same typed operator disposition. Raw exception text and
+filesystem paths are not retained in readiness state.
 
 ### Backup boundary
 
@@ -122,7 +144,9 @@ remain outside MyCogni's inventory and recovery claim.
 - Dirty startup remains usable for inspection/recovery but cannot silently
   resume new or external work.
 - Migrations share the same ownership, marker, integrity and checkpoint
-  lifecycle as the application.
+  lifecycle as the application, and refuse an unresolved recovery latch.
+- Shutdown failure keeps the process as owner until an operator resolves the
+  cause and retries; it cannot trade availability for ambiguous handoff.
 - Supported deployment documentation must distinguish eligibility from a tested
   host conformance result.
 
@@ -140,13 +164,19 @@ rejected because it can omit or mismatch WAL state.
 
 The contract reduces corrupt state, duplicate job execution and unsafe resume
 after an ambiguous stop. Private path data is excluded from public exception
-messages and operator states. It does not protect against a compromised owner
-process, root, kernel, storage firmware, rollback of all database/marker/lock
-files, or operator copies outside the managed backup inventory.
+messages and operator states. A forked child is denied at SQLAlchemy connection
+and transaction hooks, but Python cannot revoke a raw DBAPI/file descriptor
+already inherited across `fork`; the owner process therefore must not fork after
+opening SQLite. Directory-relative validation narrows path races but cannot
+defeat a malicious same-UID process with directory mutation authority. The
+contract also does not protect against a compromised owner process, root,
+kernel, storage firmware, rollback of all database/marker/lock/latch files, or
+operator copies outside the managed backup inventory.
 
 ## Review trigger
 
 Change to process topology, connection pool, transaction begin mode, PRAGMAs,
-SQLite version, filesystem allowlist, container storage, backup method, dirty
-marker protocol, readiness mapping, migration flow, or any observed corruption,
-duplicate writer, missed pause or failed recovery.
+SQLite version, filesystem allowlist/probe, container storage, backup method,
+dirty-marker or recovery-latch protocol, readiness mapping, migration flow, or
+any observed corruption, duplicate writer, leaked checkout, missed pause or
+failed recovery.
