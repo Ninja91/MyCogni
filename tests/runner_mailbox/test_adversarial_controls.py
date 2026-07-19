@@ -330,6 +330,62 @@ def _result_with_evidence(binding: ActionBinding, evidence: tuple[EvidenceUpload
     )
 
 
+def _mutation_fingerprint(repository: VolatileMailboxRepository, record: Any) -> tuple[Any, ...]:
+    manifest = record.committed_evidence_manifest
+    return (
+        record.state,
+        record.collection_state,
+        record.last_seen_utc,
+        record.committed_at,
+        record.terminal_at,
+        tuple(record.evidence.items()),
+        record.result_envelope,
+        None
+        if manifest is None
+        else (manifest.item_count, manifest.storage_digest, manifest.semantic_mac),
+        repository._installation_last_seen_utc,  # type: ignore[attr-defined]
+        repository._total_active_material_bytes,  # type: ignore[attr-defined]
+        repository._total_evidence_bytes,  # type: ignore[attr-defined]
+        repository._total_committed_bytes,  # type: ignore[attr-defined]
+        tuple(repository._tombstones.items()),  # type: ignore[attr-defined]
+    )
+
+
+def _committed_evidence_fixture(
+    action_payload: dict[str, Any],
+    clock: FakeClock,
+    *,
+    repository: VolatileMailboxRepository | None = None,
+) -> tuple[
+    VolatileMailboxRepository,
+    RunnerMailboxService,
+    ActionBinding,
+    bytes,
+    EvidenceUpload,
+    Any,
+]:
+    repository = repository or _repository()
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"committed-manifest-sensitive-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    service.commit_result(
+        binding,
+        _result_with_evidence(binding, (upload,)),
+        result_credential=result_credential,
+    )
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    return repository, service, binding, collection_credential, upload, record
+
+
 @pytest.mark.parametrize("capability", tuple(Capability))
 @pytest.mark.parametrize("result", tuple(ResultCode))
 @pytest.mark.parametrize("next_kind", tuple(NextStepKind))
@@ -1164,6 +1220,190 @@ def test_wrapped_result_cannot_move_between_mailboxes_or_change_bundle_binding(
         second_service.collect(second_binding.mailbox_id, collection_credential=second_collection)
     assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
     assert second_record.collection_state is CollectionState.READY
+
+
+def test_collect_rejects_removed_committed_evidence_without_any_mutation(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository, service, binding, collection_credential, upload, record = (
+        _committed_evidence_fixture(action_payload, clock)
+    )
+    record.evidence.pop(upload.object_id)
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        service.collect(binding.mailbox_id, collection_credential=collection_credential)
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+    assert record.collection_state is CollectionState.READY
+
+
+def test_collect_rejects_valid_extra_evidence_outside_committed_manifest(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"valid-but-not-committed-extra-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    extra = record.evidence.pop(upload.object_id)
+    repository._total_evidence_bytes -= extra.byte_count  # type: ignore[attr-defined]
+    service.commit_result(
+        binding,
+        _result(binding, ResultCode.CANDIDATE_OBSERVED, NextStepKind.USER_REVIEW),
+        result_credential=result_credential,
+    )
+    record.evidence[upload.object_id] = extra
+    repository._total_evidence_bytes += extra.byte_count  # type: ignore[attr-defined]
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        service.collect(binding.mailbox_id, collection_credential=collection_credential)
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+
+
+@pytest.mark.parametrize("field", ("item_count", "storage_digest", "semantic_mac"))
+def test_snapshot_rejects_committed_manifest_tampering_before_time_mutation(
+    action_payload: dict[str, Any], clock: FakeClock, field: str
+) -> None:
+    repository, service, binding, collection_credential, _, record = _committed_evidence_fixture(
+        action_payload, clock
+    )
+    manifest = record.committed_evidence_manifest
+    assert manifest is not None
+    if field == "item_count":
+        manifest.item_count += 1
+    elif field == "storage_digest":
+        manifest.storage_digest = b"0" * 32
+    else:
+        manifest.semantic_mac = b"0" * 32
+    clock.current += timedelta(seconds=1)
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        service.snapshot(binding.mailbox_id, collection_credential=collection_credential)
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+
+
+def test_ack_rejects_missing_committed_evidence_without_erasing_result(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository, service, binding, collection_credential, upload, record = (
+        _committed_evidence_fixture(action_payload, clock)
+    )
+    service.collect(binding.mailbox_id, collection_credential=collection_credential)
+    record.evidence.pop(upload.object_id)
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        service.acknowledge_collection(
+            binding.mailbox_id, collection_credential=collection_credential
+        )
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+    assert record.collection_state is CollectionState.DELIVERING
+    assert record.result_envelope is not None
+
+
+def test_ack_rejects_manifest_tamper_without_erasing_committed_material(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository, service, binding, collection_credential, _, record = _committed_evidence_fixture(
+        action_payload, clock
+    )
+    service.collect(binding.mailbox_id, collection_credential=collection_credential)
+    manifest = record.committed_evidence_manifest
+    assert manifest is not None
+    manifest.semantic_mac = b"0" * 32
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        service.acknowledge_collection(
+            binding.mailbox_id, collection_credential=collection_credential
+        )
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+    assert record.result_envelope is not None
+    assert record.evidence
+
+
+@pytest.mark.parametrize("deadline_offset", (-1, 0, 1))
+@pytest.mark.parametrize("operation", ("snapshot", "expire", "gc"))
+def test_tampered_evidence_is_rejected_before_deadline_or_sweep_mutation(
+    action_payload: dict[str, Any],
+    clock: FakeClock,
+    deadline_offset: int,
+    operation: str,
+) -> None:
+    repository = _repository()
+    service, binding, _, claim_credential, collection_credential, _ = _configure(
+        action_payload, clock, repository=repository
+    )
+    result_credential = service.claim(binding, claim_credential=claim_credential).result_credential
+    payload = b"deadline-integrity-evidence"
+    upload = EvidenceUpload(
+        object_id=uuid4(),
+        kind="raw_response",
+        payload_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        payload=payload,
+    )
+    service.stage_evidence(binding, result_credential=result_credential, evidence=upload)
+    record = repository._records[binding.mailbox_id]  # type: ignore[attr-defined]
+    record.evidence[uuid4()] = record.evidence.pop(upload.object_id)
+    clock.current = binding.deadline_utc + timedelta(seconds=deadline_offset)
+    before = _mutation_fingerprint(repository, record)
+
+    with pytest.raises(MailboxError) as denied:
+        if operation == "snapshot":
+            service.snapshot(binding.mailbox_id, collection_credential=collection_credential)
+        elif operation == "expire":
+            service.expire_due(maintenance_credential=MAINTENANCE_CREDENTIAL)
+        else:
+            service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    assert _mutation_fingerprint(repository, record) == before
+    assert record.state is MailboxState.CLAIMED_ONCE
+
+
+def test_concurrent_collects_all_reject_manifest_membership_loss_without_mutation(
+    action_payload: dict[str, Any], clock: FakeClock
+) -> None:
+    repository, service, binding, collection_credential, upload, record = (
+        _committed_evidence_fixture(action_payload, clock)
+    )
+    record.evidence.pop(upload.object_id)
+    before = _mutation_fingerprint(repository, record)
+
+    def collect() -> MailboxDenial | None:
+        try:
+            service.collect(binding.mailbox_id, collection_credential=collection_credential)
+        except MailboxError as exc:
+            return exc.denial
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        denials = tuple(pool.map(lambda _: collect(), range(32)))
+
+    assert denials == (MailboxDenial.INTERNAL_UNCERTAINTY,) * 32
+    assert _mutation_fingerprint(repository, record) == before
+    assert record.collection_state is CollectionState.READY
 
 
 def test_installation_mailbox_quota_authenticated_gc_and_tombstone_replay(

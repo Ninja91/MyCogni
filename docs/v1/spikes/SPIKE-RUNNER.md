@@ -153,6 +153,16 @@ immutable `ActionBinding` in both associated data and the encrypted frame, so a
 wrapped result cannot move to another mailbox or produce a bundle with any
 substituted binding field.
 
+Commit also creates a keyed, authenticated evidence manifest over the sorted exact
+object IDs, exact count, complete action binding, and wrapped-result digest. Scoped
+snapshot, collect, and acknowledgement reparse the authenticated result references
+and require their IDs and evidence metadata to match both the current authenticated
+slots and that committed manifest. Missing, extra, moved, or swapped evidence and
+manifest/result substitution fail closed before delivery or erasure. Every record
+operation and authenticated maintenance sweep performs the complete retained-material
+check before reading a new clock observation, advancing a high-water mark, expiring
+or clearing payloads, changing state, or changing quota counters.
+
 Raw payload bodies are absent from repr, snapshots, and finite error text. Tests use
 PII canaries to prove the volatile record retains authenticated wrapped bytes rather
 than raw connector payload. Persistent adapters must additionally prove raw values
