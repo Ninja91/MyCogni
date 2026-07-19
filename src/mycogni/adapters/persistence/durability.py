@@ -825,6 +825,8 @@ class SQLiteRuntime:
         self.readiness = readiness
         self._closed = False
         self._lifecycle_lock = threading.Lock()
+        self._readiness_lock = threading.Lock()
+        self._application_work_lock = threading.Lock()
         event.listen(self.engine, "handle_error", self._handle_driver_error)
 
     @property
@@ -836,9 +838,10 @@ class SQLiteRuntime:
         return self.recovery_latch_path.name
 
     def _pause(self, state: SQLiteOperatorState) -> None:
-        self.readiness.accepting_new_work = False
-        self.readiness.external_actions_must_remain_paused = True
-        self.readiness.operator_state = state
+        with self._readiness_lock:
+            self.readiness.accepting_new_work = False
+            self.readiness.external_actions_must_remain_paused = True
+            self.readiness.operator_state = state
 
     def _preserve_recovery_state(self) -> None:
         _create_state_file(
@@ -856,9 +859,29 @@ class SQLiteRuntime:
 
     def assert_accepting_new_work(self) -> None:
         """Fail closed before every supported application UoW boundary."""
-        self.lease.assert_active(self.lease.database_path)
-        if self._closed or not self.readiness.accepting_new_work:
-            raise SQLiteReadinessError("SQLite runtime is not accepting new work")
+        with self._readiness_lock:
+            self.lease.assert_active(self.lease.database_path)
+            if self._closed or not self.readiness.accepting_new_work:
+                raise SQLiteReadinessError("SQLite runtime is not accepting new work")
+
+    def _admit_application_work(self) -> None:
+        with self._readiness_lock:
+            self.lease.assert_active(self.lease.database_path)
+            if self._closed or not self.readiness.accepting_new_work:
+                raise SQLiteReadinessError("SQLite runtime is not accepting new work")
+            if not self._application_work_lock.acquire(blocking=False):
+                raise SQLiteReadinessError("SQLite runtime already has an active unit of work")
+
+    def _release_application_work(self) -> None:
+        self._application_work_lock.release()
+
+    def _deny_new_work_and_reserve_shutdown(self) -> bool:
+        with self._readiness_lock:
+            self.readiness.accepting_new_work = False
+        if self._application_work_lock.acquire(blocking=False):
+            return True
+        self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+        return False
 
     def unit_of_work(self) -> SqlAlchemyUnitOfWork:
         """Return the only supported readiness-guarded application UoW."""
@@ -871,6 +894,8 @@ class SQLiteRuntime:
         return SqlAlchemyUnitOfWork(
             _create_session_factory(self.engine),
             readiness_guard=self.assert_accepting_new_work,
+            work_admission=self._admit_application_work,
+            work_release=self._release_application_work,
             cleanup_failure_handler=self._handle_uow_cleanup_failure,
         )
 
@@ -889,9 +914,7 @@ class SQLiteRuntime:
         state = _operator_state_for_error(error)
         if state is None:
             return False
-        self.readiness.operator_state = state
-        self.readiness.accepting_new_work = False
-        self.readiness.external_actions_must_remain_paused = True
+        self._pause(state)
         return True
 
     @classmethod
@@ -1000,48 +1023,60 @@ class SQLiteRuntime:
     def _close_cleanly_exclusive(self) -> None:
         if self._closed:
             return
-        self.readiness.accepting_new_work = False
-        try:
-            self.lease.seal_for_shutdown()
-            with self.lease.shutdown_maintenance(), self.engine.connect() as connection:
-                checkpoint = _checkpoint_connection(connection, mode="TRUNCATE")
-                if checkpoint != SQLiteCheckpoint(0, 0, 0):
-                    raise SQLiteRecoveryError(
-                        f"clean-shutdown checkpoint incomplete: {checkpoint!r}"
-                    )
-                _quick_check_connection(connection)
-        except BaseException:
+        if not self._deny_new_work_and_reserve_shutdown():
             try:
                 self._preserve_recovery_state()
             finally:
                 self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
-                self.lease.unseal_after_failed_shutdown()
             raise SQLiteRecoveryError(
-                "clean-shutdown validation failed; ownership retained"
+                "clean shutdown blocked by active application work; ownership retained"
             ) from None
-
         try:
-            if self.readiness.operator_state is not SQLiteOperatorState.READY:
-                _create_state_file(
-                    self.lease,
-                    self._recovery_latch_name,
-                    payload=_RECOVERY_LATCH,
-                    label="recovery latch",
-                )
-            self.engine.dispose()
-            _remove_state_file(self.lease, self._marker_name, label="dirty marker")
-            self.lease.release()
-        except BaseException:
-            self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
-            if self.lease.owned_by_current_process():
+            try:
+                self.lease.seal_for_shutdown()
+                with self.lease.shutdown_maintenance(), self.engine.connect() as connection:
+                    checkpoint = _checkpoint_connection(connection, mode="TRUNCATE")
+                    if checkpoint != SQLiteCheckpoint(0, 0, 0):
+                        raise SQLiteRecoveryError(
+                            f"clean-shutdown checkpoint incomplete: {checkpoint!r}"
+                        )
+                    _quick_check_connection(connection)
+            except BaseException:
                 try:
                     self._preserve_recovery_state()
                 finally:
+                    self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
                     self.lease.unseal_after_failed_shutdown()
-            raise SQLiteRecoveryError(
-                "clean shutdown could not durably remove its marker; ownership retained"
-            ) from None
-        self._closed = True
+                raise SQLiteRecoveryError(
+                    "clean-shutdown validation failed; ownership retained"
+                ) from None
+
+            try:
+                with self._readiness_lock:
+                    requires_latch = self.readiness.operator_state is not SQLiteOperatorState.READY
+                if requires_latch:
+                    _create_state_file(
+                        self.lease,
+                        self._recovery_latch_name,
+                        payload=_RECOVERY_LATCH,
+                        label="recovery latch",
+                    )
+                self.engine.dispose()
+                _remove_state_file(self.lease, self._marker_name, label="dirty marker")
+                self.lease.release()
+            except BaseException:
+                self._pause(SQLiteOperatorState.STORAGE_IO_FAILURE)
+                if self.lease.owned_by_current_process():
+                    try:
+                        self._preserve_recovery_state()
+                    finally:
+                        self.lease.unseal_after_failed_shutdown()
+                raise SQLiteRecoveryError(
+                    "clean shutdown could not durably remove its marker; ownership retained"
+                ) from None
+            self._closed = True
+        finally:
+            self._application_work_lock.release()
 
     def abandon(self) -> None:
         """Release resources but leave the marker to force recovery next start."""
@@ -1056,22 +1091,33 @@ class SQLiteRuntime:
     def _abandon_exclusive(self) -> None:
         if self._closed:
             return
-        self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
-        self._preserve_recovery_state()
-        try:
-            self.lease.seal_for_shutdown()
-        except BaseException:
+        if not self._deny_new_work_and_reserve_shutdown():
+            try:
+                self._preserve_recovery_state()
+            finally:
+                self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
             raise SQLiteRecoveryError(
-                "cannot abandon runtime with checked-out connections; ownership retained"
+                "cannot abandon runtime with active application work; ownership retained"
             ) from None
         try:
-            self.engine.dispose()
-            self.lease.release()
-        except BaseException:
-            if self.lease.owned_by_current_process():
-                self.lease.unseal_after_failed_shutdown()
-            raise SQLiteRecoveryError("runtime abandon failed; ownership retained") from None
-        self._closed = True
+            self._pause(SQLiteOperatorState.SHUTDOWN_BLOCKED)
+            self._preserve_recovery_state()
+            try:
+                self.lease.seal_for_shutdown()
+            except BaseException:
+                raise SQLiteRecoveryError(
+                    "cannot abandon runtime with checked-out connections; ownership retained"
+                ) from None
+            try:
+                self.engine.dispose()
+                self.lease.release()
+            except BaseException:
+                if self.lease.owned_by_current_process():
+                    self.lease.unseal_after_failed_shutdown()
+                raise SQLiteRecoveryError("runtime abandon failed; ownership retained") from None
+            self._closed = True
+        finally:
+            self._application_work_lock.release()
 
     def __enter__(self) -> Self:
         return self

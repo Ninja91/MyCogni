@@ -629,6 +629,64 @@ def test_fault_between_uow_write_and_commit_rolls_back_terminally(tmp_path: Path
         runtime.close_cleanly()
 
 
+def test_uow_cleanup_failure_cannot_race_clean_shutdown_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "cleanup-shutdown-race.sqlite"
+    runtime = _open_runtime(database_path)
+    metadata = MetaData()
+    records = Table("synthetic_cleanup_race", metadata, Column("id", Integer, primary_key=True))
+    metadata.create_all(runtime.engine)
+    checkin_completed = threading.Event()
+    finish_cleanup = threading.Event()
+    worker_errors: list[BaseException] = []
+
+    def commit_with_delayed_close_failure() -> None:
+        try:
+            unit_of_work = runtime.unit_of_work()
+            with unit_of_work:
+                unit_of_work.session.execute(records.insert().values(id=1))
+                session = unit_of_work.session
+                real_close = session.close
+
+                def fail_after_delayed_real_close() -> None:
+                    real_close()
+                    checkin_completed.set()
+                    assert finish_cleanup.wait(timeout=2)
+                    raise RuntimeError("synthetic delayed cleanup failure")
+
+                monkeypatch.setattr(session, "close", fail_after_delayed_real_close)
+                unit_of_work.commit()
+        except BaseException as error:
+            worker_errors.append(error)
+
+    worker = threading.Thread(target=commit_with_delayed_close_failure)
+    worker.start()
+    assert checkin_completed.wait(timeout=2)
+    try:
+        with pytest.raises(SQLiteRecoveryError, match="ownership retained"):
+            runtime.close_cleanly()
+        assert runtime.marker_path.exists() is True
+        assert runtime.recovery_latch_path.exists() is True
+        runtime.lease.assert_active(database_path)
+    finally:
+        finish_cleanup.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert runtime.readiness.accepting_new_work is False
+    assert runtime.readiness.external_actions_must_remain_paused is True
+    assert runtime.readiness.operator_state is SQLiteOperatorState.STORAGE_IO_FAILURE
+    with runtime.engine.connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(records)) == 1
+
+    runtime.close_cleanly()
+    recovered = _open_runtime(database_path)
+    assert recovered.startup.requires_reconciliation is True
+    recovered.close_cleanly()
+
+
 def test_sigkill_recovery_keeps_committed_and_discards_uncommitted(tmp_path: Path) -> None:
     database_path = tmp_path / "sigkill.sqlite"
     ready_path = tmp_path / "child-ready"
