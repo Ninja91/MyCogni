@@ -1,8 +1,9 @@
 # SPIKE-RUNNER — finite mailbox and protocol decision slice
 
-Status: remediated implementation evidence awaiting independent adversarial
-re-review. This is not package acceptance, OCI isolation evidence, or a runnable
-connector service.
+Status: successor persistent-state and trusted-sidecar containment evidence is
+implemented, awaiting independent adversarial re-review. This is not package
+acceptance, untrusted-connector OCI isolation evidence, or a runnable connector
+service. See ADR-0014 and `RUNNER-PERSISTENCE-OCI-EVIDENCE.md`.
 
 Decision target: determine whether a statically declared connector can receive one
 action and return a bounded untrusted attempt fact without a Docker socket, shared
@@ -205,9 +206,9 @@ overflow without shortening replay retention.
 ## Nonclaims and remaining runtime work
 
 - `VolatileMailboxRepository` loses all state and its wrapping key on restart. It
-  must never carry a real action.
-- A persistent adapter must atomically recover/redeliver unacknowledged bundles
-  after restart before it can carry a real action.
+  must never carry a real action. `PersistentMailboxRepository` is its SQLite
+  successor; it atomically reopens unacknowledged delivery state but remains
+  synthetic-only until the separate connector/gateway packages are accepted.
 - AES-GCM here proves the adapter contract only. Production requires durable
   envelope-key management, rotation, restore-epoch invalidation, backup policy,
   and restart/crash recovery.
@@ -220,9 +221,11 @@ overflow without shortening replay retention.
   password KDF.
 - No signature, SBOM, provenance, manifest freshness, revocation, authorization,
   image lookup, or runtime digest is verified here.
-- No Compose/OCI topology, read-only filesystem, namespace, seccomp, dropped
-  capability, PID/CPU/RAM/wall enforcement, network containment, or real cleanup
-  has been exercised by this slice.
+- A trusted-sidecar Compose smoke has local Docker evidence for read-only root,
+  default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
+  namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
+  It is not an untrusted connector artifact, direct-egress test, action-scoped
+  credential topology, wall-time watchdog or cleanup proof.
 - NET-001 remains a source/runtime safety belt, not kernel containment.
 - A valid connector result remains an untrusted attempt fact, never proof of
   transport, acknowledgement, compliance, absence, or removal.

@@ -12,6 +12,7 @@ from services.runner_mailbox.domain import (
     MailboxSnapshot,
     MailboxState,
 )
+from services.runner_mailbox.persistent import PersistentMailboxRepository
 from services.runner_mailbox.service import RunnerMailboxService
 from services.runner_mailbox.volatile import (
     Sha256CredentialDigester,
@@ -30,6 +31,7 @@ __all__ = (
     "MailboxLimits",
     "MailboxSnapshot",
     "MailboxState",
+    "PersistentMailboxRepository",
     "RunnerMailboxService",
     "Sha256CredentialDigester",
     "SystemCredentialSource",

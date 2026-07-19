@@ -1,0 +1,47 @@
+# Runner-only containment probe.  It has no connector, broker, core, vault or
+# Docker-socket mount and no network namespace connection.  The named volume is
+# deliberately the one writable durable state location; an empty first mount
+# inherits the image's 65532-owned directory.  This is a synthetic hardening
+# probe, not a runnable real-broker connector profile.
+services:
+  mycogni-runner-mailbox-smoke:
+    image: mycogni/core:0.0.0
+    user: "65532:65532"
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: "no"
+    pids_limit: 64
+    cpus: 1.0
+    mem_limit: 512m
+    tmpfs:
+      - /tmp/mycogni-runner:rw,noexec,nosuid,nodev,size=32m,uid=65532,gid=65532,mode=0700
+    volumes:
+      - type: volume
+        source: runner-mailbox-state
+        target: /var/lib/mycogni-runner
+        read_only: false
+        volume:
+          nocopy: false
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        test "$(id -u)" = 65532
+        test ! -w /opt/mycogni
+        test -w /var/lib/mycogni-runner
+        test -w /tmp/mycogni-runner
+        test ! -e /var/run/docker.sock
+        grep -Eq '^Seccomp:[[:space:]]*2$' /proc/self/status
+        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('169.254.169.254',80)) != 0"
+        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('192.168.65.2',80)) != 0"
+        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(); s.settimeout(.2); assert s.connect_ex(('1.1.1.1',53)) != 0"
+        /opt/mycogni/.venv/bin/python -c "import socket; s=socket.socket(socket.AF_INET6); s.settimeout(.2); assert s.connect_ex(('fd00:ec2::254',80)) != 0"
+        printf '%s\n' 'runner mailbox containment smoke passed'
+volumes:
+  runner-mailbox-state:
+    driver: local
