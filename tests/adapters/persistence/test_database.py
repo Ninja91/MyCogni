@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, String, Table, insert, select, text
+from sqlalchemy import Column, Engine, Integer, MetaData, String, Table, insert, select, text
 
 from mycogni.adapters.persistence import (
+    FixedFilesystemProbe,
     SqlAlchemyUnitOfWork,
+    SQLiteProcessRole,
     SQLiteSettings,
+    SQLiteWriterLease,
     create_session_factory,
     create_sqlite_engine,
 )
@@ -21,16 +26,44 @@ def _settings(path: Path, *, busy_timeout_ms: int = 5_000) -> SQLiteSettings:
     return SQLiteSettings(url=f"sqlite:///{path}", busy_timeout_ms=busy_timeout_ms)
 
 
-def test_every_connection_receives_required_pragmas(tmp_path: Path) -> None:
-    engine = create_sqlite_engine(_settings(tmp_path / "pragmas.sqlite", busy_timeout_ms=2_750))
+def _apply_expected_pragmas(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=FULL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA trusted_schema=OFF")
+    cursor.execute("PRAGMA secure_delete=ON")
+    cursor.execute("PRAGMA temp_store=MEMORY")
+    cursor.execute("PRAGMA wal_autocheckpoint=1000")
+
+
+@contextmanager
+def _owned_engine(settings: SQLiteSettings) -> Iterator[Engine]:
+    lease = SQLiteWriterLease.acquire(
+        settings,
+        role=SQLiteProcessRole.ALL_IN_ONE,
+        probe=FixedFilesystemProbe("ext4"),
+    )
+    engine = create_sqlite_engine(settings, writer_lease=lease)
     try:
-        with engine.connect() as connection:
-            assert connection.scalar(text("PRAGMA foreign_keys")) == 1
-            assert connection.scalar(text("PRAGMA journal_mode")) == "wal"
-            assert connection.scalar(text("PRAGMA synchronous")) == 2
-            assert connection.scalar(text("PRAGMA busy_timeout")) == 2_750
+        yield engine
     finally:
         engine.dispose()
+        lease.release()
+
+
+def test_every_connection_receives_required_pragmas(tmp_path: Path) -> None:
+    with _owned_engine(
+        _settings(tmp_path / "pragmas.sqlite", busy_timeout_ms=2_750)
+    ) as engine, engine.connect() as connection:
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 1
+        assert connection.scalar(text("PRAGMA journal_mode")) == "wal"
+        assert connection.scalar(text("PRAGMA synchronous")) == 2
+        assert connection.scalar(text("PRAGMA busy_timeout")) == 2_750
+        assert connection.scalar(text("PRAGMA trusted_schema")) == 0
+        assert connection.scalar(text("PRAGMA secure_delete")) == 1
+        assert connection.scalar(text("PRAGMA temp_store")) == 2
+        assert connection.scalar(text("PRAGMA wal_autocheckpoint")) == 1_000
 
 
 @pytest.mark.parametrize("busy_timeout_ms", [0, 30_001])
@@ -48,6 +81,7 @@ def test_busy_timeout_is_bounded(tmp_path: Path, busy_timeout_ms: int) -> None:
         "sqlite:///file:memdb1?mode=memory&cache=shared&uri=true",
         "sqlite:///real.sqlite?mode=rwc&uri=true",
         "sqlite:///file:real.sqlite",
+        "sqlite:///relative.sqlite",
         "postgresql:///mycogni",
     ],
 )
@@ -60,10 +94,7 @@ def test_connection_policy_fails_closed_when_wal_is_unsupported(tmp_path: Path) 
     connection = sqlite3.connect(":memory:")
     cursor = connection.cursor()
     try:
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=FULL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        _apply_expected_pragmas(cursor)
         with pytest.raises(RuntimeError, match="PRAGMA journal_mode.*'wal'.*'memory'"):
             _assert_sqlite_connection_policy(
                 cursor,
@@ -80,10 +111,7 @@ def test_connection_policy_rejects_an_unexpected_physical_file(tmp_path: Path) -
     connection = sqlite3.connect(actual_path)
     cursor = connection.cursor()
     try:
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=FULL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        _apply_expected_pragmas(cursor)
         with pytest.raises(RuntimeError, match="opened unexpected database file"):
             _assert_sqlite_connection_policy(
                 cursor,
@@ -96,7 +124,8 @@ def test_connection_policy_rejects_an_unexpected_physical_file(tmp_path: Path) -
 
 
 def test_unit_of_work_requires_explicit_commit_and_closes_sessions(tmp_path: Path) -> None:
-    engine = create_sqlite_engine(_settings(tmp_path / "uow.sqlite"))
+    owned_engine = _owned_engine(_settings(tmp_path / "uow.sqlite"))
+    engine = owned_engine.__enter__()
     metadata = MetaData()
     synthetic_records = Table(
         "synthetic_records",
@@ -123,11 +152,12 @@ def test_unit_of_work_requires_explicit_commit_and_closes_sessions(tmp_path: Pat
             labels = connection.scalars(select(synthetic_records.c.label)).all()
         assert labels == ["committed"]
     finally:
-        engine.dispose()
+        owned_engine.__exit__(None, None, None)
 
 
 def test_unit_of_work_rolls_back_when_body_raises(tmp_path: Path) -> None:
-    engine = create_sqlite_engine(_settings(tmp_path / "failure.sqlite"))
+    owned_engine = _owned_engine(_settings(tmp_path / "failure.sqlite"))
+    engine = owned_engine.__enter__()
     metadata = MetaData()
     synthetic_records = Table(
         "synthetic_records",
@@ -148,4 +178,4 @@ def test_unit_of_work_rolls_back_when_body_raises(tmp_path: Path) -> None:
         with engine.connect() as connection:
             assert connection.scalar(select(synthetic_records.c.id)) is None
     finally:
-        engine.dispose()
+        owned_engine.__exit__(None, None, None)

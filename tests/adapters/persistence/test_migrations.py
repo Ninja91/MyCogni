@@ -12,8 +12,19 @@ from alembic.config import Config
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.pool import Pool
 
+from mycogni.adapters.persistence import FilesystemMount, SystemFilesystemProbe
+
 REPOSITORY_ROOT = Path(__file__).parents[3]
 HEAD_REVISION = "0001_database_baseline"
+
+
+@pytest.fixture(autouse=True)
+def _qualify_synthetic_test_filesystem(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        SystemFilesystemProbe,
+        "inspect",
+        lambda self, path: FilesystemMount("ext4", path),
+    )
 
 
 def _config_for_url(url: str, *, busy_timeout_ms: int = 5_000) -> Config:

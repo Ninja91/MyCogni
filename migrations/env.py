@@ -7,7 +7,13 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import pool
 
-from mycogni.adapters.persistence import Base, SQLiteSettings, create_sqlite_engine
+from mycogni.adapters.persistence import (
+    Base,
+    SQLiteProcessRole,
+    SQLiteSettings,
+    SQLiteWriterLease,
+    create_sqlite_engine,
+)
 
 config = context.config
 
@@ -47,7 +53,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against the explicitly configured database."""
-    connectable = create_sqlite_engine(_database_settings(), poolclass=pool.NullPool)
+    settings = _database_settings()
+    lease = SQLiteWriterLease.acquire(settings, role=SQLiteProcessRole.MIGRATION)
+    connectable = create_sqlite_engine(settings, writer_lease=lease, poolclass=pool.NullPool)
 
     try:
         with connectable.connect() as connection:
@@ -62,6 +70,7 @@ def run_migrations_online() -> None:
                 context.run_migrations()
     finally:
         connectable.dispose()
+        lease.release()
 
 
 if context.is_offline_mode():

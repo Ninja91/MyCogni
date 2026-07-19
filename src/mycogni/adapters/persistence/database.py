@@ -12,6 +12,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import ConnectionPoolEntry, Pool
 
+from mycogni.adapters.persistence.durability import SQLiteWriterLease
+
 MIN_BUSY_TIMEOUT_MS = 1
 MAX_BUSY_TIMEOUT_MS = 30_000
 
@@ -36,6 +38,8 @@ class SQLiteSettings:
             raise ValueError("DB-001 requires a file-backed SQLite database")
         if parsed.query or database.lower().startswith("file:"):
             raise ValueError("DB-001 rejects SQLite URI and query-string modes")
+        if not Path(database).is_absolute():
+            raise ValueError("SQLITE-DUR-001 requires an absolute SQLite database path")
         if not MIN_BUSY_TIMEOUT_MS <= self.busy_timeout_ms <= MAX_BUSY_TIMEOUT_MS:
             raise ValueError(
                 f"busy_timeout_ms must be between {MIN_BUSY_TIMEOUT_MS} and {MAX_BUSY_TIMEOUT_MS}"
@@ -53,6 +57,14 @@ class SQLiteSettings:
         if database is None:  # pragma: no cover - guarded by validation
             raise RuntimeError("validated SQLite URL has no database path")
         return Path(database).resolve(strict=False)
+
+    @property
+    def configured_database_path(self) -> Path:
+        """Return the absolute configured path without resolving symlinks."""
+        database = self.sqlalchemy_url.database
+        if database is None:  # pragma: no cover - guarded by validation
+            raise RuntimeError("validated SQLite URL has no database path")
+        return Path(database)
 
 
 def _read_scalar_pragma(cursor: sqlite3.Cursor, pragma: str) -> object:
@@ -74,6 +86,10 @@ def _assert_sqlite_connection_policy(
         ("journal_mode", "wal"),
         ("synchronous", 2),
         ("busy_timeout", busy_timeout_ms),
+        ("trusted_schema", 0),
+        ("secure_delete", 1),
+        ("temp_store", 2),
+        ("wal_autocheckpoint", 1_000),
     )
     for pragma, expected in expected_pragmas:
         actual = _read_scalar_pragma(cursor, pragma)
@@ -111,6 +127,10 @@ def _apply_sqlite_pragmas(
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=FULL")
         cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms:d}")
+        cursor.execute("PRAGMA trusted_schema=OFF")
+        cursor.execute("PRAGMA secure_delete=ON")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA wal_autocheckpoint=1000")
         _assert_sqlite_connection_policy(
             cursor,
             database_path=database_path,
@@ -123,18 +143,29 @@ def _apply_sqlite_pragmas(
 def create_sqlite_engine(
     settings: SQLiteSettings,
     *,
+    writer_lease: SQLiteWriterLease,
     poolclass: type[Pool] | None = None,
 ) -> Engine:
     """Create a synchronous Engine with the required per-connection policy.
 
-    SQLite WAL does not make network filesystems or Docker Desktop bind mounts
-    durable. Later assurance work must qualify each supported filesystem and
-    enforce the single-writer process model.
+    The caller must retain the writer lease until every connection is returned
+    and the Engine is disposed. The default QueuePool has exactly one physical
+    connection, serializing worker/scheduler transactions inside the one owner
+    process. SQLite WAL does not itself prove physical power-loss durability.
     """
     from sqlalchemy import create_engine
 
-    engine_options: dict[str, Any] = {"connect_args": {"timeout": settings.busy_timeout_ms / 1_000}}
+    writer_lease.bind_engine(settings.database_path)
+    engine_options: dict[str, Any] = {
+        "connect_args": {"timeout": settings.busy_timeout_ms / 1_000},
+        "pool_size": 1,
+        "max_overflow": 0,
+        "pool_timeout": settings.busy_timeout_ms / 1_000,
+    }
     if poolclass is not None:
+        engine_options.pop("pool_size")
+        engine_options.pop("max_overflow")
+        engine_options.pop("pool_timeout")
         engine_options["poolclass"] = poolclass
     engine = create_engine(settings.sqlalchemy_url, **engine_options)
     event.listen(
@@ -146,5 +177,10 @@ def create_sqlite_engine(
             database_path=settings.database_path,
             busy_timeout_ms=settings.busy_timeout_ms,
         ),
+    )
+    event.listen(
+        engine,
+        "checkout",
+        lambda connection, record, proxy: writer_lease.assert_active(settings.database_path),
     )
     return engine

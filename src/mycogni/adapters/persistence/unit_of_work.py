@@ -35,6 +35,10 @@ class SqlAlchemyUnitOfWork:
         if self._session is not None:
             raise RuntimeError("unit of work cannot be entered twice")
         self._session = self._session_factory()
+        # Every application UoW is a potential writer. BEGIN IMMEDIATE obtains
+        # SQLite's reserved lock before domain reads can lead to a write, while
+        # the one-connection pool serializes worker/scheduler UoWs in-process.
+        self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         return self
 
     def __exit__(
