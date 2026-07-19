@@ -25,11 +25,20 @@ material leaves key readiness paused and does not mutate state. Creating a KEK i
 explicit empty-install administration ceremony; replacing a lost KEK requires an explicitly
 destructive full-install reset unless the exact separately retained material is recovered.
 
-The application owns a provider-neutral `SecretPort`. Raw KEK bytes never cross it. The port
-creates a fresh random 32-byte profile DEK, wraps it, and opens it only as a short-lived,
-context-managed, issuer/process-bound handle. That handle is an accidental-exposure reduction,
-not a same-process access-control boundary. A later paired profile-crypto boundary will consume
-the handle. Routine callers cannot ask for `read_kek` or `create_kek`.
+The application owns a provider-neutral `SecretPort`. Raw KEK bytes never cross it. Composition
+binds the port to one installation and a dedicated existing-install readiness sentinel. Source
+readability and installation readiness are different types: wrap/unwrap remains denied until the
+dedicated sentinel authenticates and pins the exact key material, parent directory and file state
+for that provider lifetime. A later change permanently latches recovery-required until trusted
+recomposition; restoring the old file cannot clear the latch. First-sentinel creation belongs to
+a separate explicit empty-install administration boundary and is absent from routine runtime.
+
+The port creates a fresh random 32-byte profile DEK, wraps it, and opens it only as a short-lived,
+context-managed, issuer/process-bound handle. The handle permits one callback then closes. The
+callback can still copy material or reach a Python backing object, so this is only an
+accidental-exposure reduction, not an opaque capability or same-process security boundary. A
+later paired profile-crypto boundary will own consumption. Routine callers cannot ask for
+`read_kek` or `create_kek`.
 
 Wrapped profile keys use one strict record:
 
@@ -45,6 +54,7 @@ AAD v1 is a fixed binary encoding, never ad hoc JSON:
 
 ```text
 "MyCogni\0profile-dek-wrap\0"
+|| u16be(format_version=1)
 || u16be(aad_version=1)
 || installation_uuid[16]
 || profile_uuid[16]
@@ -58,21 +68,26 @@ AAD v1 is a fixed binary encoding, never ad hoc JSON:
 ```
 
 Every field and bound is validated before AEAD. Unknown formats, suites, provider kinds or
-versions fail closed. Paths and timestamps are excluded from AAD.
+versions fail closed. The complete immutable `ProfileKeyBinding` is stored with each wrapped
+record and checked against canonical application state; callers do not reconstruct historical
+AAD inputs from the current global schema. Paths and timestamps are excluded from AAD.
 
-SPIKE-KEY implements one native baseline: a pre-provisioned owner-only file. Runtime opens it
+SPIKE-KEY implements one native baseline: a pre-provisioned POSIX owner/mode file. Runtime opens it
 with no-follow and close-on-exec semantics, validates the descriptor as a regular exact-owner
 file with one link, exact `0400` or `0600` mode and exact versioned length, rejects symlink or
-unsafe ancestors, and revalidates path identity around use. The key path must be structurally
+unsafe ancestors, and retraverses the configured path to revalidate parent and file identity
+around use. The key path must be structurally
 disjoint in both directions from every configured data, evidence and managed-archive root.
-The provider captures its creator process and rejects use after fork.
+The provider captures its creator process, checks before entropy/locks/record work and rejects use
+after fork. A second live provider for the same key path/reference is rejected so one process
+cannot silently split nonce accounting.
 
-New wraps use OS entropy in production. A private deterministic seam exists only for executable
-tests. The provider enforces a conservative per-process wrap cap and remembers nonces for that
-process; a duplicate permanently latches new wrapping off for that instance. It never retries
-after an ambiguous cryptographic/provider failure. Durable cross-process nonce accounting,
-rotation and catalog compare-and-swap belong to KEY-001/KEY-002 and remain prerequisites for
-production wrapping.
+New wraps use private module-owned OS entropy calls. The runtime constructor has no entropy
+injection parameter; executable tests monkeypatch the private wrappers. The sole live provider
+enforces a conservative process-lifetime wrap cap and remembers nonces; a duplicate permanently
+latches new wrapping off. It never retries after an ambiguous cryptographic/provider failure.
+Durable cross-process/restart nonce accounting, rotation and catalog compare-and-swap belong to
+KEY-001/KEY-002 and remain prerequisites for production wrapping.
 
 Provider profiles are distinct conformance targets:
 
@@ -92,11 +107,15 @@ claims. Compose file secrets do not establish portable UID/mode behavior or encr
 
 ## Lifecycle and recovery
 
-Normal startup is read-only with respect to the provider. It distinguishes unprovisioned,
-unavailable/locked, configuration-unsafe, wrong-key/recovery-required and ready states using
-finite redacted reasons. Existing ciphertext plus any non-ready state pauses all dependent work.
-A known wrapped catalog sentinel binds recovery to the expected installation/provider reference;
-staged recovery verifies that sentinel before committing any provider/catalog transition.
+Normal startup is read-only with respect to the provider. Low-level source inspection
+distinguishes source-valid, unavailable, unsafe and malformed without authorizing work. Catalog
+readiness is only not-ready, ready or recovery-required. Existing-install missing material,
+sentinel corruption, AAD mismatch and wrong material all produce the same neutral
+recovery-required/catalog-key-mismatch state; AES-GCM cannot prove which occurred. `Unprovisioned`
+is reserved for the separate explicit empty-install lifecycle, never inferred from a missing
+runtime file. Existing ciphertext plus any non-ready state pauses all dependent work. A dedicated
+wrapped catalog sentinel binds recovery to the expected installation/provider/catalog identity;
+staged recovery verifies it before committing any provider/catalog transition.
 
 Future rotation follows `PREPARED -> ACTIVE -> RETIRING -> RETIRED`. Rewrapping preserves the
 same profile DEK and compare-and-swaps its catalog record. Old KEKs remain recoverable until every
@@ -111,7 +130,10 @@ old-catalog archive horizons.
 - Losing the exact KEK can make every encrypted profile permanently unrecoverable by design.
 - The separately protected key source and recoverable wrapped catalog are both required for a
   restore.
-- Python and OpenSSL may copy secret material; mutable buffers are scrubbed best-effort only.
+- Python and OpenSSL may copy secret material; callback code may retain copies/backing access and
+  mutable buffers are scrubbed best-effort only.
+- POSIX owner/mode checks do not establish macOS ACL or bind/named-volume alias safety; exact-host
+  conformance must disposition those cases before support.
 - KEY-001 must add durable catalog/nonce/rotation semantics before this spike can become a
   production key subsystem.
 

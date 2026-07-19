@@ -20,10 +20,10 @@ def test_secret_port_never_exposes_installation_key_material() -> None:
 
     assert public_methods == {
         "active_kek",
-        "status",
+        "source_status",
+        "readiness",
         "create_profile_key",
         "unwrap_profile_key",
-        "check_readiness",
     }
     assert all("read_kek" not in method and "export" not in method for method in public_methods)
 
@@ -42,11 +42,36 @@ def test_owner_file_runtime_contains_no_provisioning_or_fallback_channel() -> No
         if isinstance(node, ast.Import)
         for alias in node.names
     }
+    provider_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "OwnerFileSecretProvider"
+    )
+    constructor = next(
+        node
+        for node in provider_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    constructor_arguments = {
+        argument.arg for argument in (*constructor.args.args, *constructor.args.kwonlyargs)
+    }
+    environment_reads = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+        and node.attr in {"environ", "getenv"}
+    }
 
     assert not method_names.intersection(
         {"create_kek", "provision", "repair", "replace", "discover", "fallback", "export_kek"}
     )
     assert not imported_modules.intersection({"keyring", "subprocess", "socket"})
+    assert not constructor_arguments.intersection(
+        {"nonce_source", "profile_key_source", "entropy_source"}
+    )
+    assert not environment_reads
 
 
 def test_key_adapter_does_not_import_persistence_or_delivery_layers() -> None:

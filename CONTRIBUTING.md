@@ -2,7 +2,7 @@
 
 MyCogni welcomes product, legal-research, connector, security, testing, documentation, and accessibility contributions.
 
-The repository is an architecture/specification pack entering M0 implementation. The locked Python toolchain exists, but no remover runtime, Docker image, simulator, or live connector is complete. The most valuable early work follows the dependency-gated packages in `docs/v1/WORK_PACKAGES.md`.
+The repository is an architecture/specification pack with M0 implementation in progress. The locked Python toolchain, deterministic synthetic broker/mail simulator, network-deny harness, and several reviewed foundation slices exist. No remover runtime, accepted deployable image, or live connector exists. The most valuable early work follows the dependency-gated packages in `docs/v1/WORK_PACKAGES.md`.
 
 ## Local development
 

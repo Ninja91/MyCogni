@@ -127,6 +127,8 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     forbidden_status = (
         "The implementation is next",
         "architecture complete",
+        "architecture is verified",
+        "architecture verified",
         "NET-001 remains in remediation review",
     )
     for phrase in forbidden_status:
@@ -151,6 +153,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         "data-gov-status": r"\| Full traceability validator \| GOV-001 \| `([A-Z_]+)` \|",
         "data-net-status": r"\| Network-deny proof \| NET-001 \| `([A-Z_]+)` \|",
         "data-spikes-status": r"\| Auth/key/egress/runner/browser/backup spikes \| SPIKE-\* \| `([A-Z_]+)` \|",
+        "data-spike-key-status": r"\| Canonical inventory: SPIKE-KEY \| SPIKE-KEY \| `([A-Z_]+)` \|",
         "data-sqlite-dur-status": r"\| SQLite/process durability contract \| SQLITE-DUR-001 \| `([A-Z_]+)` \|",
     }
     if status_panel is None:

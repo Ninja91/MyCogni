@@ -7,7 +7,7 @@ flowchart TB
         cli["CLI via permissioned local channel"] --> coreLocal
         coreLocal --> sqlite[("SQLite metadata<br/>field/relationship encryption")]
         coreLocal --> files[("Encrypted evidence volume")]
-        hostKEK["OS keychain or mounted KEK"] --> keyCatalog[("Separate wrapped-profile-key catalog")]
+        hostKEK["Explicit local KEK profile<br/>owner-file baseline; Keychain or key-volume pending"] --> keyCatalog[("Separate wrapped-profile-key catalog")]
         keyCatalog --> coreLocal
         coreLocal --> budget["One heavy-work lease"]
         budget -.-> connectorLocal["Ephemeral digest-pinned connector artifact"]
@@ -49,3 +49,8 @@ flowchart TB
 ```
 
 The core, connector, browser, gateway, and optional model are distinct artifacts/processes. Local shared-kernel isolation is explicitly lower assurance than a hardened cloud sandbox. Active model resources are excluded from core idle claims and are never required.
+
+This is a target-profile diagram. The native POSIX-mode owner-file source has source/fixture
+evidence only. A macOS Security.framework helper cannot be called directly from the Linux
+container; a container key-only volume needs separate rootless Linux Engine and Docker Desktop
+evidence; cloud KMS is post-v1. None is inferred from the others.

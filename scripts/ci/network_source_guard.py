@@ -97,6 +97,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/architecture/test_container_skeleton.py",
     "tests/architecture/test_package_boundaries.py",
     "tests/adapters/persistence/test_durability.py",
+    "tests/adapters/keys/test_owner_file.py",
     "tests/simulator/test_web_mail_safety.py",
 }
 

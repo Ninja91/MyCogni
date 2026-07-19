@@ -8,9 +8,10 @@ from typing import Protocol, Self, runtime_checkable
 
 from mycogni.application.keys import (
     ActiveKekRef,
+    KeyReadiness,
     ProfileDekHandle,
-    ProfileKeyContext,
-    SecretProviderStatus,
+    ProfileKeyBinding,
+    SourceStatus,
     WrappedProfileKey,
 )
 
@@ -66,26 +67,22 @@ class SecretPort(Protocol):
         """Return the configured wrapping key's non-secret stable identity."""
         ...
 
-    def status(self) -> SecretProviderStatus:
-        """Inspect configured provider storage without mutating it."""
+    def source_status(self) -> SourceStatus:
+        """Inspect source readability without making a readiness claim."""
         ...
 
-    def create_profile_key(self, context: ProfileKeyContext) -> WrappedProfileKey:
+    def readiness(self) -> KeyReadiness:
+        """Authenticate the dedicated existing-install sentinel and pin the source."""
+        ...
+
+    def create_profile_key(self, binding: ProfileKeyBinding) -> WrappedProfileKey:
         """Generate and wrap one independent random profile DEK."""
         ...
 
     def unwrap_profile_key(
         self,
         wrapped: WrappedProfileKey,
-        context: ProfileKeyContext,
+        expected_binding: ProfileKeyBinding,
     ) -> ProfileDekHandle:
         """Return a one-use handle after context-bound authentication."""
-        ...
-
-    def check_readiness(
-        self,
-        sentinel: WrappedProfileKey,
-        context: ProfileKeyContext,
-    ) -> SecretProviderStatus:
-        """Authenticate a known catalog sentinel without changing provider state."""
         ...

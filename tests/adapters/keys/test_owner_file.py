@@ -1,16 +1,18 @@
-"""Adversarial evidence for the pre-provisioned owner-only KEK provider."""
+"""Adversarial evidence for the pinned owner-only KEK provider."""
 
 from __future__ import annotations
 
+import gc
 import os
+import select
 import stat
 import struct
-import traceback
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from mycogni.adapters.keys.owner_file import (
     OWNER_KEY_FILE_HEADER,
@@ -18,10 +20,12 @@ from mycogni.adapters.keys.owner_file import (
 )
 from mycogni.application.keys import (
     ActiveKekRef,
-    ProfileKeyContext,
+    KeyReadinessState,
+    ProfileKeyBinding,
     SecretFailureCode,
     SecretProviderError,
-    SecretProviderStatus,
+    SourceStatus,
+    WrappedReadinessSentinel,
 )
 from mycogni.application.ports import SecretPort
 from mycogni.domain import OpaqueId
@@ -37,12 +41,70 @@ ACTIVE_KEK = ActiveKekRef(
     kek_id=_id("20000000-0000-4000-8000-000000000002"),
     kek_version=1,
 )
-CONTEXT = ProfileKeyContext(
-    installation_id=_id("20000000-0000-4000-8000-000000000003"),
-    profile_id=_id("20000000-0000-4000-8000-000000000004"),
+INSTALLATION_ID = _id("20000000-0000-4000-8000-000000000003")
+PROFILE_ID = _id("20000000-0000-4000-8000-000000000004")
+CATALOG_ID = _id("20000000-0000-4000-8000-000000000005")
+SENTINEL_ID = _id("20000000-0000-4000-8000-000000000006")
+BINDING = ProfileKeyBinding(
+    installation_id=INSTALLATION_ID,
+    profile_id=PROFILE_ID,
     profile_key_version=1,
     catalog_schema_version=1,
 )
+_SENTINEL_PLAINTEXT = b"MyCogni-readiness-sentinel-v1!!!"
+
+
+def _profile_aad(binding: ProfileKeyBinding = BINDING) -> bytes:
+    return b"".join(
+        (
+            b"MyCogni\x00profile-dek-wrap\x00",
+            struct.pack(">H", 1),
+            struct.pack(">H", 1),
+            binding.installation_id.value.bytes,
+            binding.profile_id.value.bytes,
+            struct.pack(">I", binding.profile_key_version),
+            struct.pack(">H", binding.catalog_schema_version),
+            b"\x01",
+            ACTIVE_KEK.provider_instance_id.value.bytes,
+            ACTIVE_KEK.kek_id.value.bytes,
+            struct.pack(">I", ACTIVE_KEK.kek_version),
+            b"\x01",
+        )
+    )
+
+
+def _sentinel_aad() -> bytes:
+    return b"".join(
+        (
+            b"MyCogni\x00readiness-sentinel\x00",
+            struct.pack(">H", 1),
+            struct.pack(">H", 1),
+            INSTALLATION_ID.value.bytes,
+            CATALOG_ID.value.bytes,
+            SENTINEL_ID.value.bytes,
+            b"\x01",
+            ACTIVE_KEK.provider_instance_id.value.bytes,
+            ACTIVE_KEK.kek_id.value.bytes,
+            struct.pack(">I", ACTIVE_KEK.kek_version),
+            b"\x01",
+        )
+    )
+
+
+def _sentinel(material: bytes = b"k" * 32) -> WrappedReadinessSentinel:
+    nonce = b"s" * 12
+    return WrappedReadinessSentinel(
+        kek_ref=ACTIVE_KEK,
+        installation_id=INSTALLATION_ID,
+        catalog_id=CATALOG_ID,
+        sentinel_id=SENTINEL_ID,
+        nonce=nonce,
+        ciphertext=AESGCM(material).encrypt(
+            nonce,
+            _SENTINEL_PLAINTEXT,
+            _sentinel_aad(),
+        ),
+    )
 
 
 def _provision(path: Path, material: bytes = b"k" * 32, *, mode: int = 0o600) -> None:
@@ -63,16 +125,28 @@ def provider_paths(tmp_path: Path) -> tuple[Path, Path]:
 
 def _provider(
     paths: tuple[Path, Path],
+    *,
+    sentinel_material: bytes = b"k" * 32,
     **changes: object,
 ) -> OwnerFileSecretProvider:
     key_path, managed_root = paths
     arguments: dict[str, object] = {
         "key_path": key_path,
         "active_kek": ACTIVE_KEK,
+        "installation_id": INSTALLATION_ID,
+        "catalog_id": CATALOG_ID,
+        "sentinel_id": SENTINEL_ID,
+        "readiness_sentinel": _sentinel(sentinel_material),
         "managed_roots": (managed_root,),
     }
     arguments.update(changes)
     return OwnerFileSecretProvider(**arguments)  # type: ignore[arg-type]
+
+
+def _ready(provider: OwnerFileSecretProvider) -> None:
+    result = provider.readiness()
+    assert result.state is KeyReadinessState.READY
+    assert result.source_status is SourceStatus.READABLE
 
 
 def _extract(handle: object) -> bytes:
@@ -80,141 +154,101 @@ def _extract(handle: object) -> bytes:
         return active.use(bytes)
 
 
-def test_exact_round_trip_and_readiness_are_provider_neutral(
+def test_source_observation_never_authorizes_profile_key_work(
     provider_paths: tuple[Path, Path],
 ) -> None:
-    provider = _provider(provider_paths, nonce_source=lambda length: b"n" * length)
+    provider = _provider(provider_paths)
 
     assert isinstance(provider, SecretPort)
     assert provider.active_kek() == ACTIVE_KEK
-    assert provider.status() is SecretProviderStatus.READY
-    wrapped = provider.create_profile_key(CONTEXT)
-    plaintext = _extract(provider.unwrap_profile_key(wrapped, CONTEXT))
+    assert provider.source_status() is SourceStatus.READABLE
+    with pytest.raises(SecretProviderError) as caught:
+        provider.create_profile_key(BINDING)
+    assert caught.value.code is SecretFailureCode.READINESS_REQUIRED
 
-    assert len(plaintext) == 32
-    assert wrapped.nonce == b"n" * 12
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
     assert len(wrapped.ciphertext) == 48
-    assert provider.check_readiness(wrapped, CONTEXT) is SecretProviderStatus.READY
+    assert _extract(provider.unwrap_profile_key(wrapped, BINDING)) != b"k" * 32
+
+
+def test_restart_object_begins_not_ready(provider_paths: tuple[Path, Path]) -> None:
+    provider = _provider(provider_paths)
+    _ready(provider)
+    del provider
+    gc.collect()
+
+    restarted = _provider(provider_paths)
+    with pytest.raises(SecretProviderError) as caught:
+        restarted.create_profile_key(BINDING)
+    assert caught.value.code is SecretFailureCode.READINESS_REQUIRED
 
 
 def test_aad_v1_exact_binary_vector(provider_paths: tuple[Path, Path]) -> None:
     provider = _provider(provider_paths)
-    expected = b"".join(
-        (
-            b"MyCogni\x00profile-dek-wrap\x00",
-            struct.pack(">H", 1),
-            CONTEXT.installation_id.value.bytes,
-            CONTEXT.profile_id.value.bytes,
-            struct.pack(">I", CONTEXT.profile_key_version),
-            struct.pack(">H", CONTEXT.catalog_schema_version),
-            b"\x01",
-            ACTIVE_KEK.provider_instance_id.value.bytes,
-            ACTIVE_KEK.kek_id.value.bytes,
-            struct.pack(">I", ACTIVE_KEK.kek_version),
-            b"\x01",
-        )
+    expected = bytes.fromhex(
+        "4d79436f676e690070726f66696c652d64656b2d7772617000"
+        "00010001200000000000400080000000000000032000000000004000"
+        "80000000000000040000000100010120000000000040008000000000000001"
+        "200000000000400080000000000000020000000101"
     )
 
-    assert provider._aad(CONTEXT) == expected
+    assert provider._profile_aad(BINDING) == expected
+    assert expected == _profile_aad()
 
 
-def test_deterministic_aes_gcm_wrap_vector_covers_key_dek_nonce_aad_and_tag(
+def test_deterministic_aes_gcm_wrap_vector_covers_every_aad_field(
     provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from mycogni.adapters.keys import owner_file
+
     key_path, _managed_root = provider_paths
     key = bytes(range(32))
     profile_dek = bytes(range(32, 64))
     nonce = bytes(range(12))
-    expected_aad = bytes.fromhex(
-        "4d79436f676e690070726f66696c652d64656b2d77726170000001"
-        "2000000000004000800000000000000320000000000040008000000000000004"
-        "00000001000101"
-        "20000000000040008000000000000001"
-        "20000000000040008000000000000002"
-        "0000000101"
-    )
     expected_ciphertext_and_tag = bytes.fromhex(
         "6723f438e1c0e43ca568bda09dc45642b3e7b507c44e694b005edfbe21543e8d"
-        "81ea5c5582547f06f4598b18911a24bb"
+        "eb607f0496f6be947cb44dbc1b3a2eb0"
     )
     _provision(key_path, key)
-    provider = _provider(
-        provider_paths,
-        nonce_source=lambda length: nonce if length == 12 else b"",
-        _profile_key_source=lambda length: profile_dek if length == 32 else b"",
+    provider = _provider(provider_paths, sentinel_material=key)
+    _ready(provider)
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda length: nonce[:length])
+    monkeypatch.setattr(
+        owner_file,
+        "_os_profile_key_bytes",
+        lambda length: profile_dek[:length],
     )
 
-    wrapped = provider.create_profile_key(CONTEXT)
+    wrapped = provider.create_profile_key(BINDING)
 
-    assert key_path.read_bytes() == OWNER_KEY_FILE_HEADER + key
-    assert provider._aad(CONTEXT) == expected_aad
+    assert wrapped.binding == BINDING
     assert wrapped.nonce == nonce
     assert wrapped.ciphertext == expected_ciphertext_and_tag
-    assert _extract(provider.unwrap_profile_key(wrapped, CONTEXT)) == profile_dek
+    assert _extract(provider.unwrap_profile_key(wrapped, BINDING)) == profile_dek
 
 
 @pytest.mark.parametrize(
-    "generated",
-    [b"short", b"x" * 31, b"x" * 33, bytearray(b"x" * 32)],
-)
-def test_profile_key_entropy_seam_rejects_wrong_type_or_length_without_disclosure(
-    provider_paths: tuple[Path, Path],
-    generated: object,
-) -> None:
-    provider = _provider(
-        provider_paths,
-        _profile_key_source=lambda _length: generated,
-    )
-
-    with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(CONTEXT)
-
-    assert caught.value.code is SecretFailureCode.UNAVAILABLE
-    assert "short" not in str(caught.value)
-    assert "787878" not in repr(caught.value)
-
-
-def test_profile_key_entropy_backend_error_is_redacted(
-    provider_paths: tuple[Path, Path],
-) -> None:
-    def fail_entropy(_length: int) -> bytes:
-        raise OSError("synthetic-profile-dek-entropy-canary")
-
-    provider = _provider(provider_paths, _profile_key_source=fail_entropy)
-
-    with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(CONTEXT)
-
-    assert caught.value.code is SecretFailureCode.UNAVAILABLE
-    assert "canary" not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    "context",
+    "binding",
     [
-        replace(
-            CONTEXT,
-            installation_id=_id("20000000-0000-4000-8000-000000000011"),
-        ),
-        replace(CONTEXT, profile_id=_id("20000000-0000-4000-8000-000000000012")),
-        replace(CONTEXT, profile_key_version=2),
-        replace(CONTEXT, catalog_schema_version=2),
+        replace(BINDING, installation_id=_id("20000000-0000-4000-8000-000000000011")),
+        replace(BINDING, profile_id=_id("20000000-0000-4000-8000-000000000012")),
+        replace(BINDING, profile_key_version=2),
+        replace(BINDING, catalog_schema_version=2),
     ],
 )
-def test_every_context_binding_substitution_fails_closed(
+def test_every_persisted_binding_substitution_fails_before_plaintext(
     provider_paths: tuple[Path, Path],
-    context: ProfileKeyContext,
+    binding: ProfileKeyBinding,
 ) -> None:
     provider = _provider(provider_paths)
-    wrapped = provider.create_profile_key(CONTEXT)
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
 
     with pytest.raises(SecretProviderError) as caught:
-        provider.unwrap_profile_key(wrapped, context)
-
-    assert caught.value.code in {
-        SecretFailureCode.PROVIDER_MISMATCH,
-        SecretFailureCode.AUTHENTICATION_FAILED,
-    }
+        provider.unwrap_profile_key(wrapped, binding)
+    assert caught.value.code is SecretFailureCode.PROVIDER_MISMATCH
 
 
 @pytest.mark.parametrize(
@@ -229,171 +263,285 @@ def test_every_context_binding_substitution_fails_closed(
         replace(ACTIVE_KEK, kek_version=2),
     ],
 )
-def test_every_provider_binding_substitution_fails_closed(
+def test_every_provider_binding_substitution_fails_before_plaintext(
     provider_paths: tuple[Path, Path],
     kek_ref: ActiveKekRef,
 ) -> None:
     provider = _provider(provider_paths)
-    wrapped = provider.create_profile_key(CONTEXT)
-    substituted = replace(wrapped, kek_ref=kek_ref)
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
 
     with pytest.raises(SecretProviderError) as caught:
-        provider.unwrap_profile_key(substituted, CONTEXT)
-
+        provider.unwrap_profile_key(replace(wrapped, kek_ref=kek_ref), BINDING)
     assert caught.value.code is SecretFailureCode.PROVIDER_MISMATCH
 
 
-def test_ciphertext_or_tag_mutation_is_wrong_key_not_success(
-    provider_paths: tuple[Path, Path],
-) -> None:
+def test_tampered_profile_record_latches_recovery(provider_paths: tuple[Path, Path]) -> None:
     provider = _provider(provider_paths)
-    wrapped = provider.create_profile_key(CONTEXT)
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
     mutated = replace(
         wrapped,
         ciphertext=bytes([wrapped.ciphertext[0] ^ 1]) + wrapped.ciphertext[1:],
     )
 
-    with pytest.raises(SecretProviderError) as caught:
-        provider.unwrap_profile_key(mutated, CONTEXT)
+    with pytest.raises(SecretProviderError) as mismatch:
+        provider.unwrap_profile_key(mutated, BINDING)
+    with pytest.raises(SecretProviderError) as latched:
+        provider.unwrap_profile_key(wrapped, BINDING)
 
-    assert caught.value.code is SecretFailureCode.AUTHENTICATION_FAILED
+    assert mismatch.value.code is SecretFailureCode.CATALOG_KEY_MISMATCH
+    assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
+    assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
 
 
-def test_wrong_preprovisioned_key_is_detected_by_catalog_sentinel(
+def test_failed_initial_sentinel_authentication_is_permanently_latched(
     provider_paths: tuple[Path, Path],
 ) -> None:
     key_path, _managed_root = provider_paths
     provider = _provider(provider_paths)
-    sentinel = provider.create_profile_key(CONTEXT)
     _provision(key_path, b"w" * 32)
 
-    assert provider.status() is SecretProviderStatus.READY
-    assert provider.check_readiness(sentinel, CONTEXT) is SecretProviderStatus.WRONG_KEY
+    assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+    _provision(key_path, b"k" * 32)
+    assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+    with pytest.raises(SecretProviderError) as caught:
+        provider.create_profile_key(BINDING)
+    assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
-def test_missing_provider_never_provisions_or_falls_back(
+def test_existing_install_missing_source_is_never_unprovisioned(
     provider_paths: tuple[Path, Path],
 ) -> None:
     key_path, _managed_root = provider_paths
-    key_path.unlink()
     provider = _provider(provider_paths)
+    key_path.unlink()
 
-    assert provider.status() is SecretProviderStatus.UNPROVISIONED
-    with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(CONTEXT)
-    assert caught.value.code is SecretFailureCode.UNPROVISIONED
+    assert provider.source_status() is SourceStatus.UNAVAILABLE
+    result = provider.readiness()
+    assert result.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert result.source_status is SourceStatus.UNAVAILABLE
     assert not key_path.exists()
 
 
-@pytest.mark.parametrize("payload", [b"", b"bad", OWNER_KEY_FILE_HEADER + b"x" * 31])
-def test_corrupt_or_truncated_key_file_requires_recovery(
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (b"", SourceStatus.CORRUPT),
+        (b"bad", SourceStatus.CORRUPT),
+        (OWNER_KEY_FILE_HEADER + b"x" * 31, SourceStatus.CORRUPT),
+        (b"X" * len(OWNER_KEY_FILE_HEADER) + b"k" * 32, SourceStatus.CORRUPT),
+    ],
+)
+def test_corrupt_source_is_neutral_recovery_required(
     provider_paths: tuple[Path, Path],
     payload: bytes,
+    expected: SourceStatus,
 ) -> None:
     key_path, _managed_root = provider_paths
     key_path.write_bytes(payload)
     key_path.chmod(0o600)
+    provider = _provider(provider_paths)
 
-    assert _provider(provider_paths).status() is SecretProviderStatus.RECOVERY_REQUIRED
-
-
-def test_unknown_file_format_requires_recovery(provider_paths: tuple[Path, Path]) -> None:
-    key_path, _managed_root = provider_paths
-    key_path.write_bytes(b"X" * len(OWNER_KEY_FILE_HEADER) + b"k" * 32)
-    key_path.chmod(0o600)
-
-    assert _provider(provider_paths).status() is SecretProviderStatus.RECOVERY_REQUIRED
+    assert provider.source_status() is expected
+    readiness = provider.readiness()
+    assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
+    assert readiness.source_status is expected
 
 
-def test_deterministic_nonce_seam_and_process_usage_cap(
+def test_valid_key_replacement_after_ready_latches_even_after_restore(
     provider_paths: tuple[Path, Path],
 ) -> None:
-    nonces = iter((b"a" * 12, b"b" * 12))
-    provider = _provider(
-        provider_paths,
-        process_wrap_limit=2,
-        nonce_source=lambda _length: next(nonces),
-    )
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+    _ready(provider)
+    original = key_path.read_bytes()
+    _provision(key_path, b"w" * 32)
 
-    assert provider.create_profile_key(CONTEXT).nonce == b"a" * 12
-    assert provider.create_profile_key(CONTEXT).nonce == b"b" * 12
+    with pytest.raises(SecretProviderError) as changed:
+        provider.create_profile_key(BINDING)
+    key_path.write_bytes(original)
+    key_path.chmod(0o600)
+    with pytest.raises(SecretProviderError) as restored:
+        provider.create_profile_key(BINDING)
+
+    assert changed.value.code is SecretFailureCode.RECOVERY_REQUIRED
+    assert restored.value.code is SecretFailureCode.RECOVERY_REQUIRED
+
+
+def test_source_status_observation_of_change_latches_recovery(
+    provider_paths: tuple[Path, Path],
+) -> None:
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+    _ready(provider)
+    original = key_path.read_bytes()
+    _provision(key_path, b"w" * 32)
+
+    assert provider.source_status() is SourceStatus.READABLE
+    key_path.write_bytes(original)
+    key_path.chmod(0o600)
+    assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
+
+
+def test_second_live_provider_for_same_source_is_rejected(
+    provider_paths: tuple[Path, Path],
+) -> None:
+    provider = _provider(provider_paths)
+
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(CONTEXT)
-    assert caught.value.code is SecretFailureCode.USAGE_LIMIT
+        _provider(provider_paths)
+
+    assert provider.active_kek() == ACTIVE_KEK
+    assert caught.value.code is SecretFailureCode.PROVIDER_ALREADY_ACTIVE
 
 
-def test_duplicate_nonce_latches_all_future_wraps(provider_paths: tuple[Path, Path]) -> None:
-    nonces: Iterator[bytes] = iter((b"a" * 12, b"a" * 12, b"b" * 12))
-    provider = _provider(provider_paths, nonce_source=lambda _length: next(nonces))
-    provider.create_profile_key(CONTEXT)
-
-    with pytest.raises(SecretProviderError) as collision:
-        provider.create_profile_key(CONTEXT)
-    with pytest.raises(SecretProviderError) as latched:
-        provider.create_profile_key(CONTEXT)
-
-    assert collision.value.code is SecretFailureCode.NONCE_REUSE
-    assert latched.value.code is SecretFailureCode.NONCE_REUSE
-
-
-def test_forked_child_must_recompose_provider(
+def test_process_usage_cap_survives_provider_recomposition(
     provider_paths: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mycogni.adapters.keys import owner_file
 
+    nonces: Iterator[bytes] = iter((b"a" * 12, b"b" * 12))
+    provider = _provider(provider_paths, process_wrap_limit=2)
+    _ready(provider)
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: next(nonces))
+
+    assert provider.create_profile_key(BINDING).nonce == b"a" * 12
+    assert provider.create_profile_key(BINDING).nonce == b"b" * 12
+    with pytest.raises(SecretProviderError) as caught:
+        provider.create_profile_key(BINDING)
+    assert caught.value.code is SecretFailureCode.USAGE_LIMIT
+
+    del caught
+    del provider
+    gc.collect()
+    provider = _provider(provider_paths, process_wrap_limit=2)
+    _ready(provider)
+    with pytest.raises(SecretProviderError) as exhausted:
+        provider.create_profile_key(BINDING)
+    assert exhausted.value.code is SecretFailureCode.USAGE_LIMIT
+
+
+def test_duplicate_nonce_latch_survives_provider_recomposition(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    repeated: Iterator[bytes] = iter((b"z" * 12, b"z" * 12, b"y" * 12))
     provider = _provider(provider_paths)
-    current_pid = os.getpid()
-    monkeypatch.setattr(owner_file.os, "getpid", lambda: current_pid + 1)
+    _ready(provider)
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: next(repeated))
+    provider.create_profile_key(BINDING)
+    with pytest.raises(SecretProviderError) as collision:
+        provider.create_profile_key(BINDING)
+    assert collision.value.code is SecretFailureCode.NONCE_REUSE
+    del collision
+    del provider
+    gc.collect()
+
+    provider = _provider(provider_paths)
+    _ready(provider)
+    with pytest.raises(SecretProviderError) as latched:
+        provider.create_profile_key(BINDING)
+    assert latched.value.code is SecretFailureCode.NONCE_REUSE
+
+
+@pytest.mark.parametrize("generated", [b"short", b"x" * 31, b"x" * 33, bytearray(b"x" * 32)])
+def test_private_profile_entropy_wrapper_rejects_bad_results(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    generated: object,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    provider = _provider(provider_paths)
+    _ready(provider)
+    monkeypatch.setattr(owner_file, "_os_profile_key_bytes", lambda _length: generated)
 
     with pytest.raises(SecretProviderError) as caught:
-        provider.active_kek()
-    assert caught.value.code is SecretFailureCode.FORKED_PROCESS
+        provider.create_profile_key(BINDING)
+    assert caught.value.code is SecretFailureCode.UNAVAILABLE
+    assert "787878" not in repr(caught.value)
 
 
-@pytest.mark.parametrize("mode", [0o000, 0o200, 0o400 | 0o040, 0o644, 0o700])
+def test_forked_child_fails_before_inherited_held_lock(
+    provider_paths: tuple[Path, Path],
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("requires POSIX fork")
+    provider = _provider(provider_paths)
+    _ready(provider)
+    read_fd, write_fd = os.pipe()
+    provider._state_lock.acquire()
+    child = os.fork()
+    if child == 0:
+        os.close(read_fd)
+        try:
+            provider.create_profile_key(BINDING)
+        except SecretProviderError as error:
+            os.write(write_fd, error.code.value.encode("ascii"))
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        readable, _, _ = select.select([read_fd], [], [], 2.0)
+        assert readable, "forked child blocked on an inherited provider lock"
+        assert os.read(read_fd, 128) == b"forked_process"
+    finally:
+        provider._state_lock.release()
+        os.close(read_fd)
+        os.waitpid(child, 0)
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o200, 0o440, 0o644, 0o700])
 def test_key_file_rejects_every_non_owner_only_mode(
     provider_paths: tuple[Path, Path],
     mode: int,
 ) -> None:
     key_path, _managed_root = provider_paths
     key_path.chmod(mode)
-
-    assert _provider(provider_paths).status() is SecretProviderStatus.UNSAFE
+    assert _provider(provider_paths).source_status() is SourceStatus.UNSAFE
 
 
 def test_mode_0400_is_accepted(provider_paths: tuple[Path, Path]) -> None:
     key_path, _managed_root = provider_paths
     key_path.chmod(0o400)
+    assert _provider(provider_paths).source_status() is SourceStatus.READABLE
 
-    assert _provider(provider_paths).status() is SecretProviderStatus.READY
 
+def test_hardlink_symlink_fifo_and_wrong_owner_are_rejected(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
 
-def test_hardlinked_key_is_rejected(provider_paths: tuple[Path, Path]) -> None:
     key_path, _managed_root = provider_paths
     os.link(key_path, key_path.parent / "alias.kek")
+    assert _provider(provider_paths).source_status() is SourceStatus.UNSAFE
+    (key_path.parent / "alias.kek").unlink()
 
-    assert _provider(provider_paths).status() is SecretProviderStatus.UNSAFE
-
-
-def test_symlink_key_is_rejected(provider_paths: tuple[Path, Path]) -> None:
-    key_path, _managed_root = provider_paths
     target = key_path.parent / "target.kek"
     key_path.rename(target)
     key_path.symlink_to(target)
-
-    assert _provider(provider_paths).status() is SecretProviderStatus.UNSAFE
-
-
-def test_fifo_key_is_rejected_without_blocking(provider_paths: tuple[Path, Path]) -> None:
-    key_path, _managed_root = provider_paths
+    assert _provider(provider_paths).source_status() is SourceStatus.UNSAFE
     key_path.unlink()
+    target.unlink()
     os.mkfifo(key_path, mode=0o600)
+    assert _provider(provider_paths).source_status() is SourceStatus.UNSAFE
 
-    assert _provider(provider_paths).status() is SecretProviderStatus.UNSAFE
+    values = list(os.stat(__file__))
+    values[0] = stat.S_IFREG | 0o600
+    values[4] = os.geteuid() + 1
+    values[3] = 1
+    values[6] = len(OWNER_KEY_FILE_HEADER) + 32
+    with pytest.raises(SecretProviderError) as caught:
+        owner_file.OwnerFileSecretProvider._validate_file(os.stat_result(values))
+    assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
 
 
-def test_symlinked_key_directory_ancestor_is_rejected(tmp_path: Path) -> None:
+def test_symlink_and_world_writable_ancestors_are_rejected(tmp_path: Path) -> None:
     actual = tmp_path / "actual"
     actual.mkdir(mode=0o700)
     key_path = actual / "key.kek"
@@ -402,36 +550,24 @@ def test_symlinked_key_directory_ancestor_is_rejected(tmp_path: Path) -> None:
     linked.symlink_to(actual, target_is_directory=True)
     managed = tmp_path / "managed"
     managed.mkdir(mode=0o700)
-    provider = OwnerFileSecretProvider(
-        key_path=linked / "key.kek",
-        active_kek=ACTIVE_KEK,
-        managed_roots=(managed,),
-    )
+    provider = _provider((linked / "key.kek", managed))
+    assert provider.source_status() is SourceStatus.UNSAFE
+    del provider
+    gc.collect()
 
-    assert provider.status() is SecretProviderStatus.UNSAFE
-
-
-def test_world_writable_key_ancestor_is_rejected(tmp_path: Path) -> None:
+    linked.unlink()
     unsafe = tmp_path / "unsafe"
     unsafe.mkdir(mode=0o700)
-    key_directory = unsafe / "keys"
-    key_directory.mkdir(mode=0o700)
-    key_path = key_directory / "key.kek"
-    _provision(key_path)
+    directory = unsafe / "keys"
+    directory.mkdir(mode=0o700)
+    unsafe_key = directory / "key.kek"
+    _provision(unsafe_key)
     unsafe.chmod(0o777)
-    managed = tmp_path / "managed"
-    managed.mkdir(mode=0o700)
-    provider = OwnerFileSecretProvider(
-        key_path=key_path,
-        active_kek=ACTIVE_KEK,
-        managed_roots=(managed,),
-    )
-
-    assert provider.status() is SecretProviderStatus.UNSAFE
+    assert _provider((unsafe_key, managed)).source_status() is SourceStatus.UNSAFE
 
 
 @pytest.mark.parametrize("managed_relative", ["keys", "keys/child", "."])
-def test_key_and_managed_roots_must_be_disjoint_in_both_directions(
+def test_key_and_managed_roots_must_be_lexically_disjoint(
     tmp_path: Path,
     managed_relative: str,
 ) -> None:
@@ -439,45 +575,38 @@ def test_key_and_managed_roots_must_be_disjoint_in_both_directions(
     key_directory.mkdir(mode=0o700)
     key_path = key_directory / "key.kek"
     _provision(key_path)
-    managed = tmp_path / managed_relative
 
     with pytest.raises(SecretProviderError) as caught:
-        OwnerFileSecretProvider(
-            key_path=key_path,
-            active_kek=ACTIVE_KEK,
-            managed_roots=(managed,),
-        )
-
+        _provider((key_path, tmp_path / managed_relative))
     assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
 
 
-def test_symlinked_managed_root_is_rejected(provider_paths: tuple[Path, Path]) -> None:
-    key_path, managed_root = provider_paths
-    target = managed_root.parent / "actual-managed"
-    managed_root.rename(target)
-    managed_root.symlink_to(target, target_is_directory=True)
-    provider = OwnerFileSecretProvider(
-        key_path=key_path,
-        active_kek=ACTIVE_KEK,
-        managed_roots=(managed_root,),
-    )
-
-    assert provider.status() is SecretProviderStatus.UNSAFE
-
-
-def test_wrong_owner_metadata_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_directory_rename_and_replacement_during_aead_returns_no_ciphertext(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from mycogni.adapters.keys import owner_file
 
-    metadata_values = list(os.stat(__file__))
-    metadata_values[0] = stat.S_IFREG | 0o600
-    metadata_values[4] = os.geteuid() + 1
-    metadata_values[3] = 1
-    metadata_values[6] = len(OWNER_KEY_FILE_HEADER) + 32
-    metadata = os.stat_result(metadata_values)
+    key_path, _managed_root = provider_paths
+    provider = _provider(provider_paths)
+    _ready(provider)
 
+    class MutatingCipher:
+        def __init__(self, _key: object) -> None:
+            pass
+
+        def encrypt(self, _nonce: bytes, _data: object, _aad: bytes) -> bytes:
+            moved = key_path.parent.with_name("moved-keys")
+            key_path.parent.rename(moved)
+            key_path.parent.mkdir(mode=0o700)
+            _provision(key_path)
+            return b"c" * 48
+
+    monkeypatch.setattr(owner_file, "AESGCM", MutatingCipher)
     with pytest.raises(SecretProviderError) as caught:
-        owner_file.OwnerFileSecretProvider._validate_key_metadata(metadata)
+        provider.create_profile_key(BINDING)
     assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
+    assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
 
 
 def test_routine_operations_do_not_mutate_key_source(
@@ -487,8 +616,9 @@ def test_routine_operations_do_not_mutate_key_source(
     provider = _provider(provider_paths)
     before = key_path.read_bytes()
     before_stat = key_path.stat()
-    wrapped = provider.create_profile_key(CONTEXT)
-    _extract(provider.unwrap_profile_key(wrapped, CONTEXT))
+    _ready(provider)
+    wrapped = provider.create_profile_key(BINDING)
+    _extract(provider.unwrap_profile_key(wrapped, BINDING))
     after_stat = key_path.stat()
 
     assert key_path.read_bytes() == before
@@ -497,30 +627,7 @@ def test_routine_operations_do_not_mutate_key_source(
     assert stat.S_IMODE(after_stat.st_mode) == stat.S_IMODE(before_stat.st_mode)
 
 
-def test_path_identity_is_revalidated_after_the_aead_operation(
-    provider_paths: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from mycogni.adapters.keys import owner_file
-
-    key_path, _managed_root = provider_paths
-
-    class MutatingCipher:
-        def __init__(self, _key: object) -> None:
-            pass
-
-        def encrypt(self, _nonce: bytes, _data: object, _aad: bytes) -> bytes:
-            _provision(key_path, b"z" * 32)
-            return b"c" * 48
-
-    monkeypatch.setattr(owner_file, "AESGCM", MutatingCipher)
-
-    with pytest.raises(SecretProviderError) as caught:
-        _provider(provider_paths).create_profile_key(CONTEXT)
-    assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
-
-
-def test_unwrap_preserves_typed_path_revalidation_failure(
+def test_post_use_fstat_and_close_failures_are_typed_and_redacted(
     provider_paths: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -528,22 +635,32 @@ def test_unwrap_preserves_typed_path_revalidation_failure(
 
     key_path, _managed_root = provider_paths
     provider = _provider(provider_paths)
-    wrapped = provider.create_profile_key(CONTEXT)
+    real_fstat = owner_file.os.fstat
+    calls = 0
 
-    class MutatingCipher:
-        def __init__(self, _key: object) -> None:
-            pass
+    def fail_late(descriptor: int) -> os.stat_result:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError(f"fstat-canary:{key_path}")
+        return real_fstat(descriptor)
 
-        def decrypt(self, _nonce: bytes, _data: bytes, _aad: bytes) -> bytes:
-            _provision(key_path, b"z" * 32)
-            return b"p" * 32
+    monkeypatch.setattr(owner_file.os, "fstat", fail_late)
+    assert provider.source_status() is SourceStatus.UNAVAILABLE
+    monkeypatch.setattr(owner_file.os, "fstat", real_fstat)
+    real_close = owner_file.os.close
 
-    monkeypatch.setattr(owner_file, "AESGCM", MutatingCipher)
+    close_failed = False
 
-    with pytest.raises(SecretProviderError) as caught:
-        provider.unwrap_profile_key(wrapped, CONTEXT)
-    assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
-    assert caught.value.operator_status is SecretProviderStatus.UNSAFE
+    def fail_close_once(descriptor: int) -> None:
+        nonlocal close_failed
+        if not close_failed:
+            close_failed = True
+            raise OSError("close-canary")
+        real_close(descriptor)
+
+    monkeypatch.setattr(owner_file.os, "close", fail_close_once)
+    assert provider.source_status() is SourceStatus.UNAVAILABLE
 
 
 def test_private_paths_and_backend_errors_never_render(
@@ -562,13 +679,8 @@ def test_private_paths_and_backend_errors_never_render(
         return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(owner_file.os, "open", fail_open)
-    with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(CONTEXT)
-
-    rendered = "".join(
-        traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__)
-    )
+    assert provider.source_status() is SourceStatus.UNAVAILABLE
+    rendered = repr(provider)
     assert key_path.name not in rendered
     assert str(key_path.parent) not in rendered
     assert "backend canary" not in rendered
-    assert "installation.kek" not in repr(provider)

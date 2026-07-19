@@ -72,8 +72,8 @@ class ActiveKekRef:
 
 
 @dataclass(frozen=True, slots=True)
-class ProfileKeyContext:
-    """Canonical context that must authenticate every profile-key unwrap."""
+class ProfileKeyBinding:
+    """Persisted canonical binding that must authenticate every profile-key unwrap."""
 
     installation_id: OpaqueId
     profile_id: OpaqueId
@@ -90,7 +90,7 @@ class ProfileKeyContext:
 
     def __repr__(self) -> str:
         return (
-            "ProfileKeyContext(installation_id=[REDACTED], profile_id=[REDACTED], "
+            "ProfileKeyBinding(installation_id=[REDACTED], profile_id=[REDACTED], "
             f"profile_key_version={self.profile_key_version}, "
             f"catalog_schema_version={self.catalog_schema_version})"
         )
@@ -101,8 +101,7 @@ class WrappedProfileKey:
     """Strict, redacted AES-256-GCM record for one random profile DEK."""
 
     kek_ref: ActiveKekRef
-    profile_id: OpaqueId
-    profile_key_version: int
+    binding: ProfileKeyBinding
     nonce: bytes
     ciphertext: bytes
     format_version: int = WRAPPED_KEY_FORMAT_VERSION
@@ -112,9 +111,8 @@ class WrappedProfileKey:
     def __post_init__(self) -> None:
         if type(self.kek_ref) is not ActiveKekRef:
             raise TypeError("wrapped key requires an active KEK reference")
-        if type(self.profile_id) is not OpaqueId:
-            raise TypeError("wrapped key profile ID must be an OpaqueId")
-        _positive_u32(self.profile_key_version, "profile key version")
+        if type(self.binding) is not ProfileKeyBinding:
+            raise TypeError("wrapped key requires a persisted profile-key binding")
         if type(self.format_version) is not int:
             raise TypeError("wrapped-key format version must be an integer")
         if self.format_version != WRAPPED_KEY_FORMAT_VERSION:
@@ -139,7 +137,7 @@ class WrappedProfileKey:
     def __repr__(self) -> str:
         return (
             "WrappedProfileKey(kek_ref=[REDACTED], profile_id=[REDACTED], "
-            f"profile_key_version={self.profile_key_version}, nonce=[REDACTED], "
+            f"profile_key_version={self.binding.profile_key_version}, nonce=[REDACTED], "
             f"ciphertext=[REDACTED], format_version={self.format_version}, "
             f"aad_version={self.aad_version}, suite={self.suite!r})"
         )
@@ -148,42 +146,93 @@ class WrappedProfileKey:
         return "[REDACTED:wrapped-profile-key]"
 
 
-class SecretProviderStatus(StrEnum):
-    """Finite, non-secret provider/readiness states safe for operator surfaces."""
+class SourceStatus(StrEnum):
+    """Low-level source observations; readability never implies key readiness."""
 
-    READY = "ready"
-    UNPROVISIONED = "unprovisioned"
+    READABLE = "readable"
     UNAVAILABLE = "unavailable"
     UNSAFE = "unsafe"
-    WRONG_KEY = "wrong_key"
+    CORRUPT = "corrupt"
+
+
+class KeyReadinessState(StrEnum):
+    """Installation-level result after authenticating the dedicated sentinel."""
+
+    READY = "ready"
     RECOVERY_REQUIRED = "recovery_required"
+
+
+@dataclass(frozen=True, slots=True)
+class KeyReadiness:
+    """Non-secret readiness plus the narrower observed source condition."""
+
+    state: KeyReadinessState
+    source_status: SourceStatus
+
+    def __post_init__(self) -> None:
+        if type(self.state) is not KeyReadinessState:
+            raise TypeError("key readiness state must be a KeyReadinessState")
+        if type(self.source_status) is not SourceStatus:
+            raise TypeError("key readiness source status must be a SourceStatus")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class WrappedReadinessSentinel:
+    """Dedicated persisted catalog sentinel; never interchangeable with a profile key."""
+
+    kek_ref: ActiveKekRef
+    installation_id: OpaqueId
+    catalog_id: OpaqueId
+    sentinel_id: OpaqueId
+    nonce: bytes
+    ciphertext: bytes
+    format_version: int = WRAPPED_KEY_FORMAT_VERSION
+    aad_version: int = WRAPPED_KEY_AAD_VERSION
+    suite: str = WRAP_SUITE
+
+    def __post_init__(self) -> None:
+        if type(self.kek_ref) is not ActiveKekRef:
+            raise TypeError("readiness sentinel requires an active KEK reference")
+        for value, label in (
+            (self.installation_id, "installation"),
+            (self.catalog_id, "catalog"),
+            (self.sentinel_id, "sentinel"),
+        ):
+            if type(value) is not OpaqueId:
+                raise TypeError(f"readiness sentinel {label} ID must be an OpaqueId")
+        if self.format_version != WRAPPED_KEY_FORMAT_VERSION:
+            raise ValueError("unsupported readiness-sentinel format version")
+        if self.aad_version != WRAPPED_KEY_AAD_VERSION:
+            raise ValueError("unsupported readiness-sentinel AAD version")
+        if self.suite != WRAP_SUITE:
+            raise ValueError("unsupported readiness-sentinel suite")
+        if type(self.nonce) is not bytes or len(self.nonce) != WRAP_NONCE_BYTES:
+            raise ValueError("readiness-sentinel nonce must be exactly 12 bytes")
+        if type(self.ciphertext) is not bytes or len(self.ciphertext) != WRAPPED_PROFILE_KEY_BYTES:
+            raise ValueError("readiness-sentinel ciphertext must be exactly 48 bytes")
+
+    def __repr__(self) -> str:
+        return (
+            "WrappedReadinessSentinel(kek_ref=[REDACTED], installation_id=[REDACTED], "
+            "catalog_id=[REDACTED], sentinel_id=[REDACTED], nonce=[REDACTED], "
+            "ciphertext=[REDACTED], format_version=1, aad_version=1, suite='A256GCM')"
+        )
 
 
 class SecretFailureCode(StrEnum):
     """Stable redacted causes for fail-closed secret-provider decisions."""
 
-    UNPROVISIONED = "unprovisioned"
     UNAVAILABLE = "unavailable"
     UNSAFE_STORAGE = "unsafe_storage"
     FORKED_PROCESS = "forked_process"
     MALFORMED_RECORD = "malformed_record"
     PROVIDER_MISMATCH = "provider_mismatch"
-    AUTHENTICATION_FAILED = "authentication_failed"
+    CATALOG_KEY_MISMATCH = "catalog_key_mismatch"
+    READINESS_REQUIRED = "readiness_required"
+    RECOVERY_REQUIRED = "recovery_required"
+    PROVIDER_ALREADY_ACTIVE = "provider_already_active"
     USAGE_LIMIT = "usage_limit"
     NONCE_REUSE = "nonce_reuse"
-
-
-_FAILURE_STATUS = {
-    SecretFailureCode.UNPROVISIONED: SecretProviderStatus.UNPROVISIONED,
-    SecretFailureCode.UNAVAILABLE: SecretProviderStatus.UNAVAILABLE,
-    SecretFailureCode.UNSAFE_STORAGE: SecretProviderStatus.UNSAFE,
-    SecretFailureCode.FORKED_PROCESS: SecretProviderStatus.UNAVAILABLE,
-    SecretFailureCode.MALFORMED_RECORD: SecretProviderStatus.RECOVERY_REQUIRED,
-    SecretFailureCode.PROVIDER_MISMATCH: SecretProviderStatus.RECOVERY_REQUIRED,
-    SecretFailureCode.AUTHENTICATION_FAILED: SecretProviderStatus.WRONG_KEY,
-    SecretFailureCode.USAGE_LIMIT: SecretProviderStatus.RECOVERY_REQUIRED,
-    SecretFailureCode.NONCE_REUSE: SecretProviderStatus.RECOVERY_REQUIRED,
-}
 
 
 class SecretProviderError(RuntimeError):
@@ -193,7 +242,6 @@ class SecretProviderError(RuntimeError):
         if type(code) is not SecretFailureCode:
             raise TypeError("secret failure code must be a SecretFailureCode")
         self.code = code
-        self.operator_status = _FAILURE_STATUS[code]
         super().__init__(f"secret provider failed closed ({code.value})")
 
     def __repr__(self) -> str:
@@ -215,6 +263,7 @@ class ProfileDekHandle:
         "__issuer_token",
         "__material",
         "__pid",
+        "__used",
     )
 
     def __init__(
@@ -237,6 +286,7 @@ class ProfileDekHandle:
         self.__pid = os.getpid() if _pid is None else _pid
         self.__active = False
         self.__closed = False
+        self.__used = False
 
     def _assert_issuer(self) -> None:
         if self.__closed or os.getpid() != self.__pid:
@@ -258,11 +308,15 @@ class ProfileDekHandle:
     def use[T](self, operation: Callable[[memoryview], T]) -> T:
         """Run a synchronous operation against a temporary read-only view."""
         self._assert_issuer()
-        if not self.__active:
+        if not self.__active or self.__used:
             raise RuntimeError("profile key handle is not active")
         if not callable(operation):
             raise TypeError("profile key operation must be callable")
-        return operation(memoryview(self.__material).toreadonly())
+        self.__used = True
+        try:
+            return operation(memoryview(self.__material).toreadonly())
+        finally:
+            self.close()
 
     def __exit__(self, *_exc: object) -> None:
         self.close()

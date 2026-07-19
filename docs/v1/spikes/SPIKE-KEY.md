@@ -1,9 +1,11 @@
 # SPIKE-KEY — explicit local KEK and profile-key wrap boundary
 
-Status: `IN_PROGRESS`. The native owner-only provider and strict wrap contract are implemented at
-the source/fixture level with 59 focused tests; exact-target adversarial review is pending. macOS
-Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and backup-recovery
-evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
+Status: `IN_PROGRESS`. Initial exact target `2a144bf` was rejected by all three reviewers with one
+P0 split-key finding. A replacement candidate now enforces the remediation contract and passes its
+focused local suite, but clean repeat exact-target review is still pending; neither result is
+acceptance.
+macOS Keychain, rootless Linux Engine, Docker Desktop, durable rotation/catalog and
+backup-recovery evidence remain open. This document does not promote `KEY-001`, `KEY-002`,
 `SPIKE-BACKUP`, `THR-KEYS-001` or `VFY-KEYS-001`.
 
 ## Question and disposition
@@ -22,74 +24,87 @@ separate conformance rows rather than inferred equivalents.
 ```text
 trusted composition
   |-- exact provider profile + provider instance + KEK version
-  |-- installation identity
+  |-- installation + catalog + dedicated sentinel identity
   |-- disallowed data/evidence/archive roots
   v
 application SecretPort
-  |-- readiness / exact active KEK reference
+  |-- source status (never authorizes) / sentinel-authenticated readiness
   |-- create fresh random profile DEK and wrap
-  |-- open wrapped DEK as short-lived opaque handle
+  |-- open wrapped DEK as short-lived single-callback handle
   v
 adapter-private KEK provider
   |-- canonical AAD v1 + AES-256-GCM
   |-- descriptor-safe pre-provisioned file read
-  |-- PID, permissions, link and path-separation checks
+  |-- lifetime material/directory/file pin + PID/permissions/link/separation checks
   v
 owner-only key source outside every managed archive root
 ```
 
 Raw KEK bytes never cross the application port. Ordinary runtime code has no key-create,
-overwrite, provider-discovery or fallback operation. `Sensitive[T]` remains only a rendering
-guard and is not used as an access-control claim.
+sentinel-create, overwrite, provider-discovery or fallback operation. `Sensitive[T]` remains only
+a rendering guard and is not used as an access-control claim. The profile-DEK handle limits one
+activation/callback and then closes, but callback code can copy bytes or reach a Python backing
+object; it is not an opaque capability or same-process security boundary.
 
 ## Record and AAD contract
 
 The wrapped record accepts only format/AAD version 1, suite `A256GCM`, a 12-byte nonce, 48-byte
-ciphertext/tag and the exact `KekRef`. Its `ProfileKeyBinding` contains installation, profile,
-profile-key version and catalog-schema version. All integers are bounded before encoding.
+ciphertext/tag and the exact `KekRef`. Its persisted immutable `ProfileKeyBinding` contains
+installation, profile, profile-key version and catalog-schema version; unwrap checks it against
+canonical application state. All integers are bounded before encoding. A
+`WrappedReadinessSentinel` is a distinct purpose/type with its own fixed expected material and
+installation/catalog/sentinel identity; an ordinary profile record cannot authorize readiness.
 
-AAD v1 is the fixed binary sequence in ADR-0013. Substituting any installation, profile, key
-version, catalog version, provider kind, provider instance, KEK UUID, KEK version or suite must
-make opening fail without returning plaintext. Unknown versions and malformed lengths fail before
-AEAD.
+AAD v1 is the fixed binary sequence in ADR-0013 and authenticates format plus AAD version.
+Substituting any installation, profile, key version, catalog version, provider kind, provider
+instance, KEK UUID, KEK version or suite must make opening fail without returning plaintext.
+Unknown versions and malformed lengths fail before AEAD. Historical inputs come from the
+persisted binding rather than a mutable current global schema.
 
-The production entropy source is the operating-system RNG. A deterministic nonce source is
-injectable only into direct tests. One adapter instance enforces a conservative wrap cap and a
-duplicate-nonce latch; durable accounting across processes/restarts is deferred to KEY-001 and is
-a production blocker, not an implied property of the spike.
+The production constructor exposes no entropy source. Private module wrappers call the
+operating-system RNG and are monkeypatched only in direct tests. One live provider per exact
+path/reference enforces the process-lifetime wrap cap and duplicate-nonce latch; a second live
+provider is denied. Durable accounting across processes/restarts is deferred to KEY-001 and is a
+production blocker, not an implied property of the spike.
 
 ## Native owner-only provider
 
-The spike consumes a separately pre-provisioned, versioned 32-byte KEK file. It never creates,
+The spike consumes a separately pre-provisioned, versioned 32-byte KEK file and dedicated sentinel.
+It never creates,
 truncates, overwrites, chmods or repairs it. Every operation checks:
 
-- creator PID still matches the process;
+- creator PID still matches before input, entropy or lock work and after lock acquisition;
 - all path ancestors are non-symlinks and not unsafe writable locations;
 - configured key path and every managed root are neither equal nor ancestors/descendants;
 - no-follow/close-on-exec descriptor open succeeds;
 - descriptor is a regular file owned by the expected effective UID;
 - mode is exactly `0400` or `0600`, link count is one and format/length are exact;
-- descriptor/path identity still agrees around the cryptographic operation.
+- a fresh anchor-to-parent traversal still resolves the exact pinned directory and file around
+  the cryptographic operation;
+- sentinel-authenticated material/directory/file state still equals the lifetime pin.
 
-Failures use finite redacted categories. Exceptions, repr/str and diagnostics must not reveal the
-path, key bytes, nonce, ciphertext, AAD or backend error text.
+Any mismatch permanently latches recovery-required for that provider object; restoring the old
+file does not resume it. Failures use finite redacted categories. Exceptions, repr/str and
+diagnostics must not reveal the path, key bytes, nonce, ciphertext, AAD or backend error text.
+POSIX owner/mode checks are source/fixture evidence only; macOS ACLs and mount aliases remain
+exact-host qualification blockers.
 
 ## Startup, restart and recovery
 
-Routine startup never mutates provider or catalog state. It distinguishes:
+Routine startup never mutates provider or catalog storage. It distinguishes:
 
 | State | Meaning | Required behavior |
 | --- | --- | --- |
-| unprovisioned | a new install has no configured material | remain not ready; run a separate explicit administration ceremony |
-| unavailable | the configured source is absent or locked | pause key-dependent and external work; do not fall back |
-| configuration unsafe | type, owner, mode, link, ancestry or overlap is invalid | pause; operator repairs configuration outside runtime |
-| recovery required | expected catalog sentinel cannot open with the exact KEK reference | pause; stage exact retained material and verify before commit |
-| ready | provider checks and known sentinel agree | allow only the operations implemented by the current package |
+| empty-install unprovisioned | an explicit administration state has no catalog/sentinel yet | runtime provider is absent; run the separate bootstrap ceremony |
+| source unavailable/unsafe/malformed | low-level file state only | never authorize work; existing installation remains not ready/recovery-required |
+| not ready | a new provider process/object has not authenticated its dedicated sentinel | pause all key-dependent and external work |
+| recovery required | source changed, is missing, or the sentinel/catalog/key/AAD do not authenticate | latch pause; stage exact retained material and verify in a new composition before commit |
+| ready | exact dedicated sentinel and lifetime source pin agree | allow only the operations implemented by the current package |
 
-A restart must preserve the same non-secret KEK reference and successfully open a synthetic
-catalog sentinel before readiness. A forked child must rebuild trusted composition; inherited
-provider/handle instances are poisoned. Failed recovery verification never overwrites the live
-source or catalog.
+A restart always begins not ready, must preserve the same non-secret KEK reference and must
+authenticate the dedicated catalog sentinel before use. A forked child must rebuild trusted
+composition; inherited provider/handle instances fail before entropy or inherited locks. Failed
+recovery verification never pins, clears a latch, or overwrites the live source/catalog.
 
 ## Provider conformance matrix
 
@@ -108,13 +123,30 @@ of encryption at rest.
 
 ## Executable source evidence
 
-The 59-test focused suite covers strict construction and rendering, a hardcoded exact
+The replacement candidate's 59-test focused suite covers strict construction and rendering, a
+hardcoded exact
 KEK/DEK/nonce/AAD/ciphertext/tag vector, randomized round trips, every binding substitution,
 malformed format/AAD/suite/nonce/tag, wrong or missing/corrupt provider material, no fallback or
-mutation, usage exhaustion, duplicate-nonce latching, forked providers/handles, sentinel checks,
-symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors, archive overlap and
-post-AEAD path replacement. Test values are synthetic. Ruff, strict mypy, import boundaries and
-the focused guarded test launcher pass.
+mutation, readiness-before-use/restart, initial-failure and replace-then-restore latching, usage
+exhaustion, duplicate-nonce latching, second-provider denial, a real fork with an inherited held
+lock, sentinel checks, symlink ancestors, hard links, wrong owner/mode/type, unsafe ancestors,
+archive overlap, configured-directory rename/replacement and typed post-use syscall failures. Test
+values are synthetic. On Darwin arm64 with locked CPython 3.12.12, the focused launcher reports
+`59 passed`; Ruff and strict source mypy also pass. Repeat review and both locked CI runtimes remain
+required.
+
+Reproduce the focused lane from the repository root using a private temporary directory whose
+ancestors are not group/world writable (the provider deliberately rejects a `/tmp` ancestry):
+
+```sh
+mkdir -p ../.mycogni-key-tests
+chmod 700 ../.mycogni-key-tests
+PRIVATE_TEST_TMP="$(cd ../.mycogni-key-tests && pwd)"
+TMPDIR="$PRIVATE_TEST_TMP" PYTHONDONTWRITEBYTECODE=1 \
+  .venv/bin/python scripts/ci/guarded_pytest.py -q \
+  --basetemp="$PRIVATE_TEST_TMP/pytest-root" \
+  tests/application/test_keys.py tests/adapters/keys tests/architecture/test_key_boundaries.py
+```
 
 Host evidence must name the OS, architecture, runtime, filesystem, effective UID and exact target
 commit. Docker Desktop is not evidence for rootless Linux Engine, and a native host test is not
