@@ -38,7 +38,15 @@ class SqlAlchemyUnitOfWork:
         # Every application UoW is a potential writer. BEGIN IMMEDIATE obtains
         # SQLite's reserved lock before domain reads can lead to a write, while
         # the one-connection pool serializes worker/scheduler UoWs in-process.
-        self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        except BaseException:
+            try:
+                self._session.rollback()
+            finally:
+                self._session.close()
+                self._session = None
+            raise
         return self
 
     def __exit__(

@@ -53,9 +53,10 @@ def _owned_engine(settings: SQLiteSettings) -> Iterator[Engine]:
 
 
 def test_every_connection_receives_required_pragmas(tmp_path: Path) -> None:
-    with _owned_engine(
-        _settings(tmp_path / "pragmas.sqlite", busy_timeout_ms=2_750)
-    ) as engine, engine.connect() as connection:
+    with (
+        _owned_engine(_settings(tmp_path / "pragmas.sqlite", busy_timeout_ms=2_750)) as engine,
+        engine.connect() as connection,
+    ):
         assert connection.scalar(text("PRAGMA foreign_keys")) == 1
         assert connection.scalar(text("PRAGMA journal_mode")) == "wal"
         assert connection.scalar(text("PRAGMA synchronous")) == 2
@@ -112,7 +113,7 @@ def test_connection_policy_rejects_an_unexpected_physical_file(tmp_path: Path) -
     cursor = connection.cursor()
     try:
         _apply_expected_pragmas(cursor)
-        with pytest.raises(RuntimeError, match="opened unexpected database file"):
+        with pytest.raises(RuntimeError, match="opened an unexpected database file"):
             _assert_sqlite_connection_policy(
                 cursor,
                 database_path=(tmp_path / "expected.sqlite").resolve(),

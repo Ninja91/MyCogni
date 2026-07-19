@@ -109,9 +109,7 @@ def _assert_sqlite_connection_policy(
         raise RuntimeError("SQLite connection is not backed by a main database file")
     actual_path = Path(str(main_files[0])).resolve(strict=False)
     if actual_path != database_path:
-        raise RuntimeError(
-            f"SQLite opened unexpected database file: expected {database_path}, got {actual_path}"
-        )
+        raise RuntimeError("SQLite opened an unexpected database file")
 
 
 def _apply_sqlite_pragmas(
