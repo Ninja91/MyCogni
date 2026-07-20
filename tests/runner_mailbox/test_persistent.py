@@ -8,8 +8,9 @@ import multiprocessing
 import os
 import signal
 import sqlite3
+from base64 import b64decode
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
@@ -568,6 +569,162 @@ def test_authenticated_semantically_impossible_frames_fail_closed(
             restore_epoch=_RESTORE_EPOCH,
             limits=limits,
         )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+@pytest.mark.parametrize(
+    "alternative", ["datetime-z", "datetime-redundant-fraction", "base64-pad-bits"]
+)
+def test_authenticated_alternative_scalar_spellings_fail_writer_byte_check(
+    tmp_path: Path, alternative: str
+) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service = _service(path, clock)
+    binding = _binding(service, _action())
+    service.open_empty(
+        binding,
+        action_credential=ACTION_KEY,
+        claim_credential=CLAIM_CREDENTIAL,
+        collection_credential=COLLECTION_CREDENTIAL,
+    )
+    repository = service._repository  # type: ignore[attr-defined]
+    repository.close()
+
+    def mutate(value: bytes) -> bytes:
+        decoded = json.loads(value)
+        record = decoded["records"][0]
+        if alternative == "datetime-z":
+            record["created_at"] = record["created_at"].replace("+00:00", "Z")
+        elif alternative == "datetime-redundant-fraction":
+            record["created_at"] = record["created_at"].replace(
+                "+00:00", ".000000+00:00"
+            )
+        else:
+            encoded = record["action_credential_digest"]
+            alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            index = alphabet.index(encoded[-2])
+            replacement = alphabet[(index & 0b111100) | ((index + 1) & 0b11)]
+            alternate = encoded[:-2] + replacement + "="
+            assert b64decode(alternate, validate=True) == b64decode(encoded, validate=True)
+            record["action_credential_digest"] = alternate
+        return json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode()
+
+    _rewrite_authenticated_frame(path, repository, mutate)
+    with pytest.raises(MailboxError) as denied:
+        _repository(path)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+@pytest.mark.parametrize("collection", ["records", "evidence", "tombstones"])
+def test_authenticated_collection_order_must_match_writer_order(
+    tmp_path: Path, collection: str
+) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    limits = MailboxLimits(terminal_retention=timedelta(microseconds=1))
+    digester = Sha256CredentialDigester()
+    repository = PersistentMailboxRepository(
+        path,
+        maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+        storage_key=_STORAGE_KEY,
+        installation_epoch=_INSTALLATION_EPOCH,
+        restore_epoch=_RESTORE_EPOCH,
+        limits=limits,
+    )
+    service = RunnerMailboxService(repository, clock, digester, FixedCredentialSource())
+    first = _binding(service, _action())
+    service.open_empty(
+        first,
+        action_credential=ACTION_KEY,
+        claim_credential=CLAIM_CREDENTIAL,
+        collection_credential=COLLECTION_CREDENTIAL,
+    )
+    if collection == "evidence":
+        service.offer(
+            first,
+            _action(),
+            action_key=ACTION_KEY,
+            collection_credential=COLLECTION_CREDENTIAL,
+        )
+        credential = service.claim(first, claim_credential=CLAIM_CREDENTIAL).result_credential
+        first_evidence = _evidence()
+        second_payload = b"second-writer-order-evidence"
+        second_evidence = EvidenceUpload(
+            object_id=UUID("f62e4185-eddf-4d73-ad80-1c0514c17129"),
+            kind="sanitized_html",
+            payload_digest="sha256:" + hashlib.sha256(second_payload).hexdigest(),
+            payload=second_payload,
+        )
+        service.stage_evidence(first, result_credential=credential, evidence=first_evidence)
+        service.stage_evidence(first, result_credential=credential, evidence=second_evidence)
+    else:
+        second = replace(
+            first, mailbox_id=UUID("c8bca1d2-f964-4c4b-86ed-6737d8eaf329")
+        )
+        service.open_empty(
+            second,
+            action_credential=b"u" * 32,
+            claim_credential=b"v" * 32,
+            collection_credential=b"w" * 32,
+        )
+        if collection == "tombstones":
+            service.abandon(first.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
+            service.abandon(second.mailbox_id, collection_credential=b"w" * 32)
+            clock.current += timedelta(seconds=1)
+            service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+    repository.close()
+
+    def reverse(value: bytes) -> bytes:
+        decoded = json.loads(value)
+        target = (
+            decoded["records"][0]["evidence"]
+            if collection == "evidence"
+            else decoded[collection]
+        )
+        assert len(target) == 2
+        target.reverse()
+        return json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode()
+
+    _rewrite_authenticated_frame(path, repository, reverse)
+    with pytest.raises(MailboxError) as denied:
+        PersistentMailboxRepository(
+            path,
+            maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+            storage_key=_STORAGE_KEY,
+            installation_epoch=_INSTALLATION_EPOCH,
+            restore_epoch=_RESTORE_EPOCH,
+            limits=limits,
+        )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+def test_acknowledged_commit_cannot_follow_terminal_time(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service, binding = _offered(path, clock, _action())
+    credential = service.claim(binding, claim_credential=CLAIM_CREDENTIAL).result_credential
+    evidence = _evidence()
+    service.stage_evidence(binding, result_credential=credential, evidence=evidence)
+    service.commit_result(binding, _result_payload(evidence), result_credential=credential)
+    service.collect(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
+    clock.current += timedelta(seconds=3)
+    service.acknowledge_collection(
+        binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL
+    )
+    repository = service._repository  # type: ignore[attr-defined]
+    repository.close()
+
+    def invert_timeline(value: bytes) -> bytes:
+        decoded = json.loads(value)
+        record = decoded["records"][0]
+        record["terminal_at"] = "2030-01-01T00:00:01+00:00"
+        record["committed_at"] = "2030-01-01T00:00:02+00:00"
+        return json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode()
+
+    _rewrite_authenticated_frame(path, repository, invert_timeline)
+    with pytest.raises(MailboxError) as denied:
+        _repository(path)
     assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
 
 

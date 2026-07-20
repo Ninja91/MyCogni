@@ -75,12 +75,13 @@ def validate_dockerfile(text: str) -> None:
     uv_image = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
     python_image = "docker.io/library/python@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c"
     expected = [
+        DockerInstruction("ARG", 'SOURCE_DATE_EPOCH="1784419200"'),
         DockerInstruction("FROM", f"{uv_image} AS uv"),
         DockerInstruction("FROM", f"{python_image} AS build"),
         DockerInstruction("COPY", "--from=uv /uv /uvx /bin/"),
         DockerInstruction(
             "ENV",
-            "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_DEV=1 "
+            "PYTHONDONTWRITEBYTECODE=1 UV_COMPILE_BYTECODE=0 UV_LINK_MODE=copy UV_NO_CACHE=1 UV_NO_DEV=1 "
             "UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/opt/mycogni-runner/.venv",
         ),
         DockerInstruction("WORKDIR", "/build"),
@@ -99,8 +100,19 @@ def validate_dockerfile(text: str) -> None:
             "RUN",
             "uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime "
             "&& PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c \"import importlib.util; "
+            "assert importlib.util.find_spec('connector_protocol') is not None; "
+            "assert importlib.util.find_spec('mycogni_runner_mailbox_runtime') is not None; "
             "assert importlib.util.find_spec('services.runner_mailbox') is not None; "
-            "assert importlib.util.find_spec('mycogni') is None\" && rm -rf /root/.cache/uv "
+            "assert importlib.util.find_spec('mycogni') is None\" "
+            "&& for dist_info in /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+            "mycogni_connector_sdk-0.0.0.dist-info /opt/mycogni-runner/.venv/lib/python3.12/"
+            "site-packages/mycogni_runner_mailbox_runtime-0.0.0.dist-info; do "
+            "test -f \"$dist_info/uv_cache.json\"; test \"$(grep -c '/uv_cache\\.json,' "
+            "\"$dist_info/RECORD\")\" -eq 1; rm \"$dist_info/uv_cache.json\"; "
+            "sed -i '/\\/uv_cache\\.json,/d' \"$dist_info/RECORD\"; "
+            "test ! -e \"$dist_info/uv_cache.json\"; ! grep -q '/uv_cache\\.json,' "
+            "\"$dist_info/RECORD\"; done "
+            "&& rm -rf /root/.cache/uv "
             "&& chown -R 0:0 /opt/mycogni-runner /build/services "
             "&& chmod -R a-w /opt/mycogni-runner /build/services",
         ),

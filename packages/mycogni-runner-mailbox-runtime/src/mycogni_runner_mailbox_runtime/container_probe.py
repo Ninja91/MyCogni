@@ -75,6 +75,8 @@ def run(state_path: Path) -> dict[str, object]:
         raise RuntimeError("runner probe observed a forbidden Docker socket")
     if importlib.util.find_spec("mycogni") is not None:
         raise RuntimeError("runner artifact contains the forbidden trusted-core package")
+    if importlib.util.find_spec("connector_protocol") is None:
+        raise RuntimeError("runner artifact is missing the connector contract module")
     distributions = sorted(
         {
             distribution.metadata["Name"].lower().replace("_", "-")

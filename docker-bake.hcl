@@ -2,6 +2,10 @@ variable "BUILD_CREATED" {
   default = "1970-01-01T00:00:00Z"
 }
 
+variable "SOURCE_DATE_EPOCH" {
+  default = "1784419200"
+}
+
 variable "VERSION" {
   default = "0.0.0"
 }
@@ -33,6 +37,7 @@ target "runner-mailbox" {
   tags       = ["mycogni/runner-mailbox:${VERSION}"]
   args = {
     BUILD_CREATED = BUILD_CREATED
+    SOURCE_DATE_EPOCH = SOURCE_DATE_EPOCH
     VERSION       = VERSION
     VCS_REF       = VCS_REF
   }

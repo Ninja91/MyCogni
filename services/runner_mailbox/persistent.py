@@ -441,6 +441,8 @@ class PersistentMailboxRepository:
         for record in repository._records.values():
             repository._validated_record_material(record)
         self._validate_repository_semantics(repository)
+        if serialized != self._encode_state(repository):
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         return generation, repository
 
     def _write_repository(self, repository: VolatileMailboxRepository, generation: int) -> None:
@@ -896,6 +898,14 @@ class PersistentMailboxRepository:
                     )
                     == (record.terminal_at is not None)
                 )
+                if (
+                    valid
+                    and record.collection_state is CollectionState.ACKNOWLEDGED
+                    and record.terminal_at is not None
+                    and record.committed_at is not None
+                    and record.committed_at > record.terminal_at
+                ):
+                    valid = False
                 if (
                     valid
                     and record.collection_state is not CollectionState.ACKNOWLEDGED
