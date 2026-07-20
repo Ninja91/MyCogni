@@ -44,8 +44,11 @@ Windows is unsupported.
 
 SQLite uses WAL, `synchronous=FULL`, foreign keys, trusted schema off, secure
 delete, memory temp storage and integrity checks. All nested authenticated
-frames and aggregate counters are validated before public use. Canonical JSON
-v1 rejects unknown or missing fields and unknown versions. There is no in-place
+frames, lifecycle/material relationships, time ordering, tombstone retention,
+credential uniqueness, per-record budgets and global counters/ceilings are
+validated before public use. Canonical JSON v1 rejects duplicate, unknown or
+missing fields, booleans as integers, nonfinite numbers, noncanonical encoding
+and unknown versions. There is no in-place
 migration: a future format requires a separately reviewed, offline, paused
 migration with backup and rollback evidence.
 
@@ -56,9 +59,14 @@ Compose proof requires an exact local `sha256` image ID, forbids pull, exposes
 no ports/environment/socket/host bind/connector/core/vault, uses UID 65532,
 read-only root, network none, private IPC and cgroup namespaces, Engine-default
 private PID namespace, drop-all capabilities, no-new-privileges, default
-seccomp, finite PID/CPU/RAM limits, no restart, one runner-only state volume and
-one noexec/nosuid/nodev tmpfs. A strict rendered-model allowlist rejects every
-undeclared top-level or service surface. The synthetic probe attempts denied
+seccomp, finite PID/CPU/RAM limits, no restart, one invocation/project-scoped
+runner-only state volume and
+one noexec/nosuid/nodev tmpfs. A strict rendered-model allowlist and exact
+stage/instruction Dockerfile model reject every undeclared surface or build
+input. Runtime export and package inventory prove the trusted-core package is
+absent and the Apache license/notice are present. Cleanup validates Compose
+ownership labels and removes only exact resources created by that invocation.
+The synthetic probe attempts denied
 DNS, host-gateway, metadata, public IPv4, public IPv6 and ULA IPv6 connections.
 
 ## Consequences

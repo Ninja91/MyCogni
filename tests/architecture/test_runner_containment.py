@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -20,6 +21,16 @@ def _validator() -> ModuleType:
     return module
 
 
+def _runtime_validator() -> ModuleType:
+    root = Path(__file__).resolve().parents[2]
+    path = root / "scripts/verify_runner_containment_runtime.py"
+    spec = importlib.util.spec_from_file_location("verify_runner_containment_runtime", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_runner_containment_model_is_least_privilege() -> None:
     _validator().validate()
 
@@ -30,6 +41,68 @@ def test_runner_dockerfile_packages_only_the_mailbox_artifact() -> None:
     validator.validate_dockerfile(source)
     with pytest.raises(AssertionError):
         validator.validate_dockerfile(source.replace("find_spec('mycogni') is None", "True"))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value + "\nCOPY src /opt/mycogni-runner/mycogni\n",
+        lambda value: value + "\nCOPY . /opt/mycogni-runner/build-context\n",
+        lambda value: value + "\nENV CORE_MODE=enabled\n",
+        lambda value: value + "\nVOLUME [\"/forbidden\"]\n",
+        lambda value: value.replace(
+            "assert importlib.util.find_spec('mycogni') is None",
+            "print('skipped trusted-core assertion')",
+        ),
+        lambda value: "# syntax=docker/dockerfile:1-labs\n" + value,
+        lambda value: "# escape=`\n" + value,
+    ],
+    ids=[
+        "core-copy",
+        "whole-context-copy",
+        "runtime-env",
+        "runtime-volume",
+        "assertion-replaced",
+        "syntax-directive",
+        "escape-directive",
+    ],
+)
+def test_runner_dockerfile_exact_model_rejects_added_semantics(
+    mutate: Callable[[str], str]
+) -> None:
+    validator = _validator()
+    source = validator.DOCKERFILE.read_text(encoding="utf-8")
+    with pytest.raises(AssertionError):
+        validator.validate_dockerfile(mutate(source))
+
+
+def test_runtime_projects_are_parallel_safe_and_unique() -> None:
+    validator = _runtime_validator()
+    projects = {validator._new_project_name() for _ in range(64)}
+    assert len(projects) == 64
+    assert all(validator.PROJECT.fullmatch(project) for project in projects)
+
+
+def test_runtime_cleanup_names_only_owned_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator = _runtime_validator()
+    calls: list[list[str]] = []
+
+    def fake_run(
+        arguments: list[str], *, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        del check
+        calls.append(arguments)
+        returncode = 1 if "inspect" in arguments else 0
+        return subprocess.CompletedProcess(arguments, returncode, "", "")
+
+    monkeypatch.setattr(validator, "_run", fake_run)
+    validator._cleanup_resources(["owned-container"], ["owned-volume"])
+    flattened = " ".join(" ".join(call) for call in calls)
+    assert "owned-container" in flattened and "owned-volume" in flattened
+    assert "sibling-core" not in flattened and "sibling-volume" not in flattened
+    assert "down" not in flattened and "remove-orphans" not in flattened
 
 
 @pytest.mark.parametrize(

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import multiprocessing
 import os
+import signal
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
+from threading import Event, Thread
 from uuid import UUID
 
 import pytest
@@ -384,6 +388,45 @@ def test_inherited_repository_is_denied_before_child_touches_parent_sqlite_conne
     repository.close()
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork regression")
+@pytest.mark.parametrize("operation", ["transition", "close"])
+def test_forked_child_refuses_before_inherited_held_rlock(
+    tmp_path: Path, operation: str
+) -> None:
+    repository = _repository(tmp_path / "runner.sqlite")
+    held = Event()
+    release = Event()
+
+    def hold_lock() -> None:
+        with repository._lock:  # type: ignore[attr-defined]
+            held.set()
+            assert release.wait(timeout=10)
+
+    holder = Thread(target=hold_lock)
+    holder.start()
+    assert held.wait(timeout=3)
+    child = os.fork()
+    if child == 0:  # pragma: no cover - child reports by exit status
+        signal.alarm(2)
+        try:
+            if operation == "close":
+                repository.close()
+            else:
+                repository.garbage_collect(
+                    Sha256CredentialDigester().digest(MAINTENANCE_CREDENTIAL),
+                    StaticClock(datetime(2030, 1, 1, tzinfo=UTC)),
+                )
+        except MailboxError as error:
+            os._exit(0 if error.denial is MailboxDenial.INTERNAL_UNCERTAINTY else 1)
+        os._exit(1)
+    _, status = os.waitpid(child, 0)
+    release.set()
+    holder.join(timeout=3)
+    assert not holder.is_alive()
+    assert os.waitstatus_to_exitcode(status) == 0
+    repository.close()
+
+
 def test_existing_hardlink_is_rejected_before_sqlite_or_chmod_mutation(tmp_path: Path) -> None:
     source = tmp_path / "operator-file"
     source.write_bytes(b"synthetic-operator-content")
@@ -410,6 +453,148 @@ def _generation(path: Path) -> int:
         return row[0]
     finally:
         connection.close()
+
+
+def _rewrite_authenticated_frame(
+    path: Path,
+    repository: PersistentMailboxRepository,
+    transform: Callable[[bytes], bytes],
+) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            "SELECT generation, nonce, ciphertext FROM runner_mailbox_state WHERE singleton = 1"
+        ).fetchone()
+        assert row is not None
+        generation, nonce, ciphertext = row
+        serialized = repository._aead.decrypt(  # type: ignore[attr-defined]
+            nonce, ciphertext, repository._aad(generation)  # type: ignore[attr-defined]
+        )
+        mutated = transform(serialized)
+        assert type(mutated) is bytes
+        replacement_nonce = os.urandom(12)
+        replacement = repository._aead.encrypt(  # type: ignore[attr-defined]
+            replacement_nonce,
+            mutated,
+            repository._aad(generation),  # type: ignore[attr-defined]
+        )
+        connection.execute(
+            "UPDATE runner_mailbox_state SET nonce = ?, ciphertext = ?, ciphertext_digest = ? "
+            "WHERE singleton = 1",
+            (replacement_nonce, replacement, hashlib.sha256(replacement).digest()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda value: value.replace(b'"version":1', b'"version":1,"version":1', 1),
+        lambda value: value.replace(b'"version":1', b'"version":true', 1),
+        lambda value: b" " + value,
+    ],
+    ids=["duplicate-key", "boolean-version", "noncanonical-whitespace"],
+)
+def test_authenticated_noncanonical_frames_fail_closed(
+    tmp_path: Path, transform: Callable[[bytes], bytes]
+) -> None:
+    path = tmp_path / "runner.sqlite"
+    repository = _repository(path)
+    repository.close()
+    _rewrite_authenticated_frame(path, repository, transform)
+    with pytest.raises(MailboxError) as denied:
+        _repository(path)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+@pytest.mark.parametrize("corruption", ["lifecycle", "tombstone-time"])
+def test_authenticated_semantically_impossible_frames_fail_closed(
+    tmp_path: Path, corruption: str
+) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    limits = MailboxLimits(
+        terminal_retention=timedelta(microseconds=1),
+        tombstone_retention=timedelta(days=1),
+    )
+    digester = Sha256CredentialDigester()
+    repository = PersistentMailboxRepository(
+        path,
+        maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+        storage_key=_STORAGE_KEY,
+        installation_epoch=_INSTALLATION_EPOCH,
+        restore_epoch=_RESTORE_EPOCH,
+        limits=limits,
+    )
+    service = RunnerMailboxService(repository, clock, digester, FixedCredentialSource())
+    binding = _binding(service, _action())
+    service.open_empty(
+        binding,
+        action_credential=ACTION_KEY,
+        claim_credential=CLAIM_CREDENTIAL,
+        collection_credential=COLLECTION_CREDENTIAL,
+    )
+    if corruption == "lifecycle":
+        service.offer(
+            binding,
+            _action(),
+            action_key=ACTION_KEY,
+            collection_credential=COLLECTION_CREDENTIAL,
+        )
+    else:
+        service.abandon(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
+        clock.current += timedelta(seconds=1)
+        service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+    repository.close()
+
+    def corrupt(value: bytes) -> bytes:
+        decoded = json.loads(value)
+        if corruption == "lifecycle":
+            decoded["records"][0]["state"] = "empty"
+        else:
+            decoded["installation_last_seen_utc"] = None
+            decoded["tombstones"][0]["expires_at"] = "2029-01-01T00:00:00+00:00"
+        return json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode()
+
+    _rewrite_authenticated_frame(path, repository, corrupt)
+    with pytest.raises(MailboxError) as denied:
+        PersistentMailboxRepository(
+            path,
+            maintenance_credential_digest=digester.digest(MAINTENANCE_CREDENTIAL),
+            storage_key=_STORAGE_KEY,
+            installation_epoch=_INSTALLATION_EPOCH,
+            restore_epoch=_RESTORE_EPOCH,
+            limits=limits,
+        )
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+
+
+def test_extreme_clock_tombstone_overflow_rolls_back_and_poison_closes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service = _service(path, clock)
+    binding = _binding(service, _action())
+    service.open_empty(
+        binding,
+        action_credential=ACTION_KEY,
+        claim_credential=CLAIM_CREDENTIAL,
+        collection_credential=COLLECTION_CREDENTIAL,
+    )
+    service.abandon(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
+    before = _generation(path)
+    clock.current = datetime.max.replace(tzinfo=UTC)
+    with pytest.raises(MailboxError) as denied:
+        service.garbage_collect(maintenance_credential=MAINTENANCE_CREDENTIAL)
+    assert denied.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+    repository = service._repository  # type: ignore[attr-defined]
+    assert repository.recovery_required is True
+    assert _generation(path) == before
+    repository.close()
+    repository.close()
 
 
 def test_unchanged_unauthorized_denial_does_not_rewrite_frame(tmp_path: Path) -> None:

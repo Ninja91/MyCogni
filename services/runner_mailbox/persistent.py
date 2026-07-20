@@ -29,7 +29,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal, Protocol, TypeVar, overload
+from typing import Any, Literal, NoReturn, Protocol, TypeVar, overload
 from uuid import UUID
 
 from cryptography.exceptions import InvalidTag
@@ -38,6 +38,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from services.runner_mailbox.domain import (
+    MAX_EVIDENCE_ITEMS,
     ActionBinding,
     ClaimedAction,
     CollectionState,
@@ -173,6 +174,8 @@ class PersistentMailboxRepository:
     def close(self) -> None:
         """Idempotently close; poisoned instances skip all mutating/checkpoint work."""
 
+        if os.getpid() != self._owner_pid:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         with self._lock:
             if os.getpid() != self._owner_pid:
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
@@ -322,6 +325,8 @@ class PersistentMailboxRepository:
         normal protocol result: callers receive the finite unknown-outcome code.
         """
 
+        if os.getpid() != self._owner_pid:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         with self._lock:
             self._require_live_owner()
             write_attempted = False
@@ -435,13 +440,13 @@ class PersistentMailboxRepository:
         # observe, expire, erase, or mutate it.
         for record in repository._records.values():
             repository._validated_record_material(record)
-        self._validate_totals(repository)
+        self._validate_repository_semantics(repository)
         return generation, repository
 
     def _write_repository(self, repository: VolatileMailboxRepository, generation: int) -> None:
         if generation < 0 or generation >= _MAX_FRAME_GENERATION:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
-        self._validate_totals(repository)
+        self._validate_repository_semantics(repository)
         serialized = self._encode_state(repository)
         if len(serialized) > self._max_serialized_bytes():
             raise MailboxError(MailboxDenial.OVERSIZE)
@@ -544,7 +549,13 @@ class PersistentMailboxRepository:
     ) -> tuple[dict[UUID, _Record], dict[UUID, _Tombstone], datetime | None, int, int, int]:
         if not encoded or len(encoded) > self._max_serialized_bytes():
             raise ValueError("invalid bounded state frame")
-        decoded = json.loads(encoded)
+        decoded = json.loads(
+            encoded,
+            object_pairs_hook=self._unique_json_object,
+            parse_constant=self._reject_json_constant,
+        )
+        if json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode("utf-8") != encoded:
+            raise ValueError("non-canonical state frame")
         self._exact_mapping(
             decoded,
             {
@@ -557,7 +568,7 @@ class PersistentMailboxRepository:
                 "total_committed_bytes",
             },
         )
-        if decoded["version"] != _FRAME_VERSION:
+        if type(decoded["version"]) is not int or decoded["version"] != _FRAME_VERSION:
             raise ValueError("unsupported state frame")
         if not isinstance(decoded["records"], list) or not isinstance(decoded["tombstones"], list):
             raise ValueError("invalid state collections")
@@ -774,20 +785,151 @@ class PersistentMailboxRepository:
             raise ValueError("unexpected state fields")
 
     @staticmethod
-    def _validate_totals(repository: VolatileMailboxRepository) -> None:
+    def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate state field")
+            value[key] = item
+        return value
+
+    @staticmethod
+    def _reject_json_constant(value: str) -> NoReturn:
+        del value
+        raise ValueError("non-finite state number")
+
+    def _validate_repository_semantics(self, repository: VolatileMailboxRepository) -> None:
+        """Reject authenticated but impossible lifecycle, time and quota state."""
+
         active = evidence = committed = 0
+        observed_credentials: set[bytes] = {self._maintenance_credential_digest}
+        installation_high_water = repository._installation_last_seen_utc
+        if (repository._records or repository._tombstones) and installation_high_water is None:
+            raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         for record in repository._records.values():
-            active += sum(len(value) for value in (record.envelope_json, record.action_key, record.result_credential) if value is not None)
+            if record.created_at > record.last_seen_utc or (
+                installation_high_water is not None
+                and record.last_seen_utc > installation_high_water
+            ):
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            if record.created_at >= record.binding.claim_deadline_utc:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            for instant in (record.committed_at, record.terminal_at):
+                if instant is not None and not record.created_at <= instant <= record.last_seen_utc:
+                    raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+
+            credentials = (
+                record.action_credential_digest,
+                record.claim_credential_digest,
+                record.collection_credential_digest,
+            ) + ((record.result_credential_digest,) if record.result_credential_digest else ())
+            if len(set(credentials)) != len(credentials) or any(
+                credential in observed_credentials for credential in credentials
+            ):
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            observed_credentials.update(credentials)
+
+            active_material = (
+                record.envelope_json,
+                record.action_key,
+                record.result_credential,
+            )
+            active += sum(len(value) for value in active_material if value is not None)
             evidence_bytes = sum(item.byte_count for item in record.evidence.values())
             evidence += evidence_bytes
             if record.committed_at is not None:
                 committed += (record.result_envelope.byte_count if record.result_envelope else 0) + evidence_bytes
+            if len(record.evidence) > MAX_EVIDENCE_ITEMS or evidence_bytes > record.binding.response_bytes:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+
+            no_active = all(value is None for value in active_material)
+            no_committed = (
+                record.result_envelope is None
+                and record.committed_evidence_manifest is None
+                and record.committed_at is None
+            )
+            if record.state is MailboxState.EMPTY:
+                valid = (
+                    record.collection_state is CollectionState.NONE
+                    and no_active
+                    and record.result_credential_digest is None
+                    and not record.evidence
+                    and no_committed
+                    and record.terminal_at is None
+                )
+            elif record.state is MailboxState.OFFERED:
+                valid = (
+                    record.collection_state is CollectionState.NONE
+                    and all(value is not None for value in active_material)
+                    and record.result_credential_digest is not None
+                    and not record.evidence
+                    and no_committed
+                    and record.terminal_at is None
+                )
+            elif record.state is MailboxState.CLAIMED_ONCE:
+                valid = (
+                    record.collection_state is CollectionState.NONE
+                    and no_active
+                    and record.result_credential_digest is not None
+                    and no_committed
+                    and record.terminal_at is None
+                )
+            elif record.state in {MailboxState.EXPIRED, MailboxState.ABANDONED}:
+                valid = (
+                    record.collection_state is CollectionState.NONE
+                    and no_active
+                    and record.result_credential_digest is None
+                    and not record.evidence
+                    and no_committed
+                    and record.terminal_at is not None
+                )
+            else:
+                valid = (
+                    record.state is MailboxState.RESULT_COMMITTED
+                    and record.collection_state
+                    in {CollectionState.READY, CollectionState.DELIVERING, CollectionState.ACKNOWLEDGED}
+                    and no_active
+                    and record.result_credential_digest is None
+                    and record.committed_at is not None
+                    and (
+                        record.collection_state is CollectionState.ACKNOWLEDGED
+                    )
+                    == (record.terminal_at is not None)
+                )
+                if (
+                    valid
+                    and record.collection_state is not CollectionState.ACKNOWLEDGED
+                    and record.result_envelope is not None
+                    and record.result_envelope.byte_count + evidence_bytes
+                    > record.binding.response_bytes
+                ):
+                    valid = False
+            if not valid:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+
+        for tombstone in repository._tombstones.values():
+            if (
+                tombstone.created_at >= tombstone.expires_at
+                or tombstone.expires_at - tombstone.created_at
+                != self._limits.tombstone_retention
+                or installation_high_water is None
+                or tombstone.created_at > installation_high_water
+            ):
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         actual = (
             repository._total_active_material_bytes,
             repository._total_evidence_bytes,
             repository._total_committed_bytes,
         )
-        if actual != (active, evidence, committed) or active < 0 or evidence < 0 or committed < 0:
+        if (
+            actual != (active, evidence, committed)
+            or active < 0
+            or evidence < 0
+            or committed < 0
+            or active > self._limits.max_total_active_material_bytes
+            or evidence > self._limits.max_total_evidence_bytes
+            or committed > self._limits.max_total_committed_bytes
+        ):
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
 
     def _configure_connection(self) -> None:

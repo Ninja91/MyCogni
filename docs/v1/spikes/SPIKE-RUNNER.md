@@ -91,8 +91,9 @@ caller blocked behind another transaction cannot carry a stale service-layer tim
 sample across the lock. Rollback against the per-record high-water fails before
 mutation. Authenticated GC advances both the installation high-water and every
 surviving record's high-water in the same locked transaction; a later claim or new
-mailbox cannot roll back behind a completed sweep. Durable time high-water and
-restore-epoch handling remain persistent adapter requirements.
+mailbox cannot roll back behind a completed sweep. The persistent successor
+stores and authenticates that time high-water and binds its restore epoch;
+external monotonic rollback detection and restore/rebind ceremony remain open.
 
 Four per-action secrets are pairwise distinct and at least 256 bits:
 
@@ -211,7 +212,7 @@ overflow without shortening replay retention.
   synthetic-only until the separate connector/gateway packages are accepted.
 - AES-GCM here proves the adapter contract only. Production requires durable
   envelope-key management, rotation, restore-epoch invalidation, backup policy,
-  and restart/crash recovery.
+  backup/restore rebind, external rollback detection and host power-loss qualification.
 - An explicit storage key is accepted only when it is exact immutable 32-byte
   material. Only explicit `None` generates an ephemeral key; falsey or malformed
   values fail instead of silently replacing operator input.
@@ -219,13 +220,16 @@ overflow without shortening replay retention.
   guaranteed zeroized.
 - SHA-256 credential digests assume uniformly random credentials; they are not a
   password KDF.
-- No signature, SBOM, provenance, manifest freshness, revocation, authorization,
-  image lookup, or runtime digest is verified here.
+- No signature, SBOM, provenance, published-manifest freshness, revocation,
+  authorization or registry lookup is verified here; the local smoke does bind
+  and inspect one exact local image ID.
 - A separate synthetic mailbox-artifact Compose smoke has local Docker evidence for read-only root,
   default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
   namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
-  It contains no trusted-core package, but is not an untrusted connector artifact, direct-egress test, action-scoped
-  credential topology, wall-time watchdog or cleanup proof.
+  Runtime distribution/export inventory proves it contains no trusted-core package
+  and exact invocation-owned smoke cleanup is verified. It is not an untrusted
+  connector artifact, direct-egress test, action-scoped credential topology,
+  wall-time watchdog or malicious-connector cleanup proof.
 - NET-001 remains a source/runtime safety belt, not kernel containment.
 - A valid connector result remains an untrusted attempt fact, never proof of
   transport, acknowledgement, compliance, absence, or removal.

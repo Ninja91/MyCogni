@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Create, run, inspect and clean one exact runner-mailbox OCI artifact."""
+"""Create, inspect, run and exactly clean one runner-mailbox OCI artifact."""
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import re
 import subprocess
-from pathlib import Path
+import tarfile
+from pathlib import Path, PurePosixPath
 from typing import Any
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "deploy/compose.runner-mailbox-smoke.yml"
-PROJECT = "deploy"
 SERVICE = "mycogni-runner-mailbox-smoke"
-VOLUME = "mycogni-runner-mailbox-state-smoke"
+VOLUME_KEY = "runner-mailbox-state"
 STATE_TARGET = "/var/lib/mycogni-runner"
 ENTRYPOINT = [
     "/opt/mycogni-runner/.venv/bin/python",
@@ -22,27 +25,45 @@ ENTRYPOINT = [
     "mycogni_runner_mailbox_runtime.container_probe",
 ]
 COMMAND = ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
+EXPECTED_DISTRIBUTIONS = [
+    "annotated-types",
+    "cffi",
+    "cryptography",
+    "mycogni-connector-sdk",
+    "mycogni-runner-mailbox-runtime",
+    "pycparser",
+    "pydantic",
+    "pydantic-core",
+    "typing-extensions",
+    "typing-inspection",
+]
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+PROJECT = re.compile(r"^mycogni-runner-[0-9a-f]{32}$")
 
 
 def _run(arguments: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, check=check, capture_output=True, text=True)
 
 
-def _compose(image: str, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return _run(
+def _compose(
+    image: str, project: str, *arguments: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    environment["MYCOGNI_RUNNER_IMAGE"] = image
+    return subprocess.run(
         [
-            "env",
-            f"MYCOGNI_RUNNER_IMAGE={image}",
             "docker",
             "compose",
             "--project-name",
-            PROJECT,
+            project,
             "--file",
             str(COMPOSE),
             *arguments,
         ],
         check=check,
+        capture_output=True,
+        text=True,
+        env=environment,
     )
 
 
@@ -52,17 +73,76 @@ def _one_json(arguments: list[str]) -> dict[str, Any]:
     return value[0]
 
 
-def _assert_clean_start(image: str) -> None:
-    assert not _compose(image, "ps", "--all", "--quiet").stdout.strip(), (
-        "runner smoke container already exists; run the documented cleanup command"
-    )
-    assert _run(["docker", "volume", "inspect", VOLUME], check=False).returncode != 0, (
-        "runner smoke volume already exists; preserve or remove it explicitly before testing"
-    )
+def _new_project_name() -> str:
+    return f"mycogni-runner-{uuid4().hex}"
+
+
+def _owned_resources(project: str) -> tuple[list[str], list[str]]:
+    containers = _run(
+        [
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={SERVICE}",
+        ]
+    ).stdout.splitlines()
+    volumes = _run(
+        [
+            "docker",
+            "volume",
+            "ls",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.volume={VOLUME_KEY}",
+        ]
+    ).stdout.splitlines()
+    return containers, volumes
+
+
+def _validate_container_ownership(project: str, container_id: str) -> dict[str, Any]:
+    container = _one_json(["docker", "container", "inspect", container_id])
+    labels = container["Config"]["Labels"]
+    assert labels["com.docker.compose.project"] == project
+    assert labels["com.docker.compose.service"] == SERVICE
+    return container
+
+
+def _validate_volume_ownership(project: str, volume_name: str) -> dict[str, Any]:
+    volume = _one_json(["docker", "volume", "inspect", volume_name])
+    assert volume["Labels"]["com.docker.compose.project"] == project
+    assert volume["Labels"]["com.docker.compose.volume"] == VOLUME_KEY
+    return volume
+
+
+def _cleanup_resources(container_ids: list[str], volume_names: list[str]) -> None:
+    """Remove only caller-supplied exact resources; never operate on a project."""
+
+    for container_id in container_ids:
+        _run(["docker", "container", "rm", "--force", container_id], check=False)
+    for volume_name in volume_names:
+        _run(["docker", "volume", "rm", volume_name], check=False)
+    for container_id in container_ids:
+        assert _run(
+            ["docker", "container", "inspect", container_id], check=False
+        ).returncode != 0
+    for volume_name in volume_names:
+        assert _run(["docker", "volume", "inspect", volume_name], check=False).returncode != 0
 
 
 def _validate_inspect(
-    container: dict[str, Any], image_inspect: dict[str, Any], image: str, revision: str
+    container: dict[str, Any],
+    image_inspect: dict[str, Any],
+    image: str,
+    revision: str,
+    project: str,
+    volume_name: str,
 ) -> None:
     assert container["Image"] == image
     config = container["Config"]
@@ -73,6 +153,8 @@ def _validate_inspect(
     assert config["Cmd"] == COMMAND
     assert config["Env"] == image_inspect["Config"]["Env"], "Compose injected runtime environment"
     assert config["Labels"]["org.opencontainers.image.revision"] == revision
+    assert config["Labels"]["com.docker.compose.project"] == project
+    assert config["Labels"]["com.docker.compose.service"] == SERVICE
     assert host["NetworkMode"] == "none"
     assert host["ReadonlyRootfs"] is True
     assert host["Privileged"] is False
@@ -92,9 +174,32 @@ def _validate_inspect(
     assert len(mounts) == 1
     mount = mounts[0]
     assert mount["Type"] == "volume"
-    assert mount["Name"] == VOLUME
+    assert mount["Name"] == volume_name
     assert mount["Destination"] == STATE_TARGET
     assert mount["RW"] is True
+
+
+def _validate_filesystem(container_id: str) -> None:
+    exported = subprocess.run(
+        ["docker", "export", container_id], check=True, capture_output=True
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
+        names = {item.name.lstrip("./") for item in archive.getmembers()}
+        for legal_file in ("LICENSE", "NOTICE"):
+            name = f"opt/mycogni-runner/{legal_file}"
+            assert name in names
+            extracted = archive.extractfile(name)
+            assert extracted is not None
+            assert extracted.read() == (ROOT / legal_file).read_bytes()
+        service_root = "opt/mycogni-runner/services/"
+        runner_root = f"{service_root}runner_mailbox/"
+        assert any(name.startswith(runner_root) for name in names)
+        assert all(
+            name.startswith(runner_root)
+            for name in names
+            if name.startswith(service_root) and name.endswith(".py")
+        )
+        assert not any("mycogni" in PurePosixPath(name).parts for name in names)
 
 
 def _validate_sentinel(output: str) -> dict[str, Any]:
@@ -102,6 +207,7 @@ def _validate_sentinel(output: str) -> dict[str, Any]:
     assert len(lines) == 1
     sentinel = json.loads(lines[0])
     assert sentinel == {
+        "installed_distributions": EXPECTED_DISTRIBUTIONS,
         "mailbox_state_created": True,
         "network_denials": {
             "dns": True,
@@ -119,38 +225,56 @@ def _validate_sentinel(output: str) -> dict[str, Any]:
     return sentinel
 
 
-def verify(image: str, revision: str) -> dict[str, Any]:
+def verify(image: str, revision: str, *, project: str | None = None) -> dict[str, Any]:
     assert SHA256.fullmatch(image), "image must be an exact local sha256 image ID"
     assert re.fullmatch(r"[0-9a-f]{40}", revision), "revision must be an exact Git commit"
-    _assert_clean_start(image)
-    created = False
-    container_id = ""
+    project_name = project or _new_project_name()
+    assert PROJECT.fullmatch(project_name), "project must be an invocation-scoped random name"
+    assert _owned_resources(project_name) == ([], []), "unique project unexpectedly exists"
+    container_ids: list[str] = []
+    volume_names: list[str] = []
     try:
-        _compose(image, "create", "--force-recreate")
-        created = True
-        ids = _compose(image, "ps", "--all", "--quiet").stdout.splitlines()
-        assert len(ids) == 1
-        container_id = ids[0]
+        _compose(image, project_name, "create")
+        container_ids, volume_names = _owned_resources(project_name)
+        assert len(container_ids) == 1 and len(volume_names) == 1
+        container_id = container_ids[0]
+        volume_name = volume_names[0]
+        _validate_container_ownership(project_name, container_id)
+        volume = _validate_volume_ownership(project_name, volume_name)
         image_inspect = _one_json(["docker", "image", "inspect", image])
         before = _one_json(["docker", "container", "inspect", container_id])
-        _validate_inspect(before, image_inspect, image, revision)
+        _validate_inspect(
+            before, image_inspect, image, revision, project_name, volume_name
+        )
+        _validate_filesystem(container_id)
         started = _run(["docker", "start", "--attach", container_id])
         sentinel = _validate_sentinel(started.stdout)
         after = _one_json(["docker", "container", "inspect", container_id])
         assert after["State"]["Status"] == "exited"
         assert after["State"]["ExitCode"] == 0
-        _validate_inspect(after, image_inspect, image, revision)
+        _validate_inspect(
+            after, image_inspect, image, revision, project_name, volume_name
+        )
         return {
             "container_id": container_id,
             "image": image,
+            "project": project_name,
             "revision": revision,
             "sentinel": sentinel,
+            "volume": {
+                "labels": volume["Labels"],
+                "mountpoint": volume["Mountpoint"],
+                "name": volume_name,
+            },
         }
     finally:
-        if created:
-            _compose(image, "down", "--volumes", "--remove-orphans", check=False)
-            assert _run(["docker", "container", "inspect", container_id], check=False).returncode != 0
-            assert _run(["docker", "volume", "inspect", VOLUME], check=False).returncode != 0
+        discovered_containers, discovered_volumes = _owned_resources(project_name)
+        for container_id in discovered_containers:
+            _validate_container_ownership(project_name, container_id)
+        for volume_name in discovered_volumes:
+            _validate_volume_ownership(project_name, volume_name)
+        _cleanup_resources(discovered_containers, discovered_volumes)
+        assert _owned_resources(project_name) == ([], [])
 
 
 def main() -> None:

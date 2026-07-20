@@ -16,22 +16,28 @@ signed publication, or live-broker capability.
 ## Executable state evidence
 
 The adapter persists one bounded canonical JSON v1 frame under AES-GCM in a
-SQLite `BEGIN IMMEDIATE` transaction. Tests cover restart across every retained
-state, independent-process one-claim serialization, process loss immediately
-before and after commit, ciphertext canaries, epoch substitution, fork refusal,
+SQLite `BEGIN IMMEDIATE` transaction. Tests cover restart of offered,
+claimed-once, result-ready and acknowledged states; independent-process one-claim
+serialization; process loss immediately before and after commit; ciphertext
+canaries; epoch substitution; pre-lock fork refusal even with an inherited held lock;
 pre-open hardlink rejection without mutation, unchanged-denial no-write,
 finite non-poisoning contention, post-commit poison/idempotent close, maximum
-frame rejection and finite generation/key-rotation exhaustion.
+frame/generation rejection; duplicate/noncanonical JSON; impossible authenticated
+lifecycle/time/tombstone/quota state; and extreme-clock rollback/poison handling.
 
 Both locked Python 3.12.12 and 3.13.11 lanes reported:
 
 ```text
 ruff: all checks passed
 mypy: success, 8 source files
-runner + containment + connector SDK + safety guard: 884 passed
-  persistent adapter: 15 passed
-  rendered/Dockerfile containment mutations: 26 passed
+runner + containment + connector SDK + safety guard: 901 passed
+  persistent adapter: 23 passed
+  rendered/Dockerfile/runtime containment mutations: 35 passed
 ```
+
+The two intentional held-lock `fork()` regressions emit Python's expected
+multithreaded-fork deprecation warning; both child processes refuse finitely
+before the inherited lock and pass.
 
 The canonical governance report was regenerated. Governance, architecture
 claim and site guards passed; the focused governance/claim/site/safety suite
@@ -66,16 +72,20 @@ artifact digest or multi-architecture connector acceptance.
 ```text
 uv run --all-packages --frozen --python 3.12.12 ruff check .
 uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
-uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py
+uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 uv run --all-packages --frozen --python 3.13.11 ruff check .
 uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
-uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 python -m scripts.ci.governance_guard
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/claim_guard.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/site_guard.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/ci/test_governance_traceability.py tests/ci/test_claim_guard.py tests/ci/test_site_guard.py tests/ci/test_safety_guard.py
 
 docker buildx build --platform linux/arm64 --load \
   --tag mycogni/runner-mailbox:local \
   --build-arg VCS_REF=<exact-implementation-commit> \
-  --build-arg BUILD_CREATED=<UTC-RFC3339> \
+  --build-arg BUILD_CREATED=2026-07-19T00:00:00Z \
   --file docker/Dockerfile.runner-mailbox .
 docker image inspect mycogni/runner-mailbox:local --format '{{.Id}}'
 python3 scripts/verify_runner_containment_runtime.py \
@@ -83,11 +93,14 @@ python3 scripts/verify_runner_containment_runtime.py \
   --revision <exact-implementation-commit>
 ```
 
-The runtime verifier refuses tags and dirty pre-existing smoke state. It checks
+The runtime verifier refuses tags and generates a random project name per invocation. It checks
 the image revision label, entrypoint, absence of Compose environment injection,
 UID, read-only root, network/IPC/PID/cgroup isolation, capabilities, security
-options, resource/restart policy, exact mounts, probe sentinel and exit status.
-It then removes the container and named volume and proves both are absent.
+options, resource/restart policy, exact mounts, installed-distribution inventory,
+exported filesystem, Apache license/notice, probe sentinel and exit status. It
+validates exact Compose ownership labels, removes only that invocation's exact
+container ID and volume name, and proves both are absent without project-wide
+`down` or orphan cleanup.
 
 ## Nonclaims
 

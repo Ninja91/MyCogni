@@ -31,5 +31,4 @@ services:
     command: ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
 volumes:
   runner-mailbox-state:
-    name: mycogni-runner-mailbox-state-smoke
     driver: local

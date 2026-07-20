@@ -9,10 +9,12 @@ endpoint and accepts no action or credential input.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import signal
 import socket
+from importlib import metadata
 from pathlib import Path
 from typing import NoReturn
 
@@ -22,6 +24,18 @@ _SYNTHETIC_MAINTENANCE = b"m" * 32
 _SYNTHETIC_STORAGE = b"s" * 32
 _SYNTHETIC_INSTALLATION_EPOCH = b"i" * 32
 _SYNTHETIC_RESTORE_EPOCH = b"e" * 32
+_EXPECTED_DISTRIBUTIONS = [
+    "annotated-types",
+    "cffi",
+    "cryptography",
+    "mycogni-connector-sdk",
+    "mycogni-runner-mailbox-runtime",
+    "pycparser",
+    "pydantic",
+    "pydantic-core",
+    "typing-extensions",
+    "typing-inspection",
+]
 
 
 def _alarm(_signum: int, _frame: object) -> NoReturn:
@@ -59,6 +73,20 @@ def run(state_path: Path) -> dict[str, object]:
         raise RuntimeError("runner probe requires an active seccomp filter")
     if Path("/var/run/docker.sock").exists():
         raise RuntimeError("runner probe observed a forbidden Docker socket")
+    if importlib.util.find_spec("mycogni") is not None:
+        raise RuntimeError("runner artifact contains the forbidden trusted-core package")
+    distributions = sorted(
+        {
+            distribution.metadata["Name"].lower().replace("_", "-")
+            for distribution in metadata.distributions()
+        }
+    )
+    if distributions != _EXPECTED_DISTRIBUTIONS:
+        raise RuntimeError("runner artifact distribution inventory is unexpected")
+    for legal_file in ("LICENSE", "NOTICE"):
+        path = Path("/opt/mycogni-runner") / legal_file
+        if not path.is_file() or os.access(path, os.W_OK):
+            raise RuntimeError("runner artifact legal file is absent or writable")
     if os.access("/opt/mycogni-runner", os.W_OK):
         raise RuntimeError("runner application layer is writable")
     if not os.access(state_path.parent, os.W_OK):
@@ -86,6 +114,7 @@ def run(state_path: Path) -> dict[str, object]:
     repository.close()
     return {
         "mailbox_state_created": state_path.is_file(),
+        "installed_distributions": distributions,
         "network_denials": probes,
         "probe": "mycogni.runner_mailbox.container.v1",
         "recovery_required": repository.recovery_required,

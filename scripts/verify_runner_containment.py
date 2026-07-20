@@ -17,6 +17,7 @@ SERVICE_NAME = "mycogni-runner-mailbox-smoke"
 STATE_TARGET = "/var/lib/mycogni-runner"
 TMPFS = "/tmp/mycogni-runner:rw,noexec,nosuid,nodev,size=32m,uid=65532,gid=65532,mode=0700"
 FIXTURE_IMAGE = "sha256:" + "a" * 64
+MODEL_PROJECT = "mycogni-runner-model"
 TOP_LEVEL_KEYS = {"name", "services", "volumes"}
 SERVICE_KEYS = {
     "cap_drop",
@@ -50,6 +51,8 @@ def _parse_dockerfile(text: str) -> list[DockerInstruction]:
     pending = ""
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
+        if re.match(r"^#\s*(syntax|escape)\s*=", stripped, re.IGNORECASE):
+            raise AssertionError("Dockerfile parser directives are not permitted")
         if not pending and (not stripped or stripped.startswith("#")):
             continue
         continued = stripped.endswith("\\")
@@ -69,46 +72,84 @@ def _parse_dockerfile(text: str) -> list[DockerInstruction]:
 
 def validate_dockerfile(text: str) -> None:
     instructions = _parse_dockerfile(text)
-    from_sources = [item.value.split()[0] for item in instructions if item.name == "FROM"]
-    assert len(from_sources) == 3
-    assert all(re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", item) for item in from_sources)
-    assert not any(item.name == "ADD" for item in instructions)
-    assert not any("docker.sock" in item.value.lower() for item in instructions)
-
-    copies = [item.value for item in instructions if item.name == "COPY"]
-    assert "packages/mycogni-connector-sdk ./packages/mycogni-connector-sdk" in copies
-    assert (
-        "packages/mycogni-runner-mailbox-runtime ./packages/mycogni-runner-mailbox-runtime"
-        in copies
-    )
-    assert "services/runner_mailbox ./services/runner_mailbox" in copies
-    assert "src ./src" not in copies
-    assert not any("packages ./packages" in item for item in copies)
-    assert any(
-        item.name == "RUN"
-        and "uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime"
-        in item.value
-        and "find_spec('services.runner_mailbox') is not None" in item.value
-        and "find_spec('mycogni') is None" in item.value
-        for item in instructions
-    )
-
-    last_from = max(index for index, item in enumerate(instructions) if item.name == "FROM")
-    runtime = instructions[last_from + 1 :]
-    assert [item.value for item in runtime if item.name == "USER"] == ["65532:65532"]
-    assert [item.value for item in runtime if item.name == "ENTRYPOINT"] == [
-        '["/opt/mycogni-runner/.venv/bin/python", "-m", '
-        '"mycogni_runner_mailbox_runtime.container_probe"]'
+    uv_image = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
+    python_image = "docker.io/library/python@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c"
+    expected = [
+        DockerInstruction("FROM", f"{uv_image} AS uv"),
+        DockerInstruction("FROM", f"{python_image} AS build"),
+        DockerInstruction("COPY", "--from=uv /uv /uvx /bin/"),
+        DockerInstruction(
+            "ENV",
+            "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_DEV=1 "
+            "UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/opt/mycogni-runner/.venv",
+        ),
+        DockerInstruction("WORKDIR", "/build"),
+        DockerInstruction(
+            "COPY", "pyproject.toml uv.lock build-constraints.txt README.md LICENSE NOTICE ./"
+        ),
+        DockerInstruction(
+            "COPY", "packages/mycogni-connector-sdk ./packages/mycogni-connector-sdk"
+        ),
+        DockerInstruction(
+            "COPY",
+            "packages/mycogni-runner-mailbox-runtime ./packages/mycogni-runner-mailbox-runtime",
+        ),
+        DockerInstruction("COPY", "services/runner_mailbox ./services/runner_mailbox"),
+        DockerInstruction(
+            "RUN",
+            "uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime "
+            "&& PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c \"import importlib.util; "
+            "assert importlib.util.find_spec('services.runner_mailbox') is not None; "
+            "assert importlib.util.find_spec('mycogni') is None\" && rm -rf /root/.cache/uv "
+            "&& chown -R 0:0 /opt/mycogni-runner /build/services "
+            "&& chmod -R a-w /opt/mycogni-runner /build/services",
+        ),
+        DockerInstruction("FROM", f"{python_image} AS runner-mailbox"),
+        DockerInstruction("ARG", 'BUILD_CREATED="1970-01-01T00:00:00Z"'),
+        DockerInstruction("ARG", 'VERSION="0.0.0"'),
+        DockerInstruction("ARG", 'VCS_REF="unknown"'),
+        DockerInstruction(
+            "LABEL",
+            'org.opencontainers.image.created="${BUILD_CREATED}" '
+            'org.opencontainers.image.description="MyCogni synthetic runner mailbox sidecar probe" '
+            'org.opencontainers.image.licenses="Apache-2.0" '
+            'org.opencontainers.image.revision="${VCS_REF}" '
+            'org.opencontainers.image.source="https://github.com/Ninja91/MyCogni" '
+            'org.opencontainers.image.title="MyCogni runner mailbox" '
+            'org.opencontainers.image.version="${VERSION}"',
+        ),
+        DockerInstruction(
+            "ENV",
+            "HOME=/tmp/mycogni-runner "
+            "PATH=/opt/mycogni-runner/.venv/bin:/usr/local/bin:/usr/bin:/bin "
+            "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/mycogni-runner "
+            "PYTHONUNBUFFERED=1 TMPDIR=/tmp/mycogni-runner",
+        ),
+        DockerInstruction(
+            "RUN",
+            "install -d -o 0 -g 0 -m 0555 /opt/mycogni-runner "
+            "&& install -d -o 65532 -g 65532 -m 0700 "
+            "/var/lib/mycogni-runner /tmp/mycogni-runner",
+        ),
+        DockerInstruction(
+            "COPY", "--chown=0:0 --chmod=0444 LICENSE NOTICE /opt/mycogni-runner/"
+        ),
+        DockerInstruction(
+            "COPY", "--from=build /opt/mycogni-runner/.venv /opt/mycogni-runner/.venv"
+        ),
+        DockerInstruction(
+            "COPY", "--from=build /build/services /opt/mycogni-runner/services"
+        ),
+        DockerInstruction("WORKDIR", "/var/lib/mycogni-runner"),
+        DockerInstruction("USER", "65532:65532"),
+        DockerInstruction(
+            "ENTRYPOINT",
+            '["/opt/mycogni-runner/.venv/bin/python", "-m", '
+            '"mycogni_runner_mailbox_runtime.container_probe"]',
+        ),
+        DockerInstruction("CMD", '["--state", "/var/lib/mycogni-runner/probe.sqlite"]'),
     ]
-    assert [item.value for item in runtime if item.name == "CMD"] == [
-        '["--state", "/var/lib/mycogni-runner/probe.sqlite"]'
-    ]
-    assert any(
-        item.name == "RUN"
-        and "install -d -o 0 -g 0 -m 0555 /opt/mycogni-runner" in item.value
-        and "install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni-runner" in item.value
-        for item in runtime
-    )
+    assert instructions == expected, "runner Dockerfile must match the exact stage/input model"
 
 
 def render_compose(path: Path = COMPOSE, *, image: str = FIXTURE_IMAGE) -> dict[str, Any]:
@@ -119,7 +160,7 @@ def render_compose(path: Path = COMPOSE, *, image: str = FIXTURE_IMAGE) -> dict[
             "docker",
             "compose",
             "--project-name",
-            "deploy",
+            MODEL_PROJECT,
             "--file",
             str(path),
             "config",
@@ -138,7 +179,7 @@ def render_compose(path: Path = COMPOSE, *, image: str = FIXTURE_IMAGE) -> dict[
 
 def validate_model(model: dict[str, Any]) -> None:
     assert set(model) == TOP_LEVEL_KEYS, "undeclared top-level Compose surface"
-    assert model.get("name") == "deploy"
+    assert model.get("name") == MODEL_PROJECT
     services = model.get("services")
     assert isinstance(services, dict) and set(services) == {SERVICE_NAME}
     service = services[SERVICE_NAME]
@@ -171,7 +212,7 @@ def validate_model(model: dict[str, Any]) -> None:
     ]
     assert model["volumes"] == {
         "runner-mailbox-state": {
-            "name": "mycogni-runner-mailbox-state-smoke",
+            "name": f"{MODEL_PROJECT}_runner-mailbox-state",
             "driver": "local",
         }
     }

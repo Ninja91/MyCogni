@@ -47,6 +47,7 @@ ENV HOME=/tmp/mycogni-runner \
 RUN install -d -o 0 -g 0 -m 0555 /opt/mycogni-runner \
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni-runner /tmp/mycogni-runner
 
+COPY --chown=0:0 --chmod=0444 LICENSE NOTICE /opt/mycogni-runner/
 COPY --from=build /opt/mycogni-runner/.venv /opt/mycogni-runner/.venv
 COPY --from=build /build/services /opt/mycogni-runner/services
 
