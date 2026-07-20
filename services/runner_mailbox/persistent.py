@@ -129,7 +129,10 @@ class PersistentMailboxRepository:
         self._require_secret("storage_key", storage_key)
         self._require_secret("installation_epoch", installation_epoch)
         self._require_secret("restore_epoch", restore_epoch)
-        if len({maintenance_credential_digest, storage_key, installation_epoch, restore_epoch}) != 4:
+        if (
+            len({maintenance_credential_digest, storage_key, installation_epoch, restore_epoch})
+            != 4
+        ):
             raise ValueError("persistent mailbox secrets and epochs must be pairwise distinct")
         self._maintenance_credential_digest = bytes(maintenance_credential_digest)
         root_key = bytes(storage_key)
@@ -246,7 +249,9 @@ class PersistentMailboxRepository:
     def claim(
         self, binding: ActionBinding, claim_credential_digest: bytes, clock: Clock
     ) -> ClaimedAction:
-        return self._transition(lambda repository: repository.claim(binding, claim_credential_digest, clock))
+        return self._transition(
+            lambda repository: repository.claim(binding, claim_credential_digest, clock)
+        )
 
     def stage_evidence(
         self,
@@ -303,7 +308,9 @@ class PersistentMailboxRepository:
             lambda repository: repository.expire(maintenance_credential_digest, clock)
         )
 
-    def garbage_collect(self, maintenance_credential_digest: bytes, clock: Clock) -> tuple[Any, ...]:
+    def garbage_collect(
+        self, maintenance_credential_digest: bytes, clock: Clock
+    ) -> tuple[Any, ...]:
         return self._transition(
             lambda repository: repository.garbage_collect(maintenance_credential_digest, clock)
         )
@@ -361,7 +368,10 @@ class PersistentMailboxRepository:
             except (MailboxError, InjectedCrash) as error:
                 if self._connection.in_transaction:
                     self._connection.execute("ROLLBACK")
-                if isinstance(error, MailboxError) and error.denial is MailboxDenial.INTERNAL_UNCERTAINTY:
+                if (
+                    isinstance(error, MailboxError)
+                    and error.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+                ):
                     self._poisoned = True
                 raise error
             except sqlite3.OperationalError as error:
@@ -409,7 +419,9 @@ class PersistentMailboxRepository:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
         return row
 
-    def _load_repository(self, row: tuple[int, int, bytes, bytes, bytes]) -> tuple[int, VolatileMailboxRepository]:
+    def _load_repository(
+        self, row: tuple[int, int, bytes, bytes, bytes]
+    ) -> tuple[int, VolatileMailboxRepository]:
         frame_version, generation, nonce, ciphertext, ciphertext_digest = row
         if (
             frame_version != _FRAME_VERSION
@@ -506,7 +518,9 @@ class PersistentMailboxRepository:
                 limits.max_tombstones,
             )
         )
-        return hashlib.sha256(_CONFIG_CONTEXT + self._maintenance_credential_digest + payload).digest()
+        return hashlib.sha256(
+            _CONFIG_CONTEXT + self._maintenance_credential_digest + payload
+        ).digest()
 
     def _require_live_owner(self) -> None:
         if self._poisoned or os.getpid() != self._owner_pid:
@@ -536,7 +550,9 @@ class PersistentMailboxRepository:
         payload: dict[str, object] = {
             "version": _FRAME_VERSION,
             "records": [self._record_wire(records[key]) for key in sorted(records, key=str)],
-            "tombstones": [self._tombstone_wire(key, tombstones[key]) for key in sorted(tombstones, key=str)],
+            "tombstones": [
+                self._tombstone_wire(key, tombstones[key]) for key in sorted(tombstones, key=str)
+            ],
             "installation_last_seen_utc": self._datetime_wire(
                 repository._installation_last_seen_utc
             ),
@@ -574,7 +590,10 @@ class PersistentMailboxRepository:
             raise ValueError("unsupported state frame")
         if not isinstance(decoded["records"], list) or not isinstance(decoded["tombstones"], list):
             raise ValueError("invalid state collections")
-        if len(decoded["records"]) > self._limits.max_mailboxes or len(decoded["tombstones"]) > self._limits.max_tombstones:
+        if (
+            len(decoded["records"]) > self._limits.max_mailboxes
+            or len(decoded["tombstones"]) > self._limits.max_tombstones
+        ):
             raise ValueError("state collection limit")
         records: dict[UUID, _Record] = {}
         for item in decoded["records"]:
@@ -588,7 +607,14 @@ class PersistentMailboxRepository:
             if mailbox_id in records or mailbox_id in tombstones:
                 raise ValueError("duplicate tombstone")
             tombstones[mailbox_id] = tombstone
-        totals = tuple(decoded[key] for key in ("total_active_material_bytes", "total_evidence_bytes", "total_committed_bytes"))
+        totals = tuple(
+            decoded[key]
+            for key in (
+                "total_active_material_bytes",
+                "total_evidence_bytes",
+                "total_committed_bytes",
+            )
+        )
         if any(type(value) is not int or value < 0 for value in totals):
             raise ValueError("invalid quota totals")
         return (
@@ -614,7 +640,10 @@ class PersistentMailboxRepository:
             "action_key": self._bytes_wire(record.action_key),
             "result_credential": self._bytes_wire(record.result_credential),
             "result_credential_digest": self._bytes_wire(record.result_credential_digest),
-            "evidence": [self._evidence_wire(item) for _, item in sorted(record.evidence.items(), key=lambda pair: str(pair[0]))],
+            "evidence": [
+                self._evidence_wire(item)
+                for _, item in sorted(record.evidence.items(), key=lambda pair: str(pair[0]))
+            ],
             "result_envelope": self._result_wire(record.result_envelope),
             "committed_evidence_manifest": self._manifest_wire(record.committed_evidence_manifest),
             "committed_at": self._datetime_wire(record.committed_at),
@@ -622,9 +651,28 @@ class PersistentMailboxRepository:
         }
 
     def _record_from_wire(self, value: object) -> _Record:
-        self._exact_mapping(value, {
-            "binding", "created_at", "last_seen_utc", "action_credential_digest", "claim_credential_digest", "collection_credential_digest", "state", "collection_state", "envelope_json", "action_key", "result_credential", "result_credential_digest", "evidence", "result_envelope", "committed_evidence_manifest", "committed_at", "terminal_at"
-        })
+        self._exact_mapping(
+            value,
+            {
+                "binding",
+                "created_at",
+                "last_seen_utc",
+                "action_credential_digest",
+                "claim_credential_digest",
+                "collection_credential_digest",
+                "state",
+                "collection_state",
+                "envelope_json",
+                "action_key",
+                "result_credential",
+                "result_credential_digest",
+                "evidence",
+                "result_envelope",
+                "committed_evidence_manifest",
+                "committed_at",
+                "terminal_at",
+            },
+        )
         assert isinstance(value, dict)
         evidence_value = value["evidence"]
         if not isinstance(evidence_value, list) or len(evidence_value) > 64:
@@ -639,18 +687,36 @@ class PersistentMailboxRepository:
             binding=self._binding_from_wire(value["binding"]),
             created_at=self._datetime_from_wire(value["created_at"]),
             last_seen_utc=self._datetime_from_wire(value["last_seen_utc"]),
-            action_credential_digest=self._bytes_from_wire(value["action_credential_digest"], 32, 32),
+            action_credential_digest=self._bytes_from_wire(
+                value["action_credential_digest"], 32, 32
+            ),
             claim_credential_digest=self._bytes_from_wire(value["claim_credential_digest"], 32, 32),
-            collection_credential_digest=self._bytes_from_wire(value["collection_credential_digest"], 32, 32),
+            collection_credential_digest=self._bytes_from_wire(
+                value["collection_credential_digest"], 32, 32
+            ),
             state=MailboxState(value["state"]),
             collection_state=CollectionState(value["collection_state"]),
-            envelope_json=self._bytes_from_wire(value["envelope_json"], 1, 8_388_608, nullable=True),
-            action_key=(bytearray(self._bytes_from_wire(value["action_key"], 32, 32)) if value["action_key"] is not None else None),
-            result_credential=(bytearray(self._bytes_from_wire(value["result_credential"], 32, 128)) if value["result_credential"] is not None else None),
-            result_credential_digest=self._bytes_from_wire(value["result_credential_digest"], 32, 32, nullable=True),
+            envelope_json=self._bytes_from_wire(
+                value["envelope_json"], 1, 8_388_608, nullable=True
+            ),
+            action_key=(
+                bytearray(self._bytes_from_wire(value["action_key"], 32, 32))
+                if value["action_key"] is not None
+                else None
+            ),
+            result_credential=(
+                bytearray(self._bytes_from_wire(value["result_credential"], 32, 128))
+                if value["result_credential"] is not None
+                else None
+            ),
+            result_credential_digest=self._bytes_from_wire(
+                value["result_credential_digest"], 32, 32, nullable=True
+            ),
             evidence=evidence,
             result_envelope=self._result_from_wire(value["result_envelope"]),
-            committed_evidence_manifest=self._manifest_from_wire(value["committed_evidence_manifest"]),
+            committed_evidence_manifest=self._manifest_from_wire(
+                value["committed_evidence_manifest"]
+            ),
             committed_at=self._datetime_from_wire(value["committed_at"], nullable=True),
             terminal_at=self._datetime_from_wire(value["terminal_at"], nullable=True),
         )
@@ -658,48 +724,139 @@ class PersistentMailboxRepository:
     @staticmethod
     def _binding_wire(binding: ActionBinding) -> dict[str, object]:
         return {
-            "mailbox_id": str(binding.mailbox_id), "action_id": str(binding.action_id), "intent_id": str(binding.intent_id), "attempt_id": str(binding.attempt_id), "connector_release": binding.connector_release, "capability": binding.capability, "selected_artifact_digest": binding.selected_artifact_digest, "dispatch_epoch": binding.dispatch_epoch, "fence": binding.fence, "authorization_epoch": binding.authorization_epoch, "claim_deadline_utc": binding.claim_deadline_utc.isoformat(), "deadline_utc": binding.deadline_utc.isoformat(), "wall_seconds": binding.wall_seconds, "response_bytes": binding.response_bytes, "envelope_digest": binding.envelope_digest,
+            "mailbox_id": str(binding.mailbox_id),
+            "action_id": str(binding.action_id),
+            "intent_id": str(binding.intent_id),
+            "attempt_id": str(binding.attempt_id),
+            "connector_release": binding.connector_release,
+            "capability": binding.capability,
+            "selected_artifact_digest": binding.selected_artifact_digest,
+            "dispatch_epoch": binding.dispatch_epoch,
+            "fence": binding.fence,
+            "authorization_epoch": binding.authorization_epoch,
+            "claim_deadline_utc": binding.claim_deadline_utc.isoformat(),
+            "deadline_utc": binding.deadline_utc.isoformat(),
+            "wall_seconds": binding.wall_seconds,
+            "response_bytes": binding.response_bytes,
+            "envelope_digest": binding.envelope_digest,
         }
 
     def _binding_from_wire(self, value: object) -> ActionBinding:
-        fields = {"mailbox_id", "action_id", "intent_id", "attempt_id", "connector_release", "capability", "selected_artifact_digest", "dispatch_epoch", "fence", "authorization_epoch", "claim_deadline_utc", "deadline_utc", "wall_seconds", "response_bytes", "envelope_digest"}
+        fields = {
+            "mailbox_id",
+            "action_id",
+            "intent_id",
+            "attempt_id",
+            "connector_release",
+            "capability",
+            "selected_artifact_digest",
+            "dispatch_epoch",
+            "fence",
+            "authorization_epoch",
+            "claim_deadline_utc",
+            "deadline_utc",
+            "wall_seconds",
+            "response_bytes",
+            "envelope_digest",
+        }
         self._exact_mapping(value, fields)
         assert isinstance(value, dict)
         return ActionBinding(
-            mailbox_id=self._uuid(value["mailbox_id"]), action_id=self._uuid(value["action_id"]), intent_id=self._uuid(value["intent_id"]), attempt_id=self._uuid(value["attempt_id"]), connector_release=value["connector_release"], capability=value["capability"], selected_artifact_digest=value["selected_artifact_digest"], dispatch_epoch=value["dispatch_epoch"], fence=value["fence"], authorization_epoch=value["authorization_epoch"], claim_deadline_utc=self._datetime_from_wire(value["claim_deadline_utc"]), deadline_utc=self._datetime_from_wire(value["deadline_utc"]), wall_seconds=value["wall_seconds"], response_bytes=value["response_bytes"], envelope_digest=value["envelope_digest"],
+            mailbox_id=self._uuid(value["mailbox_id"]),
+            action_id=self._uuid(value["action_id"]),
+            intent_id=self._uuid(value["intent_id"]),
+            attempt_id=self._uuid(value["attempt_id"]),
+            connector_release=value["connector_release"],
+            capability=value["capability"],
+            selected_artifact_digest=value["selected_artifact_digest"],
+            dispatch_epoch=value["dispatch_epoch"],
+            fence=value["fence"],
+            authorization_epoch=value["authorization_epoch"],
+            claim_deadline_utc=self._datetime_from_wire(value["claim_deadline_utc"]),
+            deadline_utc=self._datetime_from_wire(value["deadline_utc"]),
+            wall_seconds=value["wall_seconds"],
+            response_bytes=value["response_bytes"],
+            envelope_digest=value["envelope_digest"],
         )
 
     @staticmethod
     def _evidence_wire(item: _WrappedEvidence) -> dict[str, object]:
-        return {"object_id": str(item.object_id), "kind": item.kind, "byte_count": item.byte_count, "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest), "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac), "nonce": PersistentMailboxRepository._bytes_wire(item.nonce), "wrapped_payload": PersistentMailboxRepository._bytes_wire(item.wrapped_payload)}
+        return {
+            "object_id": str(item.object_id),
+            "kind": item.kind,
+            "byte_count": item.byte_count,
+            "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest),
+            "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac),
+            "nonce": PersistentMailboxRepository._bytes_wire(item.nonce),
+            "wrapped_payload": PersistentMailboxRepository._bytes_wire(item.wrapped_payload),
+        }
 
     def _evidence_from_wire(self, value: object) -> _WrappedEvidence:
-        self._exact_mapping(value, {"object_id", "kind", "byte_count", "storage_digest", "semantic_mac", "nonce", "wrapped_payload"})
+        self._exact_mapping(
+            value,
+            {
+                "object_id",
+                "kind",
+                "byte_count",
+                "storage_digest",
+                "semantic_mac",
+                "nonce",
+                "wrapped_payload",
+            },
+        )
         assert isinstance(value, dict)
         if type(value["kind"]) is not str or type(value["byte_count"]) is not int:
             raise ValueError("invalid evidence metadata")
-        return _WrappedEvidence(self._uuid(value["object_id"]), value["kind"], value["byte_count"], self._bytes_from_wire(value["storage_digest"], 32, 32), self._bytes_from_wire(value["semantic_mac"], 32, 32), self._bytes_from_wire(value["nonce"], 12, 12), self._bytes_from_wire(value["wrapped_payload"], 16, self._limits.max_total_evidence_bytes + 128))
+        return _WrappedEvidence(
+            self._uuid(value["object_id"]),
+            value["kind"],
+            value["byte_count"],
+            self._bytes_from_wire(value["storage_digest"], 32, 32),
+            self._bytes_from_wire(value["semantic_mac"], 32, 32),
+            self._bytes_from_wire(value["nonce"], 12, 12),
+            self._bytes_from_wire(
+                value["wrapped_payload"], 16, self._limits.max_total_evidence_bytes + 128
+            ),
+        )
 
     @staticmethod
     def _result_wire(item: _WrappedResult | None) -> dict[str, object] | None:
         if item is None:
             return None
-        return {"byte_count": item.byte_count, "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest), "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac), "nonce": PersistentMailboxRepository._bytes_wire(item.nonce), "wrapped_payload": PersistentMailboxRepository._bytes_wire(item.wrapped_payload)}
+        return {
+            "byte_count": item.byte_count,
+            "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest),
+            "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac),
+            "nonce": PersistentMailboxRepository._bytes_wire(item.nonce),
+            "wrapped_payload": PersistentMailboxRepository._bytes_wire(item.wrapped_payload),
+        }
 
     def _result_from_wire(self, value: object) -> _WrappedResult | None:
         if value is None:
             return None
-        self._exact_mapping(value, {"byte_count", "storage_digest", "semantic_mac", "nonce", "wrapped_payload"})
+        self._exact_mapping(
+            value, {"byte_count", "storage_digest", "semantic_mac", "nonce", "wrapped_payload"}
+        )
         assert isinstance(value, dict)
         if type(value["byte_count"]) is not int:
             raise ValueError("invalid result metadata")
-        return _WrappedResult(value["byte_count"], self._bytes_from_wire(value["storage_digest"], 32, 32), self._bytes_from_wire(value["semantic_mac"], 32, 32), self._bytes_from_wire(value["nonce"], 12, 12), self._bytes_from_wire(value["wrapped_payload"], 16, 1_048_576 + 128))
+        return _WrappedResult(
+            value["byte_count"],
+            self._bytes_from_wire(value["storage_digest"], 32, 32),
+            self._bytes_from_wire(value["semantic_mac"], 32, 32),
+            self._bytes_from_wire(value["nonce"], 12, 12),
+            self._bytes_from_wire(value["wrapped_payload"], 16, 1_048_576 + 128),
+        )
 
     @staticmethod
     def _manifest_wire(item: _CommittedEvidenceManifest | None) -> dict[str, object] | None:
         if item is None:
             return None
-        return {"item_count": item.item_count, "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest), "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac)}
+        return {
+            "item_count": item.item_count,
+            "storage_digest": PersistentMailboxRepository._bytes_wire(item.storage_digest),
+            "semantic_mac": PersistentMailboxRepository._bytes_wire(item.semantic_mac),
+        }
 
     def _manifest_from_wire(self, value: object) -> _CommittedEvidenceManifest | None:
         if value is None:
@@ -708,16 +865,27 @@ class PersistentMailboxRepository:
         assert isinstance(value, dict)
         if type(value["item_count"]) is not int:
             raise ValueError("invalid manifest")
-        return _CommittedEvidenceManifest(value["item_count"], self._bytes_from_wire(value["storage_digest"], 32, 32), self._bytes_from_wire(value["semantic_mac"], 32, 32))
+        return _CommittedEvidenceManifest(
+            value["item_count"],
+            self._bytes_from_wire(value["storage_digest"], 32, 32),
+            self._bytes_from_wire(value["semantic_mac"], 32, 32),
+        )
 
     @staticmethod
     def _tombstone_wire(mailbox_id: UUID, value: _Tombstone) -> dict[str, object]:
-        return {"mailbox_id": str(mailbox_id), "created_at": value.created_at.isoformat(), "expires_at": value.expires_at.isoformat()}
+        return {
+            "mailbox_id": str(mailbox_id),
+            "created_at": value.created_at.isoformat(),
+            "expires_at": value.expires_at.isoformat(),
+        }
 
     def _tombstone_from_wire(self, value: object) -> tuple[UUID, _Tombstone]:
         self._exact_mapping(value, {"mailbox_id", "created_at", "expires_at"})
         assert isinstance(value, dict)
-        return self._uuid(value["mailbox_id"]), _Tombstone(self._datetime_from_wire(value["created_at"]), self._datetime_from_wire(value["expires_at"]))
+        return self._uuid(value["mailbox_id"]), _Tombstone(
+            self._datetime_from_wire(value["created_at"]),
+            self._datetime_from_wire(value["expires_at"]),
+        )
 
     @staticmethod
     def _bytes_wire(value: bytes | bytearray | None) -> str | None:
@@ -736,7 +904,9 @@ class PersistentMailboxRepository:
     ) -> bytes | None: ...
 
     @staticmethod
-    def _bytes_from_wire(value: object, lower: int, upper: int, *, nullable: bool = False) -> bytes | None:
+    def _bytes_from_wire(
+        value: object, lower: int, upper: int, *, nullable: bool = False
+    ) -> bytes | None:
         if value is None and nullable:
             return None
         if type(value) is not str:
@@ -840,8 +1010,13 @@ class PersistentMailboxRepository:
             evidence_bytes = sum(item.byte_count for item in record.evidence.values())
             evidence += evidence_bytes
             if record.committed_at is not None:
-                committed += (record.result_envelope.byte_count if record.result_envelope else 0) + evidence_bytes
-            if len(record.evidence) > MAX_EVIDENCE_ITEMS or evidence_bytes > record.binding.response_bytes:
+                committed += (
+                    record.result_envelope.byte_count if record.result_envelope else 0
+                ) + evidence_bytes
+            if (
+                len(record.evidence) > MAX_EVIDENCE_ITEMS
+                or evidence_bytes > record.binding.response_bytes
+            ):
                 raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
 
             no_active = all(value is None for value in active_material)
@@ -889,13 +1064,15 @@ class PersistentMailboxRepository:
                 valid = (
                     record.state is MailboxState.RESULT_COMMITTED
                     and record.collection_state
-                    in {CollectionState.READY, CollectionState.DELIVERING, CollectionState.ACKNOWLEDGED}
+                    in {
+                        CollectionState.READY,
+                        CollectionState.DELIVERING,
+                        CollectionState.ACKNOWLEDGED,
+                    }
                     and no_active
                     and record.result_credential_digest is None
                     and record.committed_at is not None
-                    and (
-                        record.collection_state is CollectionState.ACKNOWLEDGED
-                    )
+                    and (record.collection_state is CollectionState.ACKNOWLEDGED)
                     == (record.terminal_at is not None)
                 )
                 if (
@@ -920,8 +1097,7 @@ class PersistentMailboxRepository:
         for tombstone in repository._tombstones.values():
             if (
                 tombstone.created_at >= tombstone.expires_at
-                or tombstone.expires_at - tombstone.created_at
-                != self._limits.tombstone_retention
+                or tombstone.expires_at - tombstone.created_at != self._limits.tombstone_retention
                 or installation_high_water is None
                 or tombstone.created_at > installation_high_water
             ):
@@ -1015,7 +1191,11 @@ class PersistentMailboxRepository:
         """
 
         self._validate_private_ancestors()
-        for path in (self._path, self._path.with_name(self._path.name + "-wal"), self._path.with_name(self._path.name + "-shm")):
+        for path in (
+            self._path,
+            self._path.with_name(self._path.name + "-wal"),
+            self._path.with_name(self._path.name + "-shm"),
+        ):
             if not path.exists():
                 continue
             info = path.lstat()

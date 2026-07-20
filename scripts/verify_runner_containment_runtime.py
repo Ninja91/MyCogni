@@ -91,9 +91,7 @@ ARCHITECTURE_EXTENSIONS = {
 }
 LOCAL_DISTRIBUTION_METADATA = {
     "mycogni_connector_sdk-0.0.0.dist-info": "mycogni-connector-sdk",
-    "mycogni_runner_mailbox_runtime-0.0.0.dist-info": (
-        "mycogni-runner-mailbox-runtime"
-    ),
+    "mycogni_runner_mailbox_runtime-0.0.0.dist-info": ("mycogni-runner-mailbox-runtime"),
 }
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 PROJECT = re.compile(r"^mycogni-runner-[0-9a-f]{32}$")
@@ -110,9 +108,7 @@ def _site_package_regular_files(architecture: str) -> set[str]:
 
 def _git_environment() -> dict[str, str]:
     environment = {
-        key: os.environ[key]
-        for key in ("LANG", "LC_ALL", "LC_CTYPE", "PATH")
-        if key in os.environ
+        key: os.environ[key] for key in ("LANG", "LC_ALL", "LC_CTYPE", "PATH") if key in os.environ
     }
     environment.setdefault("PATH", "/usr/bin:/bin")
     environment["GIT_CONFIG_GLOBAL"] = os.devnull
@@ -209,9 +205,7 @@ def _cleanup_resources(container_ids: list[str], volume_names: list[str]) -> Non
     for volume_name in volume_names:
         _run(["docker", "volume", "rm", volume_name], check=False)
     for container_id in container_ids:
-        assert _run(
-            ["docker", "container", "inspect", container_id], check=False
-        ).returncode != 0
+        assert _run(["docker", "container", "inspect", container_id], check=False).returncode != 0
     for volume_name in volume_names:
         assert _run(["docker", "volume", "inspect", volume_name], check=False).returncode != 0
 
@@ -289,9 +283,7 @@ def _git_object_bytes(revision: str, path: str) -> bytes:
     return result.stdout
 
 
-def _validate_exported_filesystem(
-    exported: bytes, revision: str, architecture: str
-) -> None:
+def _validate_exported_filesystem(exported: bytes, revision: str, architecture: str) -> None:
     _require_git_commit(revision)
     expected_site_packages = _expected_site_packages(architecture)
     site_package_regular_files = _site_package_regular_files(architecture)
@@ -325,9 +317,7 @@ def _validate_exported_filesystem(
             f"{runner_root}/{name}" for name in RUNNER_SOURCE_FILES
         }
         actual_service_paths = {
-            name
-            for name in members
-            if name == service_root or name.startswith(f"{service_root}/")
+            name for name in members if name == service_root or name.startswith(f"{service_root}/")
         }
         assert actual_service_paths == expected_service_paths
         assert members[service_root].isdir() and members[runner_root].isdir()
@@ -445,18 +435,14 @@ def verify(image: str, revision: str, *, project: str | None = None) -> dict[str
         assert isinstance(architecture, str)
         _expected_site_packages(architecture)
         before = _one_json(["docker", "container", "inspect", container_id])
-        _validate_inspect(
-            before, image_inspect, image, revision, project_name, volume_name
-        )
+        _validate_inspect(before, image_inspect, image, revision, project_name, volume_name)
         _validate_filesystem(container_id, revision, architecture)
         started = _run(["docker", "start", "--attach", container_id])
         sentinel = _validate_sentinel(started.stdout)
         after = _one_json(["docker", "container", "inspect", container_id])
         assert after["State"]["Status"] == "exited"
         assert after["State"]["ExitCode"] == 0
-        _validate_inspect(
-            after, image_inspect, image, revision, project_name, volume_name
-        )
+        _validate_inspect(after, image_inspect, image, revision, project_name, volume_name)
         return {
             "architecture": architecture,
             "container_id": container_id,

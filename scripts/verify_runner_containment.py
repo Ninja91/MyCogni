@@ -103,8 +103,7 @@ def validate_dockerignore(text: str) -> None:
     runner_negations = {
         line.removeprefix("!services/runner_mailbox/")
         for line in text.splitlines()
-        if line.startswith("!services/runner_mailbox/")
-        and line != "!services/runner_mailbox/"
+        if line.startswith("!services/runner_mailbox/") and line != "!services/runner_mailbox/"
     }
     assert runner_negations == set(RUNNER_SOURCE_FILES)
     lines = text.splitlines()
@@ -166,9 +165,9 @@ def validate_dockerfile(text: str) -> None:
             "uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime "
             "&& for activation in /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
             "_virtualenv.pth /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
-            "_virtualenv.py; do test -f \"$activation\"; rm \"$activation\"; "
-            "test ! -e \"$activation\"; done "
-            "&& PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c \"import importlib.util; "
+            '_virtualenv.py; do test -f "$activation"; rm "$activation"; '
+            'test ! -e "$activation"; done '
+            '&& PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c "import importlib.util; '
             "assert importlib.util.find_spec('connector_protocol') is not None; "
             "assert importlib.util.find_spec('mycogni_runner_mailbox_runtime') is not None; "
             "assert importlib.util.find_spec('services.runner_mailbox') is not None; "
@@ -176,11 +175,11 @@ def validate_dockerfile(text: str) -> None:
             "&& for dist_info in /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
             "mycogni_connector_sdk-0.0.0.dist-info /opt/mycogni-runner/.venv/lib/python3.12/"
             "site-packages/mycogni_runner_mailbox_runtime-0.0.0.dist-info; do "
-            "test -f \"$dist_info/uv_cache.json\"; test \"$(grep -c '/uv_cache\\.json,' "
-            "\"$dist_info/RECORD\")\" -eq 1; rm \"$dist_info/uv_cache.json\"; "
+            'test -f "$dist_info/uv_cache.json"; test "$(grep -c \'/uv_cache\\.json,\' '
+            '"$dist_info/RECORD")" -eq 1; rm "$dist_info/uv_cache.json"; '
             "sed -i '/\\/uv_cache\\.json,/d' \"$dist_info/RECORD\"; "
             "test ! -e \"$dist_info/uv_cache.json\"; ! grep -q '/uv_cache\\.json,' "
-            "\"$dist_info/RECORD\"; done "
+            '"$dist_info/RECORD"; done '
             "&& rm -rf /root/.cache/uv "
             "&& chown -R 0:0 /opt/mycogni-runner /build/services "
             "&& chmod -R a-w /opt/mycogni-runner /build/services",
@@ -212,15 +211,11 @@ def validate_dockerfile(text: str) -> None:
             "&& install -d -o 65532 -g 65532 -m 0700 "
             "/var/lib/mycogni-runner /tmp/mycogni-runner",
         ),
-        DockerInstruction(
-            "COPY", "--chown=0:0 --chmod=0444 LICENSE NOTICE /opt/mycogni-runner/"
-        ),
+        DockerInstruction("COPY", "--chown=0:0 --chmod=0444 LICENSE NOTICE /opt/mycogni-runner/"),
         DockerInstruction(
             "COPY", "--from=build /opt/mycogni-runner/.venv /opt/mycogni-runner/.venv"
         ),
-        DockerInstruction(
-            "COPY", "--from=build /build/services /opt/mycogni-runner/services"
-        ),
+        DockerInstruction("COPY", "--from=build /build/services /opt/mycogni-runner/services"),
         DockerInstruction("WORKDIR", "/var/lib/mycogni-runner"),
         DockerInstruction("USER", "65532:65532"),
         DockerInstruction(

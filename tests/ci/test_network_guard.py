@@ -952,3 +952,48 @@ def test_unreviewed_process_and_dynamic_call_mutations_fail_static_guard(
     mutation = tmp_path / "test_process_escape.py"
     mutation.write_text(source, encoding="utf-8")
     assert network_source_guard.test_call_violations(mutation)
+
+
+@pytest.mark.parametrize(
+    ("relative", "source", "expected"),
+    [
+        (
+            "tests/architecture/test_runner_containment.py",
+            "import subprocess\nsubprocess.run(['ok'])\nsubprocess.Popen(['denied'])\n",
+            {"subprocess.Popen"},
+        ),
+        (
+            "tests/runner_mailbox/test_persistent.py",
+            "import os\nos.fork()\nos.system('denied')\n",
+            {"os.system"},
+        ),
+        (
+            "tests/architecture/test_runner_containment.py",
+            "import subprocess as sp\nsp.run(['ok'])\nsp.Popen(['denied'])\n",
+            {"subprocess.Popen"},
+        ),
+        (
+            "tests/runner_mailbox/test_persistent.py",
+            "from os import fork, system\nfork()\nsystem('denied')\n",
+            {"os.system"},
+        ),
+    ],
+)
+def test_reviewed_test_process_calls_are_exact_not_whole_file_exemptions(
+    tmp_path: Path, relative: str, source: str, expected: set[str]
+) -> None:
+    mutation = tmp_path / "test_reviewed_process.py"
+    mutation.write_text(source, encoding="utf-8")
+    assert network_source_guard.process_call_violations(mutation, relative) == expected
+
+
+def test_runner_probe_socket_exemption_is_bound_to_reviewed_source_bytes(tmp_path: Path) -> None:
+    source = (network_source_guard.ROOT / network_source_guard.CONTAINER_PROBE).read_bytes()
+    mutation = tmp_path / "container_probe.py"
+    mutation.write_bytes(source + b"\n# synthetic mutation\n")
+    assert not network_source_guard.reviewed_runtime_import_provenance_valid(
+        mutation, network_source_guard.CONTAINER_PROBE
+    )
+    assert network_source_guard.runtime_import_violations(
+        mutation, network_source_guard.CONTAINER_PROBE
+    ) == {"socket"}

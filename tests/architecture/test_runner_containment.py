@@ -38,8 +38,7 @@ def _runtime_validator() -> ModuleType:
 def _runtime_bootstrap() -> ModuleType:
     root = Path(__file__).resolve().parents[2]
     path = (
-        root
-        / "packages/mycogni-runner-mailbox-runtime/src/"
+        root / "packages/mycogni-runner-mailbox-runtime/src/"
         "mycogni_runner_mailbox_runtime/bootstrap.py"
     )
     spec = importlib.util.spec_from_file_location("runner_runtime_bootstrap", path)
@@ -69,9 +68,7 @@ def test_runner_containment_model_is_least_privilege() -> None:
     ["verify_runner_containment.py", "verify_runner_containment_runtime.py"],
 )
 @pytest.mark.parametrize("mode", ["flag", "environment"])
-def test_runner_verifiers_refuse_optimized_python_before_work(
-    script: str, mode: str
-) -> None:
+def test_runner_verifiers_refuse_optimized_python_before_work(script: str, mode: str) -> None:
     root = Path(__file__).resolve().parents[2]
     environment = dict(os.environ)
     environment.pop("PYTHONOPTIMIZE", None)
@@ -91,10 +88,7 @@ def test_runner_verifiers_refuse_optimized_python_before_work(
     )
     assert completed.returncode != 0
     assert completed.stdout == ""
-    assert (
-        completed.stderr
-        == "runner containment verification requires unoptimized Python\n"
-    )
+    assert completed.stderr == "runner containment verification requires unoptimized Python\n"
 
 
 def test_dockerignore_has_exact_runner_sources_and_terminal_bytecode_denials() -> None:
@@ -145,7 +139,7 @@ def test_runner_dockerfile_packages_only_the_mailbox_artifact() -> None:
         lambda value: value + "\nCOPY src /opt/mycogni-runner/mycogni\n",
         lambda value: value + "\nCOPY . /opt/mycogni-runner/build-context\n",
         lambda value: value + "\nENV CORE_MODE=enabled\n",
-        lambda value: value + "\nVOLUME [\"/forbidden\"]\n",
+        lambda value: value + '\nVOLUME ["/forbidden"]\n',
         lambda value: value.replace(
             "assert importlib.util.find_spec('mycogni') is None",
             "print('skipped trusted-core assertion')",
@@ -164,7 +158,7 @@ def test_runner_dockerfile_packages_only_the_mailbox_artifact() -> None:
     ],
 )
 def test_runner_dockerfile_exact_model_rejects_added_semantics(
-    mutate: Callable[[str], str]
+    mutate: Callable[[str], str],
 ) -> None:
     validator = _validator()
     source = validator.DOCKERFILE.read_text(encoding="utf-8")
@@ -185,9 +179,7 @@ def test_runtime_cleanup_names_only_owned_resources(
     validator = _runtime_validator()
     calls: list[list[str]] = []
 
-    def fake_run(
-        arguments: list[str], *, check: bool = True
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_run(arguments: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         del check
         calls.append(arguments)
         returncode = 1 if "inspect" in arguments else 0
@@ -231,9 +223,7 @@ def _synthetic_export(
     regular_files = runtime._site_package_regular_files(architecture)
     entries.update(
         {
-            f"{site_packages}/{name}": (
-                b"synthetic-extension" if name in regular_files else None
-            )
+            f"{site_packages}/{name}": (b"synthetic-extension" if name in regular_files else None)
             for name in expected_site_packages
         }
     )
@@ -300,9 +290,7 @@ def test_runtime_export_rejects_unsupported_architecture() -> None:
 def test_bootstrap_keeps_stdlib_first_then_site_packages_then_application() -> None:
     bootstrap = _runtime_bootstrap()
     initial = list(bootstrap._expected_initial_path())
-    activated = bootstrap._sealed_path(
-        initial, isolated=1, no_site=1, site_loaded=False
-    )
+    activated = bootstrap._sealed_path(initial, isolated=1, no_site=1, site_loaded=False)
     assert activated == [
         *initial,
         "/opt/mycogni-runner/.venv/lib/python3.12/site-packages",
@@ -326,18 +314,9 @@ def test_bootstrap_keeps_stdlib_first_then_site_packages_then_application() -> N
             "opt/mycogni-runner/.venv/lib/python3.12/site-packages/connector_protocol/"
             "unreviewed.py": b"dirty"
         },
-        {
-            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
-            "sitecustomize.py": b"dirty"
-        },
-        {
-            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
-            "unexpected_module.py": b"dirty"
-        },
-        {
-            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/pydantic/"
-            "activation.pth": b"dirty"
-        },
+        {"opt/mycogni-runner/.venv/lib/python3.12/site-packages/sitecustomize.py": b"dirty"},
+        {"opt/mycogni-runner/.venv/lib/python3.12/site-packages/unexpected_module.py": b"dirty"},
+        {"opt/mycogni-runner/.venv/lib/python3.12/site-packages/pydantic/activation.pth": b"dirty"},
         {
             "opt/mycogni-runner/.venv/lib/python3.12/site-packages/pydantic/"
             "usercustomize.py": b"dirty"
@@ -378,9 +357,7 @@ def test_runtime_export_rejects_dirty_or_unreviewed_files(
     [
         {"opt/mycogni-runner/LICENSE": b"dirty-license"},
         {"opt/mycogni-runner/NOTICE": b"dirty-notice"},
-        {
-            "opt/mycogni-runner/services/runner_mailbox/persistent.py": b"dirty-source"
-        },
+        {"opt/mycogni-runner/services/runner_mailbox/persistent.py": b"dirty-source"},
     ],
     ids=["license", "notice", "runner-source"],
 )
@@ -398,15 +375,21 @@ def test_runtime_export_binds_checkout_files_to_exact_git_revision(
     [
         ({}, {"mycogni_connector_sdk-0.0.0.dist-info/METADATA"}),
         (
-            {"mycogni_connector_sdk-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: wrong\nVersion: 0.0.0\nLicense-Expression: Apache-2.0\n\n"},
+            {
+                "mycogni_connector_sdk-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: wrong\nVersion: 0.0.0\nLicense-Expression: Apache-2.0\n\n"
+            },
             set(),
         ),
         (
-            {"mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 9.9.9\nLicense-Expression: Apache-2.0\n\n"},
+            {
+                "mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 9.9.9\nLicense-Expression: Apache-2.0\n\n"
+            },
             set(),
         ),
         (
-            {"mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 0.0.0\nLicense-Expression: Proprietary\n\n"},
+            {
+                "mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 0.0.0\nLicense-Expression: Proprietary\n\n"
+            },
             set(),
         ),
     ],
@@ -434,9 +417,7 @@ def test_runtime_export_rejects_tree_hash_as_revision() -> None:
         text=True,
     ).stdout.strip()
     with pytest.raises(AssertionError, match="Git commit object"):
-        _runtime_validator()._validate_exported_filesystem(
-            _synthetic_export(), tree, "arm64"
-        )
+        _runtime_validator()._validate_exported_filesystem(_synthetic_export(), tree, "arm64")
 
 
 def test_git_object_binding_ignores_replace_refs_and_git_environment(
@@ -492,11 +473,13 @@ def test_git_object_binding_ignores_replace_refs_and_git_environment(
         "    mem_limit: 512m\n",
     ],
 )
-def test_runner_containment_mutations_fail_semantic_validation(tmp_path: Path, fragment: str) -> None:
+def test_runner_containment_mutations_fail_semantic_validation(
+    tmp_path: Path, fragment: str
+) -> None:
     validator = _validator()
-    source = (Path(__file__).resolve().parents[2] / "deploy/compose.runner-mailbox-smoke.yml").read_text(
-        encoding="utf-8"
-    )
+    source = (
+        Path(__file__).resolve().parents[2] / "deploy/compose.runner-mailbox-smoke.yml"
+    ).read_text(encoding="utf-8")
     assert fragment in source
     mutated = tmp_path / "compose.yml"
     mutated.write_text(source.replace(fragment, ""), encoding="utf-8")
@@ -513,22 +496,20 @@ def test_runner_containment_mutations_fail_semantic_validation(tmp_path: Path, f
         '    dns: ["1.1.1.1"]\n',
         '    dns_search: ["example.test"]\n',
         '    extra_hosts: ["host.docker.internal:host-gateway"]\n',
-        '    logging: {driver: json-file}\n',
-        '    environment: {RUNNER_SECRET: forbidden}\n',
+        "    logging: {driver: json-file}\n",
+        "    environment: {RUNNER_SECRET: forbidden}\n",
         '    ports: ["127.0.0.1:9000:9000"]\n',
-        '    privileged: true\n',
+        "    privileged: true\n",
         '    cap_add: ["NET_ADMIN"]\n',
         '    volumes_from: ["mycogni-runner-mailbox-smoke"]\n',
     ],
 )
-def test_rendered_undeclared_service_surfaces_fail_closed(
-    tmp_path: Path, injected: str
-) -> None:
+def test_rendered_undeclared_service_surfaces_fail_closed(tmp_path: Path, injected: str) -> None:
     validator = _validator()
     source = (
         Path(__file__).resolve().parents[2] / "deploy/compose.runner-mailbox-smoke.yml"
     ).read_text(encoding="utf-8")
-    marker = "    user: \"65532:65532\"\n"
+    marker = '    user: "65532:65532"\n'
     assert marker in source
     mutated = tmp_path / "compose.yml"
     mutated.write_text(source.replace(marker, marker + injected), encoding="utf-8")
@@ -578,7 +559,7 @@ def test_rendered_top_level_secret_surface_fails_closed(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
     (tmp_path / "synthetic-secret.test").write_text("synthetic", encoding="utf-8")
     copied = tmp_path / "compose.yml"
-    marker = "    user: \"65532:65532\"\n"
+    marker = '    user: "65532:65532"\n'
     assert marker in source
     copied.write_text(
         source.replace(marker, marker + "    secrets: [forbidden]\n")

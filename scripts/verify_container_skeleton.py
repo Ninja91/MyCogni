@@ -33,7 +33,12 @@ EXPECTED_CONTEXT_ALLOWLIST = {
     "!packages/mycogni-runner-mailbox-runtime/src/**",
     "!services/",
     "!services/runner_mailbox/",
-    "!services/runner_mailbox/**",
+    "!services/runner_mailbox/__init__.py",
+    "!services/runner_mailbox/domain.py",
+    "!services/runner_mailbox/persistent.py",
+    "!services/runner_mailbox/ports.py",
+    "!services/runner_mailbox/service.py",
+    "!services/runner_mailbox/volatile.py",
 }
 
 
@@ -212,7 +217,9 @@ def validate_dockerignore(lines: list[str]) -> None:
     assert rules and rules[0] == "**", "build context must be denied by default"
     allow_rules = {rule for rule in rules[1:] if rule.startswith("!")}
     assert allow_rules == EXPECTED_CONTEXT_ALLOWLIST
-    assert all(rule == "**" or rule.startswith("!") for rule in rules)
+    terminal_denials = ["**/__pycache__", "**/__pycache__/**", "*.pyc", "*.pyo"]
+    assert [rule for rule in rules[1:] if not rule.startswith("!")] == terminal_denials
+    assert rules[-4:] == terminal_denials
 
 
 def validate() -> None:

@@ -92,7 +92,9 @@ class ExitAtCommitBoundary:
             os._exit(72)
 
 
-def _service(path: Path, clock: StaticClock, injector: InjectOnce | None = None) -> RunnerMailboxService:
+def _service(
+    path: Path, clock: StaticClock, injector: InjectOnce | None = None
+) -> RunnerMailboxService:
     return RunnerMailboxService(
         _repository(path, injector), clock, Sha256CredentialDigester(), FixedCredentialSource()
     )
@@ -108,7 +110,9 @@ def _binding(service: RunnerMailboxService, action: bytes) -> ActionBinding:
     )
 
 
-def _offered(path: Path, clock: StaticClock, action: bytes) -> tuple[RunnerMailboxService, ActionBinding]:
+def _offered(
+    path: Path, clock: StaticClock, action: bytes
+) -> tuple[RunnerMailboxService, ActionBinding]:
     service = _service(path, clock)
     binding = _binding(service, action)
     service.open_empty(
@@ -133,7 +137,9 @@ def _claim_process(
 
     repository = _repository(Path(database_path))
     try:
-        repository.claim(binding, Sha256CredentialDigester().digest(CLAIM_CREDENTIAL), StaticClock(current))
+        repository.claim(
+            binding, Sha256CredentialDigester().digest(CLAIM_CREDENTIAL), StaticClock(current)
+        )
     except MailboxError as error:
         queue.put(("denied", error.denial.value))
     else:
@@ -362,9 +368,7 @@ def test_state_frame_rejects_subsecond_retention_policy_substitution(tmp_path: P
             storage_key=_STORAGE_KEY,
             installation_epoch=_INSTALLATION_EPOCH,
             restore_epoch=_RESTORE_EPOCH,
-            limits=MailboxLimits(
-                terminal_retention=timedelta(seconds=1, microseconds=2)
-            ),
+            limits=MailboxLimits(terminal_retention=timedelta(seconds=1, microseconds=2)),
         )
     assert substituted.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
 
@@ -391,9 +395,7 @@ def test_inherited_repository_is_denied_before_child_touches_parent_sqlite_conne
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork regression")
 @pytest.mark.parametrize("operation", ["transition", "close"])
-def test_forked_child_refuses_before_inherited_held_rlock(
-    tmp_path: Path, operation: str
-) -> None:
+def test_forked_child_refuses_before_inherited_held_rlock(tmp_path: Path, operation: str) -> None:
     repository = _repository(tmp_path / "runner.sqlite")
     held = Event()
     release = Event()
@@ -469,7 +471,9 @@ def _rewrite_authenticated_frame(
         assert row is not None
         generation, nonce, ciphertext = row
         serialized = repository._aead.decrypt(  # type: ignore[attr-defined]
-            nonce, ciphertext, repository._aad(generation)  # type: ignore[attr-defined]
+            nonce,
+            ciphertext,
+            repository._aad(generation),  # type: ignore[attr-defined]
         )
         mutated = transform(serialized)
         assert type(mutated) is bytes
@@ -597,9 +601,7 @@ def test_authenticated_alternative_scalar_spellings_fail_writer_byte_check(
         if alternative == "datetime-z":
             record["created_at"] = record["created_at"].replace("+00:00", "Z")
         elif alternative == "datetime-redundant-fraction":
-            record["created_at"] = record["created_at"].replace(
-                "+00:00", ".000000+00:00"
-            )
+            record["created_at"] = record["created_at"].replace("+00:00", ".000000+00:00")
         else:
             encoded = record["action_credential_digest"]
             alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -659,9 +661,7 @@ def test_authenticated_collection_order_must_match_writer_order(
         service.stage_evidence(first, result_credential=credential, evidence=first_evidence)
         service.stage_evidence(first, result_credential=credential, evidence=second_evidence)
     else:
-        second = replace(
-            first, mailbox_id=UUID("c8bca1d2-f964-4c4b-86ed-6737d8eaf329")
-        )
+        second = replace(first, mailbox_id=UUID("c8bca1d2-f964-4c4b-86ed-6737d8eaf329"))
         service.open_empty(
             second,
             action_credential=b"u" * 32,
@@ -678,9 +678,7 @@ def test_authenticated_collection_order_must_match_writer_order(
     def reverse(value: bytes) -> bytes:
         decoded = json.loads(value)
         target = (
-            decoded["records"][0]["evidence"]
-            if collection == "evidence"
-            else decoded[collection]
+            decoded["records"][0]["evidence"] if collection == "evidence" else decoded[collection]
         )
         assert len(target) == 2
         target.reverse()
@@ -709,9 +707,7 @@ def test_acknowledged_commit_cannot_follow_terminal_time(tmp_path: Path) -> None
     service.commit_result(binding, _result_payload(evidence), result_credential=credential)
     service.collect(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     clock.current += timedelta(seconds=3)
-    service.acknowledge_collection(
-        binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL
-    )
+    service.acknowledge_collection(binding.mailbox_id, collection_credential=COLLECTION_CREDENTIAL)
     repository = service._repository  # type: ignore[attr-defined]
     repository.close()
 
