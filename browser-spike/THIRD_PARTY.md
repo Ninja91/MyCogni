@@ -16,3 +16,10 @@ project must produce and review a complete SBOM, license inventory, notices,
 signature, and provenance record. The upstream Playwright image is described by
 its maintainers as a testing/development image and is not itself treated as a
 production security boundary.
+
+The derived image intentionally has no blanket
+`org.opencontainers.image.licenses` label. Such a label would inaccurately imply
+that the entire image, including Chromium and operating-system packages, is
+covered by the repository's Apache-2.0 license. Component-level provenance and
+license notices remain the source of truth until `REL-001` produces a reviewed
+release inventory.

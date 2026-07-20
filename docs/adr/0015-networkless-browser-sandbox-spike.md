@@ -40,7 +40,9 @@ The Compose boundary requires:
   1 GiB RAM with no extra swap, 128 PIDs, bounded file descriptors/core dumps,
   bounded local logs, no restart, and an init process; and
 - a fixed 20-second in-process deadline plus a separate host verifier timeout and
-  invocation-owned cleanup.
+  invocation-owned cleanup. Each verifier diagnostic is named and ownership-
+  labelled before launch so a client timeout cannot make it unreachable; final
+  cleanup stops and removes all owned Compose and diagnostic containers.
 
 The upstream seccomp profile is extended with only one unconditional `chroot`
 syscall allowance. Outer UID 65532 and zero capability sets still cannot chroot,
@@ -72,6 +74,8 @@ in depth, not a claim that arbitrary code inside the image cannot use loopback.
 No screenshot, trace, download, persistent browser profile, credential, PII,
 broker URL, gateway, submission, CAPTCHA/MFA/login handling, stealth feature,
 outcome inference, or AI dependency is included. `BROW-001` remains `NOT_STARTED`.
+The local runtime verifier is boundary evidence, not a signature, SBOM,
+provenance record, or other supply-chain attestation.
 
 ## Alternatives rejected
 

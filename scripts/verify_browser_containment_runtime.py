@@ -23,6 +23,7 @@ SECCOMP = ROOT / "docker/seccomp.browser.json"
 SERVICE = "mycogni-browser-smoke"
 PROJECT = re.compile(r"^mycogni-browser-[0-9a-f]{32}$")
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+DIAGNOSTIC_LABEL = "com.mycogni.browser.verifier"
 ENTRYPOINT = ["/usr/bin/node", "/opt/mycogni-browser/run.mjs"]
 ENVIRONMENT = [
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -105,11 +106,50 @@ def _container_ids(project: str) -> list[str]:
     ).stdout.splitlines()
 
 
-def _cleanup(container_ids: list[str]) -> None:
-    for container_id in container_ids:
-        _run(["docker", "container", "rm", "--force", container_id], check=False)
-    for container_id in container_ids:
+def _diagnostic_ids(project: str) -> list[str]:
+    return _run(
+        [
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label={DIAGNOSTIC_LABEL}={project}",
+        ]
+    ).stdout.splitlines()
+
+
+def _is_owned(container: dict[str, Any], project: str) -> bool:
+    labels = container["Config"]["Labels"] or {}
+    return (
+        labels.get("com.docker.compose.project") == project
+        and labels.get("com.docker.compose.service") == SERVICE
+    ) or labels.get(DIAGNOSTIC_LABEL) == project
+
+
+def _cleanup(project: str, references: list[str]) -> None:
+    candidates = list(
+        dict.fromkeys(references + _container_ids(project) + _diagnostic_ids(project))
+    )
+    owned: list[tuple[str, str]] = []
+    for reference in candidates:
+        inspected = _run(["docker", "container", "inspect", reference], check=False)
+        if inspected.returncode != 0:
+            continue
+        values = json.loads(inspected.stdout)
+        assert isinstance(values, list) and len(values) == 1
+        container = values[0]
+        assert _is_owned(container, project), "cleanup reference is not invocation-owned"
+        owned.append((reference, container["Id"]))
+    for reference, _ in owned:
+        _run(["docker", "container", "stop", "--time", "3", reference], check=False, timeout=10)
+    for reference, _ in owned:
+        _run(["docker", "container", "rm", "--force", reference], check=False, timeout=10)
+    for reference, container_id in owned:
+        assert _run(["docker", "container", "inspect", reference], check=False).returncode != 0
         assert _run(["docker", "container", "inspect", container_id], check=False).returncode != 0
+    assert _container_ids(project) == [] and _diagnostic_ids(project) == []
 
 
 def _validate_inspect(container: dict[str, Any], image: str, revision: str, project: str) -> None:
@@ -121,6 +161,7 @@ def _validate_inspect(container: dict[str, Any], image: str, revision: str, proj
     assert config["Entrypoint"] == ENTRYPOINT and config["Cmd"] is None
     assert config["Env"] == ENVIRONMENT
     assert config["Labels"]["org.opencontainers.image.revision"] == revision
+    assert "org.opencontainers.image.licenses" not in config["Labels"]
     assert config["Labels"]["com.docker.compose.project"] == project
     assert config["Labels"]["com.docker.compose.service"] == SERVICE
     assert host["NetworkMode"] == "none" and host["ReadonlyRootfs"] is True
@@ -150,13 +191,25 @@ def _validate_inspect(container: dict[str, Any], image: str, revision: str, proj
 
 
 def _safe_diagnostic(
-    image: str, entrypoint: str, *command: str
+    image: str,
+    project: str,
+    registered_names: list[str],
+    entrypoint: str,
+    *command: str,
+    timeout: float = 30,
 ) -> subprocess.CompletedProcess[str]:
+    name = f"{project}-diag-{len(registered_names) + 1}"
+    assert re.fullmatch(r"mycogni-browser-[0-9a-f]{32}-diag-[1-9][0-9]*", name)
+    assert _run(["docker", "container", "inspect", name], check=False).returncode != 0
+    registered_names.append(name)
     return _run(
         [
             "docker",
             "run",
-            "--rm",
+            "--name",
+            name,
+            "--label",
+            f"{DIAGNOSTIC_LABEL}={project}",
             "--network",
             "none",
             "--read-only",
@@ -186,13 +239,14 @@ def _safe_diagnostic(
             entrypoint,
             image,
             *command,
-        ]
+        ],
+        timeout=timeout,
     )
 
 
-def _validate_sources(image: str, revision: str) -> None:
+def _validate_sources(image: str, revision: str, project: str, registered_names: list[str]) -> None:
     paths = list(SOURCE_PATHS.values())
-    completed = _safe_diagnostic(image, "/usr/bin/sha256sum", *paths)
+    completed = _safe_diagnostic(image, project, registered_names, "/usr/bin/sha256sum", *paths)
     observed = {
         line.split()[1]: line.split()[0] for line in completed.stdout.splitlines() if line.strip()
     }
@@ -201,6 +255,8 @@ def _validate_sources(image: str, revision: str) -> None:
         assert observed[image_path] == hashlib.sha256(_git_bytes(revision, git_path)).hexdigest()
     inventory = _safe_diagnostic(
         image,
+        project,
+        registered_names,
         "/bin/sh",
         "-ceu",
         "test \"$(find /opt/mycogni-browser -mindepth 1 -maxdepth 1 -printf '%f\\n' | sort | tr '\\n' ' ')\" = "
@@ -209,9 +265,11 @@ def _validate_sources(image: str, revision: str) -> None:
     assert inventory.stdout == "" and inventory.stderr == ""
 
 
-def _validate_outer_denials(image: str) -> None:
+def _validate_outer_denials(image: str, project: str, registered_names: list[str]) -> None:
     probe = _safe_diagnostic(
         image,
+        project,
+        registered_names,
         "/bin/sh",
         "-ceu",
         "! chroot / /bin/true 2>/dev/null; "
@@ -220,6 +278,32 @@ def _validate_outer_denials(image: str) -> None:
         "touch /tmp/mycogni-browser/allowed; rm /tmp/mycogni-browser/allowed",
     )
     assert probe.stdout == "" and probe.stderr == ""
+
+
+def _validate_timeout_cleanup(image: str, project: str, registered_names: list[str]) -> None:
+    before = len(registered_names)
+    try:
+        _safe_diagnostic(
+            image,
+            project,
+            registered_names,
+            "/bin/sh",
+            "-ceu",
+            "sleep 60",
+            timeout=1,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise AssertionError("diagnostic timeout control did not time out")
+    assert len(registered_names) == before + 1
+    name = registered_names[-1]
+    container = _one_inspect("container", name)
+    labels = container["Config"]["Labels"]
+    assert labels[DIAGNOSTIC_LABEL] == project
+    assert "com.docker.compose.project" not in labels
+    _cleanup(project, [name])
+    assert _run(["docker", "container", "inspect", name], check=False).returncode != 0
 
 
 def _validate_output(text: str) -> None:
@@ -288,10 +372,21 @@ def validate(image: str, revision: str) -> None:
     assert image_inspect["Architecture"] == "arm64" and image_inspect["Os"] == "linux"
     assert image_inspect["Config"]["User"] == "65532:65532"
     assert image_inspect["Config"]["Entrypoint"] == ENTRYPOINT
+    assert image_inspect["Config"]["Labels"] == {
+        "org.opencontainers.image.created": "2026-07-20T00:00:00Z",
+        "org.opencontainers.image.description": (
+            "MyCogni networkless synthetic Chromium boundary probe"
+        ),
+        "org.opencontainers.image.revision": revision,
+        "org.opencontainers.image.source": "https://github.com/Ninja91/MyCogni",
+        "org.opencontainers.image.title": "MyCogni browser boundary probe",
+        "org.opencontainers.image.version": "0.0.0",
+    }
 
     project = f"mycogni-browser-{uuid4().hex}"
     assert PROJECT.fullmatch(project) and _container_ids(project) == []
     owned: list[str] = []
+    diagnostics: list[str] = []
     try:
         _compose(image, project, "create", "--no-build")
         owned = _container_ids(project)
@@ -303,11 +398,12 @@ def validate(image: str, revision: str) -> None:
         stopped = _one_inspect("container", owned[0])
         assert stopped["State"]["ExitCode"] == 0 and stopped["State"]["OOMKilled"] is False
         _validate_inspect(stopped, image, revision, project)
-        _validate_sources(image, revision)
-        _validate_outer_denials(image)
+        _validate_sources(image, revision, project, diagnostics)
+        _validate_outer_denials(image, project, diagnostics)
+        _validate_timeout_cleanup(image, project, diagnostics)
     finally:
-        _cleanup(owned + [item for item in _container_ids(project) if item not in owned])
-    assert _container_ids(project) == []
+        _cleanup(project, owned + diagnostics)
+    assert _container_ids(project) == [] and _diagnostic_ids(project) == []
 
 
 if __name__ == "__main__":

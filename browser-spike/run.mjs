@@ -258,6 +258,13 @@ try {
   if (processEvidence.some(process => process.status.Seccomp !== "2")) {
     throw new Error("Chromium process escaped seccomp filtering");
   }
+  for (const process of processEvidence) {
+    for (const field of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) {
+      if (!/^0+$/.test(process.status[field])) {
+        throw new Error(`Chromium process capability set is nonzero: ${field}`);
+      }
+    }
+  }
   if (processEvidence.some(process => process.status.NoNewPrivs !== "1")) {
     throw new Error("Chromium process escaped no-new-privileges");
   }

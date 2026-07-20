@@ -122,6 +122,92 @@ def test_runtime_output_rejects_weakened_renderer_evidence(field: str, value: ob
         validator._validate_output(json.dumps(output))
 
 
+def test_diagnostic_name_is_registered_before_client_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator = _runtime_validator()
+    project = "mycogni-browser-" + "a" * 32
+    registered: list[str] = []
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(
+        arguments: list[str], *, check: bool = True, timeout: float = 30
+    ) -> subprocess.CompletedProcess[str]:
+        del check
+        calls.append((arguments, timeout))
+        if arguments[:3] == ["docker", "container", "inspect"]:
+            return subprocess.CompletedProcess(arguments, 1, "", "missing")
+        if arguments[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(arguments, timeout)
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(validator, "_run", fake_run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        validator._safe_diagnostic(
+            "sha256:" + "b" * 64,
+            project,
+            registered,
+            "/bin/sh",
+            "-ceu",
+            "sleep 60",
+            timeout=0.25,
+        )
+    name = f"{project}-diag-1"
+    assert registered == [name]
+    run_arguments = calls[-1][0]
+    assert "--rm" not in run_arguments
+    assert run_arguments[run_arguments.index("--name") + 1] == name
+    assert run_arguments[run_arguments.index("--label") + 1] == (
+        f"{validator.DIAGNOSTIC_LABEL}={project}"
+    )
+
+
+def test_cleanup_removes_only_owned_timeout_survivor(monkeypatch: pytest.MonkeyPatch) -> None:
+    validator = _runtime_validator()
+    project = "mycogni-browser-" + "c" * 32
+    name = f"{project}-diag-1"
+    container_id = "d" * 64
+    alive = True
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(validator, "_container_ids", lambda _: [])
+    monkeypatch.setattr(validator, "_diagnostic_ids", lambda _: [container_id] if alive else [])
+
+    def fake_run(
+        arguments: list[str], *, check: bool = True, timeout: float = 30
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal alive
+        del check, timeout
+        calls.append(arguments)
+        if arguments[:3] == ["docker", "container", "inspect"]:
+            if not alive:
+                return subprocess.CompletedProcess(arguments, 1, "", "missing")
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": container_id,
+                            "Config": {"Labels": {validator.DIAGNOSTIC_LABEL: project}},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if arguments[:3] == ["docker", "container", "stop"]:
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:3] == ["docker", "container", "rm"]:
+            alive = False
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(validator, "_run", fake_run)
+    validator._cleanup(project, [name])
+    assert not alive
+    assert any(call[:4] == ["docker", "container", "rm", "--force"] for call in calls)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -189,6 +275,19 @@ def test_dockerfile_rejects_unpinned_or_broadened_image() -> None:
         source + "\nCOPY . /opt/mycogni-browser/context\n",
         source + "\nUSER root\n",
         source + '\nCMD ["--no-sandbox"]\n',
+        source.replace(
+            'org.opencontainers.image.revision="${VCS_REF}"',
+            'org.opencontainers.image.licenses="Apache-2.0" '
+            'org.opencontainers.image.revision="${VCS_REF}"',
+        ),
     ):
         with pytest.raises(AssertionError):
             validator.validate_dockerfile_text(mutation)
+
+
+def test_runner_rejects_forbidden_flag_inserted_inside_launch_options() -> None:
+    validator = _validator()
+    source = validator.RUNNER.read_text(encoding="utf-8")
+    mutated = source.replace("  headless: true,", '  headless: true,\n  args: ["--no-sandbox"],', 1)
+    with pytest.raises(AssertionError):
+        validator.validate_runner_text(mutated)

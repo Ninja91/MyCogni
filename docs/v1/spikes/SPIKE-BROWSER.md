@@ -26,6 +26,10 @@ seccomp bytes, and normalized Compose policy. Mutation tests safely render alter
 models; they never launch weakened containers. The live verifier requires an exact
 local `sha256:` image ID, exact Git revision label/source bytes, native arm64,
 effective Docker inspect values, exact JSON, bounded wall time, and exact cleanup.
+Its diagnostics receive invocation-derived names and ownership labels before
+launch; a deliberate client-timeout test proves the surviving container is found,
+stopped, removed, and absent by both name and ID. This runtime evidence is not a
+supply-chain attestation.
 
 Inside the fixed run, CDP identifies the active renderer PID. The probe compares
 `/proc` namespace links, root device/inode and image-sentinel visibility, capability

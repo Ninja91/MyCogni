@@ -142,6 +142,19 @@ def validate_runner_text(text: str) -> None:
     assert text.count("chromium.launch(") == 1
     launch = text.split("chromium.launch(", 1)[1].split("});", 1)[0]
     assert "FORBIDDEN_SANDBOX_FLAGS" not in launch
+    for flag in (
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-seccomp-filter-sandbox",
+        "--disable-namespace-sandbox",
+        "--disable-gpu-sandbox",
+        "--single-process",
+        "--in-process-gpu",
+        "--no-zygote",
+        "--no-zygote-sandbox",
+    ):
+        assert flag not in launch
+    assert "Chromium process capability set is nonzero" in text
 
 
 def validate_dockerfile_text(text: str) -> None:
@@ -173,6 +186,16 @@ def validate_dockerfile_text(text: str) -> None:
     assert "COPY ." not in text and "ADD " not in text and "VOLUME " not in text
     assert "EXPOSE " not in text and "HEALTHCHECK " not in text and "CMD " not in text
     assert "--no-sandbox" not in text and "SYS_ADMIN" not in text
+    assert "org.opencontainers.image.licenses" not in text
+    for label in (
+        'org.opencontainers.image.created="${BUILD_CREATED}"',
+        'org.opencontainers.image.description="MyCogni networkless synthetic Chromium boundary probe"',
+        'org.opencontainers.image.revision="${VCS_REF}"',
+        'org.opencontainers.image.source="https://github.com/Ninja91/MyCogni"',
+        'org.opencontainers.image.title="MyCogni browser boundary probe"',
+        'org.opencontainers.image.version="${VERSION}"',
+    ):
+        assert text.count(label) == 1
 
 
 def validate_runner() -> None:

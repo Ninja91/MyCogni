@@ -6,7 +6,6 @@ ARG VCS_REF="unknown"
 
 LABEL org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.description="MyCogni networkless synthetic Chromium boundary probe" \
-      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="https://github.com/Ninja91/MyCogni" \
       org.opencontainers.image.title="MyCogni browser boundary probe" \
