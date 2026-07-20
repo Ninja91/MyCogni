@@ -154,7 +154,8 @@ def validate_runner_text(text: str) -> None:
         "--no-zygote-sandbox",
     ):
         assert flag not in launch
-    assert "Chromium process capability set is nonzero" in text
+    assert "Chromium process active capability set is nonzero" in text
+    assert "Chromium browser process bounding capability set is nonzero" in text
 
 
 def validate_dockerfile_text(text: str) -> None:

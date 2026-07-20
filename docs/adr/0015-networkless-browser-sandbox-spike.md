@@ -53,7 +53,12 @@ Acceptance evidence must correlate the active renderer PID through CDP and prove
 renderer user/PID/network namespaces differ from the Node/browser process; its
 root device/inode differs and cannot see the outer image sentinel; it has an
 additional seccomp filter; no supported launch argument disables a sandbox; the
-private shared-memory mount is used; and all outer capability sets are zero.
+private shared-memory mount is used; all active Chromium capability sets are zero;
+and all five capability sets, including the bounding set, are zero for the outer
+Node and Chromium browser processes. A renderer may have a nonzero `CapBnd`
+inside its nested user namespace; requiring that namespace-scoped set to be zero
+would contradict the internal chroot sandbox this spike is proving and is not a
+claim of host capability.
 
 ## Consequences and residual risk
 

@@ -315,6 +315,8 @@ def _validate_output(text: str) -> None:
     )
     assert value["chromiumSandboxRequested"] is True and value["rendererObserved"] is True
     assert value["privateShmUsed"] is True and value["outerCapabilitiesZero"] is True
+    assert value["chromiumActiveCapabilitiesZero"] is True
+    assert value["browserBoundingCapabilitiesZero"] is True
     assert value["seccompFiltered"] is True and value["chromiumInternalSeccompFilterAdded"] is True
     assert value["noNewPrivileges"] is True and value["uid"] == 65532
     assert value["allowedLoopbackRequests"] == 1 and value["browserAlternateRequestsDenied"] is True
@@ -334,6 +336,7 @@ def _validate_output(text: str) -> None:
         "rendererMountNamespaceShared": True,
         "rendererRootDistinctOrInaccessible": True,
         "rendererRootDisposition": "distinct-dev-inode",
+        "rendererBoundingCapabilities": "000001ffffffffff",
     }
     assert len(value["socketDenials"]) == 8
     assert all(item["denied"] is True for item in value["socketDenials"])

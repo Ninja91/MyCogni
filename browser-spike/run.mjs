@@ -259,11 +259,14 @@ try {
     throw new Error("Chromium process escaped seccomp filtering");
   }
   for (const process of processEvidence) {
-    for (const field of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) {
+    for (const field of ["CapInh", "CapPrm", "CapEff", "CapAmb"]) {
       if (!/^0+$/.test(process.status[field])) {
-        throw new Error(`Chromium process capability set is nonzero: ${field}`);
+        throw new Error(`Chromium process active capability set is nonzero: ${field}`);
       }
     }
+  }
+  if (!/^0+$/.test(browserProcess.status.CapBnd)) {
+    throw new Error("Chromium browser process bounding capability set is nonzero");
   }
   if (processEvidence.some(process => process.status.NoNewPrivs !== "1")) {
     throw new Error("Chromium process escaped no-new-privileges");
@@ -324,6 +327,7 @@ try {
     rendererMountNamespaceShared: renderer.namespaces.mnt === nodeNamespaces.mnt,
     rendererRootDistinctOrInaccessible: true,
     rendererRootDisposition,
+    rendererBoundingCapabilities: renderer.status.CapBnd,
   };
   await new Promise(resolve => setTimeout(resolve, 1000));
   await context.close();
@@ -364,6 +368,8 @@ process.stdout.write(`${JSON.stringify({
   sandbox: sandboxEvidence,
   cgroup,
   outerCapabilitiesZero: true,
+  chromiumActiveCapabilitiesZero: true,
+  browserBoundingCapabilitiesZero: true,
   noSandboxFlagAbsent: true,
   privateShmUsed: true,
   seccompFiltered: true,

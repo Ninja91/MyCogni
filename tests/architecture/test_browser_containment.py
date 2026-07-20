@@ -72,9 +72,12 @@ def _valid_runtime_output() -> dict[str, object]:
             "rendererMountNamespaceShared": True,
             "rendererRootDistinctOrInaccessible": True,
             "rendererRootDisposition": "distinct-dev-inode",
+            "rendererBoundingCapabilities": "000001ffffffffff",
         },
         "cgroup": {"cpuMax": "100000 100000", "memoryMax": "1073741824", "pidsMax": "128"},
         "outerCapabilitiesZero": True,
+        "chromiumActiveCapabilitiesZero": True,
+        "browserBoundingCapabilitiesZero": True,
         "noSandboxFlagAbsent": True,
         "privateShmUsed": True,
         "seccompFiltered": True,
@@ -118,6 +121,17 @@ def test_runtime_output_rejects_weakened_renderer_evidence(field: str, value: ob
     validator = _runtime_validator()
     output = _valid_runtime_output()
     output["sandbox"][field] = value  # type: ignore[index]
+    with pytest.raises(AssertionError):
+        validator._validate_output(json.dumps(output))
+
+
+@pytest.mark.parametrize(
+    "field", ["chromiumActiveCapabilitiesZero", "browserBoundingCapabilitiesZero"]
+)
+def test_runtime_output_rejects_nonzero_chromium_capabilities(field: str) -> None:
+    validator = _runtime_validator()
+    output = _valid_runtime_output()
+    output[field] = False
     with pytest.raises(AssertionError):
         validator._validate_output(json.dumps(output))
 
@@ -256,6 +270,8 @@ def test_seccomp_profile_is_byte_pinned_and_default_deny() -> None:
         'serviceWorkers: "block"',
         "acceptDownloads: false",
         '"--disable-seccomp-filter-sandbox"',
+        "Chromium process active capability set is nonzero",
+        "Chromium browser process bounding capability set is nonzero",
         'denySocket("1.1.1.1", 443)',
     ],
 )
