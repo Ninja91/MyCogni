@@ -23,15 +23,17 @@ canaries; epoch substitution; pre-lock fork refusal even with an inherited held 
 pre-open hardlink rejection without mutation, unchanged-denial no-write,
 finite non-poisoning contention, post-commit poison/idempotent close, maximum
 frame/generation rejection; duplicate/noncanonical JSON; impossible authenticated
-lifecycle/time/tombstone/quota state; and extreme-clock rollback/poison handling.
+lifecycle/time/tombstone/quota state; writer-byte rejection of alternate datetime
+and base64 spellings plus record/evidence/tombstone order; acknowledged
+commit-after-terminal rejection; and extreme-clock rollback/poison handling.
 
 Both locked Python 3.12.12 and 3.13.11 lanes reported:
 
 ```text
 ruff: all checks passed
 mypy: success, 8 source files
-runner + containment + connector SDK + safety guard: 901 passed
-  persistent adapter: 23 passed
+runner + containment + connector SDK + safety guard: 908 passed
+  persistent adapter: 30 passed
   rendered/Dockerfile/runtime containment mutations: 35 passed
 ```
 
@@ -46,15 +48,27 @@ reported 71 passed.
 ## Exact local Docker evidence
 
 Docker Desktop 4.82.0 / Engine 29.6.1 on native linux/arm64 built implementation
-commit `4fcc4c98b1c703046c2a4d11ef1dd269fe52de5e` with
-`BUILD_CREATED=2026-07-19T00:00:00Z` as exact local image ID:
+commit `60925f1e2ffcb0dd7cb39bfb538d57c5ef909ae1` twice from separate
+`--no-cache` invocations. Both builds used
+`SOURCE_DATE_EPOCH=1784419200`, `BUILD_CREATED=2026-07-19T00:00:00Z`,
+explicitly disabled SBOM/provenance attestations, and the Docker archive exporter
+with `rewrite-timestamp=true`. After separate `docker load` operations, both
+tags resolved to the same exact local image ID:
 
 ```text
-sha256:4b3d6f7ce8c3fa673d8a08b9bfd7d22a5e273879bf97e0553a2161e9e5e656fb
+sha256:dd64aac7627f4419a6f9425988231d7da7d4133b0d2a0bf5b34e51128573ca04
 ```
 
-The image revision label exactly matched that implementation commit. The
-machine runtime verifier reported UID 65532, schema 1, mailbox state created,
+Both BuildKit metadata files recorded config digest
+`sha256:1d4c3f2c1ed5efc4ac7feb0ed95fabca3dc7ae84115366141ebe53aac52c739a`.
+Inspection reported identical layer lists, config `Created` and OCI created
+label `2026-07-19T00:00:00Z`, and revision label exactly matching the
+implementation commit. Dist-info identity/license metadata is retained for both
+local packages; the build fails unless it finds exactly one nondeterministic
+uv-cache file and matching `RECORD` row per local distribution, removes each
+pair, and proves both are absent. Bytecode generation is disabled.
+
+The machine runtime verifier reported UID 65532, schema 1, mailbox state created,
 `recovery_required=false`, and denied DNS, host-gateway IPv4, metadata IPv4,
 public IPv4, public IPv6 (`2606:4700:4700::1111`) and ULA IPv6
 (`fd00:ec2::254`).
@@ -69,10 +83,11 @@ allowlist and no `mycogni` core import. Exported filesystem inventory found only
 runner mailbox Python sources below `services/` and byte-equal read-only
 `LICENSE`/`NOTICE` files.
 
-The invocation used random project
-`mycogni-runner-39ce4e8550574be7a9a67a5c126c17b5` and captured its exact
+The final source-bound invocation used random project
+`mycogni-runner-0e2732007dad4c449d771c7a44e289a8` and captured its exact
 container ID, generated volume name and Compose ownership labels. It removed
-only those resources and proved both absent. A stopped trusted-core sibling
+only those resources and proved both absent. A separate scoped-cleanup
+reproduction retained a stopped trusted-core sibling
 `f8ec482a08aba9bfc202682ac1e2ad791f846f46a8a86fca5ee1b11374cfa14d`
 under project `deploy` retained the same ID/project/service labels through the
 runner verification, and was then removed separately by its exact ID. This is
@@ -94,16 +109,41 @@ uv run --all-packages --frozen --python 3.13.11 python scripts/ci/claim_guard.py
 uv run --all-packages --frozen --python 3.13.11 python scripts/ci/site_guard.py
 uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/ci/test_governance_traceability.py tests/ci/test_claim_guard.py tests/ci/test_site_guard.py tests/ci/test_safety_guard.py
 
-docker buildx build --platform linux/arm64 --load \
-  --tag mycogni/runner-mailbox:local \
-  --build-arg VCS_REF=<exact-implementation-commit> \
+docker buildx build --no-cache --platform linux/arm64 \
+  --provenance=false --sbom=false \
+  --build-arg SOURCE_DATE_EPOCH=1784419200 \
+  --build-arg VCS_REF=60925f1e2ffcb0dd7cb39bfb538d57c5ef909ae1 \
   --build-arg BUILD_CREATED=2026-07-19T00:00:00Z \
+  --metadata-file /tmp/mycogni-runner-final-a.json \
+  --output type=docker,dest=/tmp/mycogni-runner-proof-a.tar,name=mycogni/runner-mailbox:proof-a,rewrite-timestamp=true \
   --file docker/Dockerfile.runner-mailbox .
-docker image inspect mycogni/runner-mailbox:local --format '{{.Id}}'
-python3 scripts/verify_runner_containment_runtime.py \
-  --image sha256:<exact-local-image-id> \
-  --revision <exact-implementation-commit>
+docker buildx build --no-cache --platform linux/arm64 \
+  --provenance=false --sbom=false \
+  --build-arg SOURCE_DATE_EPOCH=1784419200 \
+  --build-arg VCS_REF=60925f1e2ffcb0dd7cb39bfb538d57c5ef909ae1 \
+  --build-arg BUILD_CREATED=2026-07-19T00:00:00Z \
+  --metadata-file /tmp/mycogni-runner-final-b.json \
+  --output type=docker,dest=/tmp/mycogni-runner-proof-b.tar,name=mycogni/runner-mailbox:proof-b,rewrite-timestamp=true \
+  --file docker/Dockerfile.runner-mailbox .
+jq -e --slurp '.[0]["containerimage.config.digest"] == .[1]["containerimage.config.digest"] and .[0]["containerimage.digest"] == .[1]["containerimage.digest"]' \
+  /tmp/mycogni-runner-final-a.json /tmp/mycogni-runner-final-b.json
+jq '{"containerimage.config.digest": .["containerimage.config.digest"], "containerimage.digest": .["containerimage.digest"]}' \
+  /tmp/mycogni-runner-final-a.json /tmp/mycogni-runner-final-b.json
+docker load --input /tmp/mycogni-runner-proof-a.tar
+docker load --input /tmp/mycogni-runner-proof-b.tar
+docker image inspect mycogni/runner-mailbox:proof-a mycogni/runner-mailbox:proof-b \
+  --format '{{.Id}}|{{.Created}}|{{index .Config.Labels "org.opencontainers.image.created"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{json .RootFS.Layers}}'
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment_runtime.py \
+  --image sha256:dd64aac7627f4419a6f9425988231d7da7d4133b0d2a0bf5b34e51128573ca04 \
+  --revision 60925f1e2ffcb0dd7cb39bfb538d57c5ef909ae1
 ```
+
+Direct `--load` is intentionally not used for this proof because BuildKit rejects
+unpack together with `rewrite-timestamp=true`. The two archives have different
+tag/index metadata and are not claimed byte-equal; the loaded image identity,
+config metadata and layers are equal. Attestations are disabled explicitly so
+they cannot introduce a second manifest into this local image-identity proof;
+signed release SBOM/provenance remains a separate acceptance requirement.
 
 The runtime verifier refuses tags and generates a random project name per invocation. It checks
 the image revision label, entrypoint, absence of Compose environment injection,
@@ -116,8 +156,10 @@ container ID and volume name, and proves both are absent without project-wide
 
 ## Nonclaims
 
-Local Docker Desktop evidence is not multi-architecture publication, signature,
-SBOM/provenance, manifest freshness, rootless/user-namespace conformance,
+Local Docker Desktop evidence demonstrates a repeatable native-arm64 image
+identity for this exact implementation and build contract. It is not
+multi-architecture publication, signature, SBOM/provenance, manifest freshness,
+rootless/user-namespace conformance,
 physical power-loss qualification, backup recovery, external rollback detection,
 secure erasure, malicious connector cleanup, or connector OCI acceptance. Public
 IPv6 and ULA IPv6 are separate probes; neither is described as link-local.

@@ -44,11 +44,15 @@ Windows is unsupported.
 
 SQLite uses WAL, `synchronous=FULL`, foreign keys, trusted schema off, secure
 delete, memory temp storage and integrity checks. All nested authenticated
-frames, lifecycle/material relationships, time ordering, tombstone retention,
+frames, lifecycle/material relationships, time ordering (including committed
+result no later than acknowledged terminal time), tombstone retention,
 credential uniqueness, per-record budgets and global counters/ceilings are
-validated before public use. Canonical JSON v1 rejects duplicate, unknown or
-missing fields, booleans as integers, nonfinite numbers, noncanonical encoding
-and unknown versions. There is no in-place
+validated before public use. After semantic decoding, the authenticated
+plaintext must equal the current writer's exact encoded bytes; alternate
+datetime/base64 spellings and record, evidence or tombstone ordering therefore
+fail closed even when they decode to the same values. Canonical JSON v1 rejects
+duplicate, unknown or missing fields, booleans as integers, nonfinite numbers,
+noncanonical encoding and unknown versions. There is no in-place
 migration: a future format requires a separately reviewed, offline, paused
 migration with backup and rollback evidence.
 
@@ -69,6 +73,15 @@ ownership labels and removes only exact resources created by that invocation.
 The synthetic probe attempts denied
 DNS, host-gateway, metadata, public IPv4, public IPv6 and ULA IPv6 connections.
 
+For the local image-identity proof, BuildKit receives a fixed
+`SOURCE_DATE_EPOCH`, fixed OCI created label and exact source revision; bytecode
+is disabled and only uv's asserted nondeterministic local-package cache entries
+plus matching `RECORD` rows are normalized away. Two separate no-cache builds
+use the timestamp-rewriting Docker archive exporter with SBOM/provenance
+attestations explicitly disabled, are loaded separately, and must yield the
+same image ID, config creation time, labels and layers. Release attestations are
+a separate artifact and acceptance boundary.
+
 ## Consequences
 
 Restart and independent-process state transitions now have an executable
@@ -76,6 +89,9 @@ durability boundary. Whole-frame rewrite keeps the authenticated format simple
 and atomic but amplifies changed writes; bounded quotas cap frame size, and
 unchanged denials avoid that cost. One named volume is intentionally writable.
 The image is a synthetic mailbox probe, not a network service or connector.
+The demonstrated reproducibility claim is limited to the exact native-arm64
+local image contract; it does not cover differently tagged archive bytes,
+multi-architecture indexes or signed release artifacts.
 
 Whole-database rollback remains undetectable without an external monotonic
 checkpoint. Restore-epoch mismatch intentionally fails closed; backup/restore

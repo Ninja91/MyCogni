@@ -220,9 +220,11 @@ overflow without shortening replay retention.
   guaranteed zeroized.
 - SHA-256 credential digests assume uniformly random credentials; they are not a
   password KDF.
-- No signature, SBOM, provenance, published-manifest freshness, revocation,
-  authorization or registry lookup is verified here; the local smoke does bind
-  and inspect one exact local image ID.
+- No signature, release SBOM/provenance, published-manifest freshness,
+  revocation, authorization or registry lookup is verified here. Two separate
+  no-cache native-arm64 builds with fixed source epoch/labels and explicit
+  attestation exclusion reproduce one exact local image ID; archive tag/index
+  bytes and multi-architecture release artifacts remain nonclaims.
 - A separate synthetic mailbox-artifact Compose smoke has local Docker evidence for read-only root,
   default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
   namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
