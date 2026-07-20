@@ -23,9 +23,43 @@ pre-open hardlink rejection without mutation, unchanged-denial no-write,
 finite non-poisoning contention, post-commit poison/idempotent close, maximum
 frame rejection and finite generation/key-rotation exhaustion.
 
-Current locked-lane counts are populated only from commands below; the exact
-source-bound Docker image ID and runtime transcript are recorded after the
-implementation commit is built with its exact revision label.
+Both locked Python 3.12.12 and 3.13.11 lanes reported:
+
+```text
+ruff: all checks passed
+mypy: success, 8 source files
+runner + containment + connector SDK + safety guard: 884 passed
+  persistent adapter: 15 passed
+  rendered/Dockerfile containment mutations: 26 passed
+```
+
+The canonical governance report was regenerated. Governance, architecture
+claim and site guards passed; the focused governance/claim/site/safety suite
+reported 71 passed.
+
+## Exact local Docker evidence
+
+Docker Desktop 4.82.0 / Engine 29.6.1 on native linux/arm64 built implementation
+commit `ef379f924962a83dbee2ecd0ebd91722eb1f3368` as exact local image ID:
+
+```text
+sha256:143d871681ab395f1a658c245a0a3af5f1847f6bf6642ce7b4094f93702f4550
+```
+
+The image revision label exactly matched that implementation commit. The
+machine runtime verifier reported UID 65532, schema 1, mailbox state created,
+`recovery_required=false`, and denied DNS, host-gateway IPv4, metadata IPv4,
+public IPv4, public IPv6 (`2606:4700:4700::1111`) and ULA IPv6
+(`fd00:ec2::254`).
+
+Container inspect matched the exact image ID and image-owned entrypoint/env,
+with no Compose environment injection; non-root user; read-only root;
+network-none; private IPC/cgroup and Engine-default private PID namespaces;
+drop-all capabilities; no-new-privileges; active seccomp sentinel; 64 PIDs,
+1 CPU and 512 MiB limits; no restart; only the runner state volume and bounded
+noexec/nosuid/nodev tmpfs. The verifier removed the container and volume and
+asserted that neither remained. This is local unsigned evidence, not a published
+artifact digest or multi-architecture connector acceptance.
 
 ## Reproduction
 
