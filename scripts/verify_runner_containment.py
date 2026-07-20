@@ -7,8 +7,12 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, NamedTuple
+
+if sys.flags.optimize != 0:
+    raise SystemExit("runner containment verification requires unoptimized Python")
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "deploy/compose.runner-mailbox-smoke.yml"
@@ -160,6 +164,10 @@ def validate_dockerfile(text: str) -> None:
         DockerInstruction(
             "RUN",
             "uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime "
+            "&& for activation in /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+            "_virtualenv.pth /opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+            "_virtualenv.py; do test -f \"$activation\"; rm \"$activation\"; "
+            "test ! -e \"$activation\"; done "
             "&& PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c \"import importlib.util; "
             "assert importlib.util.find_spec('connector_protocol') is not None; "
             "assert importlib.util.find_spec('mycogni_runner_mailbox_runtime') is not None; "
@@ -217,8 +225,9 @@ def validate_dockerfile(text: str) -> None:
         DockerInstruction("USER", "65532:65532"),
         DockerInstruction(
             "ENTRYPOINT",
-            '["/opt/mycogni-runner/.venv/bin/python", "-m", '
-            '"mycogni_runner_mailbox_runtime.container_probe"]',
+            '["/opt/mycogni-runner/.venv/bin/python", "-I", "-S", '
+            '"/opt/mycogni-runner/.venv/lib/python3.12/site-packages/'
+            'mycogni_runner_mailbox_runtime/bootstrap.py"]',
         ),
         DockerInstruction("CMD", '["--state", "/var/lib/mycogni-runner/probe.sqlite"]'),
     ]

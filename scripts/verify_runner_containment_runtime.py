@@ -9,10 +9,16 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tarfile
+from email.parser import BytesParser
+from email.policy import default
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
+
+if sys.flags.optimize != 0:
+    raise SystemExit("runner containment verification requires unoptimized Python")
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "deploy/compose.runner-mailbox-smoke.yml"
@@ -21,8 +27,10 @@ VOLUME_KEY = "runner-mailbox-state"
 STATE_TARGET = "/var/lib/mycogni-runner"
 ENTRYPOINT = [
     "/opt/mycogni-runner/.venv/bin/python",
-    "-m",
-    "mycogni_runner_mailbox_runtime.container_probe",
+    "-I",
+    "-S",
+    "/opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+    "mycogni_runner_mailbox_runtime/bootstrap.py",
 ]
 COMMAND = ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
 EXPECTED_DISTRIBUTIONS = [
@@ -52,11 +60,65 @@ LOCAL_PACKAGE_FILES = {
     ),
     "mycogni_runner_mailbox_runtime": (
         "packages/mycogni-runner-mailbox-runtime/src/mycogni_runner_mailbox_runtime",
-        ("__init__.py", "container_probe.py", "py.typed"),
+        ("__init__.py", "bootstrap.py", "container_probe.py", "py.typed"),
+    ),
+}
+EXPECTED_SITE_PACKAGES = {
+    "annotated_types",
+    "annotated_types-0.7.0.dist-info",
+    "cffi",
+    "cffi-2.1.0.dist-info",
+    "connector_protocol",
+    "cryptography",
+    "cryptography-46.0.7.dist-info",
+    "mycogni_connector_sdk-0.0.0.dist-info",
+    "mycogni_runner_mailbox_runtime",
+    "mycogni_runner_mailbox_runtime-0.0.0.dist-info",
+    "pycparser",
+    "pycparser-3.0.dist-info",
+    "pydantic",
+    "pydantic-2.13.4.dist-info",
+    "pydantic_core",
+    "pydantic_core-2.46.4.dist-info",
+    "typing_extensions-4.16.0.dist-info",
+    "typing_extensions.py",
+    "typing_inspection",
+    "typing_inspection-0.4.2.dist-info",
+}
+ARCHITECTURE_EXTENSIONS = {
+    "amd64": "_cffi_backend.cpython-312-x86_64-linux-gnu.so",
+    "arm64": "_cffi_backend.cpython-312-aarch64-linux-gnu.so",
+}
+LOCAL_DISTRIBUTION_METADATA = {
+    "mycogni_connector_sdk-0.0.0.dist-info": "mycogni-connector-sdk",
+    "mycogni_runner_mailbox_runtime-0.0.0.dist-info": (
+        "mycogni-runner-mailbox-runtime"
     ),
 }
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 PROJECT = re.compile(r"^mycogni-runner-[0-9a-f]{32}$")
+
+
+def _expected_site_packages(architecture: str) -> set[str]:
+    assert architecture in ARCHITECTURE_EXTENSIONS, "unsupported image architecture"
+    return EXPECTED_SITE_PACKAGES | {ARCHITECTURE_EXTENSIONS[architecture]}
+
+
+def _site_package_regular_files(architecture: str) -> set[str]:
+    return {"typing_extensions.py", ARCHITECTURE_EXTENSIONS[architecture]}
+
+
+def _git_environment() -> dict[str, str]:
+    environment = {
+        key: os.environ[key]
+        for key in ("LANG", "LC_ALL", "LC_CTYPE", "PATH")
+        if key in os.environ
+    }
+    environment.setdefault("PATH", "/usr/bin:/bin")
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    return environment
 
 
 def _run(arguments: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -197,26 +259,62 @@ def _validate_inspect(
     assert mount["RW"] is True
 
 
-def _git_object_bytes(revision: str, path: str) -> bytes:
+def _require_git_commit(revision: str) -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
     result = subprocess.run(
-        ["git", "show", f"{revision}:{path}"],
+        ["git", "--no-replace-objects", "cat-file", "-t", revision],
         cwd=ROOT,
         check=True,
         capture_output=True,
+        env=_git_environment(),
+    )
+    assert result.stdout == b"commit\n", "revision must name an exact Git commit object"
+
+
+def _git_object_bytes(revision: str, path: str) -> bytes:
+    _require_git_commit(revision)
+    result = subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "cat-file",
+            "blob",
+            f"{revision}:{path}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        env=_git_environment(),
     )
     return result.stdout
 
 
-def _validate_exported_filesystem(exported: bytes, revision: str) -> None:
+def _validate_exported_filesystem(
+    exported: bytes, revision: str, architecture: str
+) -> None:
+    _require_git_commit(revision)
+    expected_site_packages = _expected_site_packages(architecture)
+    site_package_regular_files = _site_package_regular_files(architecture)
     with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
         members: dict[str, tarfile.TarInfo] = {}
         for item in archive.getmembers():
             name = item.name.removeprefix("./").rstrip("/")
             assert name and name not in members, "export contains duplicate paths"
             members[name] = item
+        application_root = "opt/mycogni-runner"
+        expected_root_children = {".venv", "LICENSE", "NOTICE", "services"}
+        assert application_root in members and members[application_root].isdir()
+        root_path = PurePosixPath(application_root)
+        actual_root_children = {
+            PurePosixPath(name).parts[len(root_path.parts)]
+            for name in members
+            if name.startswith(f"{application_root}/")
+        }
+        assert actual_root_children == expected_root_children
+        assert members[f"{application_root}/.venv"].isdir()
+        assert members[f"{application_root}/services"].isdir()
         for legal_file in ("LICENSE", "NOTICE"):
-            name = f"opt/mycogni-runner/{legal_file}"
+            name = f"{application_root}/{legal_file}"
             assert name in members and members[name].isreg()
             extracted = archive.extractfile(members[name])
             assert extracted is not None
@@ -241,6 +339,28 @@ def _validate_exported_filesystem(exported: bytes, revision: str) -> None:
             source_path = f"services/runner_mailbox/{source_file}"
             assert extracted.read() == _git_object_bytes(revision, source_path)
         site_packages = "opt/mycogni-runner/.venv/lib/python3.12/site-packages"
+        site_path = PurePosixPath(site_packages)
+        top_level = {
+            PurePosixPath(name).parts[len(site_path.parts)]
+            for name in members
+            if name.startswith(f"{site_packages}/")
+        }
+        assert top_level == expected_site_packages
+        for top_name in expected_site_packages:
+            member = members[f"{site_packages}/{top_name}"]
+            if top_name in site_package_regular_files:
+                assert member.isreg()
+            else:
+                assert member.isdir()
+        for dist_info, expected_name in LOCAL_DISTRIBUTION_METADATA.items():
+            metadata_path = f"{site_packages}/{dist_info}/METADATA"
+            assert metadata_path in members and members[metadata_path].isreg()
+            extracted = archive.extractfile(members[metadata_path])
+            assert extracted is not None
+            metadata = BytesParser(policy=default).parsebytes(extracted.read())
+            assert metadata["Name"] == expected_name
+            assert metadata["Version"] == "0.0.0"
+            assert metadata["License-Expression"] == "Apache-2.0"
         for package, (source_root, package_files) in LOCAL_PACKAGE_FILES.items():
             package_root = f"{site_packages}/{package}"
             expected_package_paths = {package_root} | {
@@ -266,14 +386,17 @@ def _validate_exported_filesystem(exported: bytes, revision: str) -> None:
             if name == "opt/mycogni-runner" or name.startswith("opt/mycogni-runner/"):
                 assert "__pycache__" not in path.parts
                 assert path.suffix not in {".pyc", ".pyo"}
+            if name.startswith(f"{site_packages}/"):
+                assert path.suffix != ".pth"
+                assert path.name not in {"sitecustomize.py", "usercustomize.py"}
         assert not any("mycogni" in PurePosixPath(name).parts for name in members)
 
 
-def _validate_filesystem(container_id: str, revision: str) -> None:
+def _validate_filesystem(container_id: str, revision: str, architecture: str) -> None:
     exported = subprocess.run(
         ["docker", "export", container_id], check=True, capture_output=True
     ).stdout
-    _validate_exported_filesystem(exported, revision)
+    _validate_exported_filesystem(exported, revision, architecture)
 
 
 def _validate_sentinel(output: str) -> dict[str, Any]:
@@ -282,6 +405,7 @@ def _validate_sentinel(output: str) -> dict[str, Any]:
     sentinel = json.loads(lines[0])
     assert sentinel == {
         "installed_distributions": EXPECTED_DISTRIBUTIONS,
+        "isolated_python": True,
         "mailbox_state_created": True,
         "network_denials": {
             "dns": True,
@@ -294,6 +418,7 @@ def _validate_sentinel(output: str) -> dict[str, Any]:
         "probe": "mycogni.runner_mailbox.container.v1",
         "recovery_required": False,
         "schema": 1,
+        "site_disabled": True,
         "uid": 65532,
     }
     return sentinel
@@ -316,11 +441,14 @@ def verify(image: str, revision: str, *, project: str | None = None) -> dict[str
         _validate_container_ownership(project_name, container_id)
         volume = _validate_volume_ownership(project_name, volume_name)
         image_inspect = _one_json(["docker", "image", "inspect", image])
+        architecture = image_inspect.get("Architecture")
+        assert isinstance(architecture, str)
+        _expected_site_packages(architecture)
         before = _one_json(["docker", "container", "inspect", container_id])
         _validate_inspect(
             before, image_inspect, image, revision, project_name, volume_name
         )
-        _validate_filesystem(container_id, revision)
+        _validate_filesystem(container_id, revision, architecture)
         started = _run(["docker", "start", "--attach", container_id])
         sentinel = _validate_sentinel(started.stdout)
         after = _one_json(["docker", "container", "inspect", container_id])
@@ -330,6 +458,7 @@ def verify(image: str, revision: str, *, project: str | None = None) -> dict[str
             after, image_inspect, image, revision, project_name, volume_name
         )
         return {
+            "architecture": architecture,
             "container_id": container_id,
             "image": image,
             "project": project_name,

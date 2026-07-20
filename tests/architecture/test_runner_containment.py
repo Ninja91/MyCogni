@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import subprocess
+import sys
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
@@ -33,6 +35,20 @@ def _runtime_validator() -> ModuleType:
     return module
 
 
+def _runtime_bootstrap() -> ModuleType:
+    root = Path(__file__).resolve().parents[2]
+    path = (
+        root
+        / "packages/mycogni-runner-mailbox-runtime/src/"
+        "mycogni_runner_mailbox_runtime/bootstrap.py"
+    )
+    spec = importlib.util.spec_from_file_location("runner_runtime_bootstrap", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _head_revision() -> str:
     root = Path(__file__).resolve().parents[2]
     return subprocess.run(
@@ -46,6 +62,39 @@ def _head_revision() -> str:
 
 def test_runner_containment_model_is_least_privilege() -> None:
     _validator().validate()
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["verify_runner_containment.py", "verify_runner_containment_runtime.py"],
+)
+@pytest.mark.parametrize("mode", ["flag", "environment"])
+def test_runner_verifiers_refuse_optimized_python_before_work(
+    script: str, mode: str
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    environment = dict(os.environ)
+    environment.pop("PYTHONOPTIMIZE", None)
+    command = [sys.executable]
+    if mode == "flag":
+        command.append("-O")
+    else:
+        environment["PYTHONOPTIMIZE"] = "1"
+    command.append(str(root / "scripts" / script))
+    completed = subprocess.run(
+        command,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "runner containment verification requires unoptimized Python\n"
+    )
 
 
 def test_dockerignore_has_exact_runner_sources_and_terminal_bytecode_denials() -> None:
@@ -152,10 +201,17 @@ def test_runtime_cleanup_names_only_owned_resources(
     assert "down" not in flattened and "remove-orphans" not in flattened
 
 
-def _synthetic_export(extra: dict[str, bytes | None] | None = None) -> bytes:
+def _synthetic_export(
+    extra: dict[str, bytes | None] | None = None,
+    *,
+    omit: set[str] | None = None,
+    architecture: str = "arm64",
+) -> bytes:
     root = Path(__file__).resolve().parents[2]
     runtime = _runtime_validator()
     entries: dict[str, bytes | None] = {
+        "opt/mycogni-runner": None,
+        "opt/mycogni-runner/.venv": None,
         "opt/mycogni-runner/services": None,
         "opt/mycogni-runner/services/runner_mailbox": None,
         "opt/mycogni-runner/LICENSE": (root / "LICENSE").read_bytes(),
@@ -170,6 +226,24 @@ def _synthetic_export(extra: dict[str, bytes | None] | None = None) -> bytes:
         }
     )
     site_packages = "opt/mycogni-runner/.venv/lib/python3.12/site-packages"
+    entries[site_packages] = None
+    expected_site_packages = runtime._expected_site_packages(architecture)
+    regular_files = runtime._site_package_regular_files(architecture)
+    entries.update(
+        {
+            f"{site_packages}/{name}": (
+                b"synthetic-extension" if name in regular_files else None
+            )
+            for name in expected_site_packages
+        }
+    )
+    for dist_info, name in runtime.LOCAL_DISTRIBUTION_METADATA.items():
+        entries[f"{site_packages}/{dist_info}/METADATA"] = (
+            "Metadata-Version: 2.4\n"
+            f"Name: {name}\n"
+            "Version: 0.0.0\n"
+            "License-Expression: Apache-2.0\n\n"
+        ).encode()
     for package, (source_root, package_files) in runtime.LOCAL_PACKAGE_FILES.items():
         package_root = f"{site_packages}/{package}"
         entries[package_root] = None
@@ -180,6 +254,8 @@ def _synthetic_export(extra: dict[str, bytes | None] | None = None) -> bytes:
             }
         )
     entries.update(extra or {})
+    for name in omit or set():
+        entries.pop(name)
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, payload in entries.items():
@@ -197,8 +273,41 @@ def _synthetic_export(extra: dict[str, bytes | None] | None = None) -> bytes:
 
 def test_runtime_export_accepts_only_reviewed_runner_sources() -> None:
     _runtime_validator()._validate_exported_filesystem(
-        _synthetic_export(), _head_revision()
+        _synthetic_export(), _head_revision(), "arm64"
     )
+
+
+def test_runtime_export_accepts_exact_amd64_extension_inventory() -> None:
+    _runtime_validator()._validate_exported_filesystem(
+        _synthetic_export(architecture="amd64"), _head_revision(), "amd64"
+    )
+
+
+def test_runtime_export_rejects_architecture_inventory_mismatch() -> None:
+    with pytest.raises(AssertionError):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(architecture="arm64"), _head_revision(), "amd64"
+        )
+
+
+def test_runtime_export_rejects_unsupported_architecture() -> None:
+    with pytest.raises(AssertionError, match="unsupported image architecture"):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(), _head_revision(), "riscv64"
+        )
+
+
+def test_bootstrap_keeps_stdlib_first_then_site_packages_then_application() -> None:
+    bootstrap = _runtime_bootstrap()
+    initial = list(bootstrap._expected_initial_path())
+    activated = bootstrap._sealed_path(
+        initial, isolated=1, no_site=1, site_loaded=False
+    )
+    assert activated == [
+        *initial,
+        "/opt/mycogni-runner/.venv/lib/python3.12/site-packages",
+        "/opt/mycogni-runner",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -217,12 +326,42 @@ def test_runtime_export_accepts_only_reviewed_runner_sources() -> None:
             "opt/mycogni-runner/.venv/lib/python3.12/site-packages/connector_protocol/"
             "unreviewed.py": b"dirty"
         },
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+            "sitecustomize.py": b"dirty"
+        },
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/"
+            "unexpected_module.py": b"dirty"
+        },
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/pydantic/"
+            "activation.pth": b"dirty"
+        },
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/pydantic/"
+            "usercustomize.py": b"dirty"
+        },
+        {
+            "opt/mycogni-runner/mycogni_runner_mailbox_runtime": None,
+            "opt/mycogni-runner/mycogni_runner_mailbox_runtime/"
+            "container_probe.py": b"forged-sentinel",
+        },
+        {"opt/mycogni-runner/mycogni_runner_mailbox_runtime.py": b"shadow"},
+        {"opt/mycogni-runner/unexpected-root-child": b"dirty"},
     ],
     ids=[
         "runner-pycache",
         "extra-runner-source",
         "local-package-pyc",
         "extra-local-package-source",
+        "top-level-sitecustomize",
+        "unexpected-top-level-module",
+        "nested-pth",
+        "nested-usercustomize",
+        "root-shadow-package",
+        "root-shadow-module",
+        "unexpected-root-child",
     ],
 )
 def test_runtime_export_rejects_dirty_or_unreviewed_files(
@@ -230,7 +369,7 @@ def test_runtime_export_rejects_dirty_or_unreviewed_files(
 ) -> None:
     with pytest.raises(AssertionError):
         _runtime_validator()._validate_exported_filesystem(
-            _synthetic_export(extra), _head_revision()
+            _synthetic_export(extra), _head_revision(), "arm64"
         )
 
 
@@ -250,8 +389,96 @@ def test_runtime_export_binds_checkout_files_to_exact_git_revision(
 ) -> None:
     with pytest.raises(AssertionError):
         _runtime_validator()._validate_exported_filesystem(
-            _synthetic_export(replacement), _head_revision()
+            _synthetic_export(replacement), _head_revision(), "arm64"
         )
+
+
+@pytest.mark.parametrize(
+    ("replacement", "omit"),
+    [
+        ({}, {"mycogni_connector_sdk-0.0.0.dist-info/METADATA"}),
+        (
+            {"mycogni_connector_sdk-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: wrong\nVersion: 0.0.0\nLicense-Expression: Apache-2.0\n\n"},
+            set(),
+        ),
+        (
+            {"mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 9.9.9\nLicense-Expression: Apache-2.0\n\n"},
+            set(),
+        ),
+        (
+            {"mycogni_runner_mailbox_runtime-0.0.0.dist-info/METADATA": b"Metadata-Version: 2.4\nName: mycogni-runner-mailbox-runtime\nVersion: 0.0.0\nLicense-Expression: Proprietary\n\n"},
+            set(),
+        ),
+    ],
+    ids=["missing", "wrong-name", "wrong-version", "wrong-license"],
+)
+def test_runtime_export_requires_exact_local_distribution_metadata(
+    replacement: dict[str, bytes], omit: set[str]
+) -> None:
+    site_packages = "opt/mycogni-runner/.venv/lib/python3.12/site-packages"
+    expanded = {f"{site_packages}/{name}": value for name, value in replacement.items()}
+    omitted = {f"{site_packages}/{name}" for name in omit}
+    with pytest.raises(AssertionError):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(expanded, omit=omitted), _head_revision(), "arm64"
+        )
+
+
+def test_runtime_export_rejects_tree_hash_as_revision() -> None:
+    root = Path(__file__).resolve().parents[2]
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    with pytest.raises(AssertionError, match="Git commit object"):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(), tree, "arm64"
+        )
+
+
+def test_git_object_binding_ignores_replace_refs_and_git_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+
+    def git(*arguments: str, env: dict[str, str] | None = None) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        ).stdout.strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Synthetic Reviewer")
+    git("config", "user.email", "reviewer@example.invalid")
+    payload = repository / "payload.txt"
+    payload.write_text("original\n", encoding="utf-8")
+    git("add", "payload.txt")
+    git("commit", "--quiet", "-m", "original")
+    original = git("rev-parse", "HEAD")
+    payload.write_text("replacement\n", encoding="utf-8")
+    git("commit", "--quiet", "-am", "replacement")
+    replacement = git("rev-parse", "HEAD")
+    git("replace", original, replacement)
+    assert git("show", f"{original}:payload.txt") == "replacement"
+
+    unrelated = tmp_path / "unrelated"
+    git("init", "--quiet", str(unrelated))
+    monkeypatch.setenv("GIT_DIR", str(unrelated / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(unrelated))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.repositoryformatversion")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "999")
+    validator = _runtime_validator()
+    monkeypatch.setattr(validator, "ROOT", repository)
+    assert validator._git_object_bytes(original, "payload.txt") == b"original\n"
 
 
 @pytest.mark.parametrize(

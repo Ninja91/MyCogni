@@ -14,6 +14,7 @@ import json
 import os
 import signal
 import socket
+import sys
 from importlib import metadata
 from pathlib import Path
 from typing import NoReturn
@@ -66,6 +67,8 @@ def _dns_denied() -> bool:
 
 
 def run(state_path: Path) -> dict[str, object]:
+    if sys.flags.isolated != 1 or sys.flags.no_site != 1 or "site" in sys.modules:
+        raise RuntimeError("runner probe requires isolated no-site Python")
     if os.getuid() != 65532:
         raise RuntimeError("runner probe requires the unprivileged runtime uid")
     status = Path("/proc/self/status").read_text(encoding="utf-8")
@@ -115,12 +118,14 @@ def run(state_path: Path) -> dict[str, object]:
     )
     repository.close()
     return {
+        "isolated_python": True,
         "mailbox_state_created": state_path.is_file(),
         "installed_distributions": distributions,
         "network_denials": probes,
         "probe": "mycogni.runner_mailbox.container.v1",
         "recovery_required": repository.recovery_required,
         "schema": 1,
+        "site_disabled": True,
         "uid": os.getuid(),
     }
 

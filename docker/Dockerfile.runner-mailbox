@@ -22,6 +22,13 @@ COPY packages/mycogni-runner-mailbox-runtime ./packages/mycogni-runner-mailbox-r
 COPY services/runner_mailbox ./services/runner_mailbox
 
 RUN uv sync --frozen --no-dev --no-editable --package mycogni-runner-mailbox-runtime \
+    && for activation in \
+        /opt/mycogni-runner/.venv/lib/python3.12/site-packages/_virtualenv.pth \
+        /opt/mycogni-runner/.venv/lib/python3.12/site-packages/_virtualenv.py; do \
+        test -f "$activation"; \
+        rm "$activation"; \
+        test ! -e "$activation"; \
+    done \
     && PYTHONPATH=/build /opt/mycogni-runner/.venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('connector_protocol') is not None; assert importlib.util.find_spec('mycogni_runner_mailbox_runtime') is not None; assert importlib.util.find_spec('services.runner_mailbox') is not None; assert importlib.util.find_spec('mycogni') is None" \
     && for dist_info in \
         /opt/mycogni-runner/.venv/lib/python3.12/site-packages/mycogni_connector_sdk-0.0.0.dist-info \
@@ -68,5 +75,5 @@ COPY --from=build /build/services /opt/mycogni-runner/services
 WORKDIR /var/lib/mycogni-runner
 USER 65532:65532
 
-ENTRYPOINT ["/opt/mycogni-runner/.venv/bin/python", "-m", "mycogni_runner_mailbox_runtime.container_probe"]
+ENTRYPOINT ["/opt/mycogni-runner/.venv/bin/python", "-I", "-S", "/opt/mycogni-runner/.venv/lib/python3.12/site-packages/mycogni_runner_mailbox_runtime/bootstrap.py"]
 CMD ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
