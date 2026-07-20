@@ -46,10 +46,11 @@ reported 71 passed.
 ## Exact local Docker evidence
 
 Docker Desktop 4.82.0 / Engine 29.6.1 on native linux/arm64 built implementation
-commit `ef379f924962a83dbee2ecd0ebd91722eb1f3368` as exact local image ID:
+commit `4fcc4c98b1c703046c2a4d11ef1dd269fe52de5e` with
+`BUILD_CREATED=2026-07-19T00:00:00Z` as exact local image ID:
 
 ```text
-sha256:143d871681ab395f1a658c245a0a3af5f1847f6bf6642ce7b4094f93702f4550
+sha256:4b3d6f7ce8c3fa673d8a08b9bfd7d22a5e273879bf97e0553a2161e9e5e656fb
 ```
 
 The image revision label exactly matched that implementation commit. The
@@ -63,9 +64,20 @@ with no Compose environment injection; non-root user; read-only root;
 network-none; private IPC/cgroup and Engine-default private PID namespaces;
 drop-all capabilities; no-new-privileges; active seccomp sentinel; 64 PIDs,
 1 CPU and 512 MiB limits; no restart; only the runner state volume and bounded
-noexec/nosuid/nodev tmpfs. The verifier removed the container and volume and
-asserted that neither remained. This is local unsigned evidence, not a published
-artifact digest or multi-architecture connector acceptance.
+noexec/nosuid/nodev tmpfs. Runtime metadata reported the exact ten-distribution
+allowlist and no `mycogni` core import. Exported filesystem inventory found only
+runner mailbox Python sources below `services/` and byte-equal read-only
+`LICENSE`/`NOTICE` files.
+
+The invocation used random project
+`mycogni-runner-39ce4e8550574be7a9a67a5c126c17b5` and captured its exact
+container ID, generated volume name and Compose ownership labels. It removed
+only those resources and proved both absent. A stopped trusted-core sibling
+`f8ec482a08aba9bfc202682ac1e2ad791f846f46a8a86fca5ee1b11374cfa14d`
+under project `deploy` retained the same ID/project/service labels through the
+runner verification, and was then removed separately by its exact ID. This is
+local unsigned evidence, not a published artifact digest or multi-architecture
+connector acceptance.
 
 ## Reproduction
 
