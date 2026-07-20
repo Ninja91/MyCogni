@@ -53,12 +53,15 @@ Acceptance evidence must correlate the active renderer PID through CDP and prove
 renderer user/PID/network namespaces differ from the Node/browser process; its
 root device/inode differs and cannot see the outer image sentinel; it has an
 additional seccomp filter; no supported launch argument disables a sandbox; the
-private shared-memory mount is used; all active Chromium capability sets are zero;
-and all five capability sets, including the bounding set, are zero for the outer
-Node and Chromium browser processes. A renderer may have a nonzero `CapBnd`
-inside its nested user namespace; requiring that namespace-scoped set to be zero
-would contradict the internal chroot sandbox this spike is proving and is not a
-claim of host capability.
+private shared-memory mount is used; and all five capability sets are zero for
+the outer Node, browser, no-zygote-sandbox zygote, GPU, and utility processes.
+Inside the nested user/PID/network namespace and distinct chroot, exactly one
+zygote may hold permitted/effective `CAP_SYS_ADMIN` (`0x200000`) with the exact
+observed bounding mask; its sibling zygote and renderer have zero active sets and
+the same namespace-scoped bounding mask. Unknown roles or capability patterns
+fail closed. The nested processes retain the known shared mount namespace, which
+is explicitly recorded and remains a P1 activation blocker. These internal
+namespace-scoped capabilities are not Docker `CapAdd` or host authority.
 
 ## Consequences and residual risk
 

@@ -73,11 +73,16 @@ def _valid_runtime_output() -> dict[str, object]:
             "rendererRootDistinctOrInaccessible": True,
             "rendererRootDisposition": "distinct-dev-inode",
             "rendererBoundingCapabilities": "000001ffffffffff",
+            "nestedZygoteBoundingCapabilities": "000001ffffffffff",
+            "nestedZygoteSysAdminCapabilities": "0000000000200000",
+            "nestedMountNamespaceShared": True,
         },
         "cgroup": {"cpuMax": "100000 100000", "memoryMax": "1073741824", "pidsMax": "128"},
         "outerCapabilitiesZero": True,
-        "chromiumActiveCapabilitiesZero": True,
+        "chromiumCapabilityRolesExact": True,
+        "outerChromiumCapabilitiesZero": True,
         "browserBoundingCapabilitiesZero": True,
+        "namespaceScopedZygoteSysAdminObserved": True,
         "noSandboxFlagAbsent": True,
         "privateShmUsed": True,
         "seccompFiltered": True,
@@ -115,6 +120,9 @@ def _valid_runtime_output() -> dict[str, object]:
         ("rendererPidNamespaceNested", False),
         ("rendererNetworkNamespaceNested", False),
         ("rendererRootDisposition", "same-root"),
+        ("nestedZygoteBoundingCapabilities", "0000000000000000"),
+        ("nestedZygoteSysAdminCapabilities", "0000000000000000"),
+        ("nestedMountNamespaceShared", False),
     ],
 )
 def test_runtime_output_rejects_weakened_renderer_evidence(field: str, value: object) -> None:
@@ -126,7 +134,13 @@ def test_runtime_output_rejects_weakened_renderer_evidence(field: str, value: ob
 
 
 @pytest.mark.parametrize(
-    "field", ["chromiumActiveCapabilitiesZero", "browserBoundingCapabilitiesZero"]
+    "field",
+    [
+        "chromiumCapabilityRolesExact",
+        "outerChromiumCapabilitiesZero",
+        "browserBoundingCapabilitiesZero",
+        "namespaceScopedZygoteSysAdminObserved",
+    ],
 )
 def test_runtime_output_rejects_nonzero_chromium_capabilities(field: str) -> None:
     validator = _runtime_validator()
@@ -270,8 +284,19 @@ def test_seccomp_profile_is_byte_pinned_and_default_deny() -> None:
         'serviceWorkers: "block"',
         "acceptDownloads: false",
         '"--disable-seccomp-filter-sandbox"',
-        "Chromium process active capability set is nonzero",
-        "Chromium browser process bounding capability set is nonzero",
+        'const NESTED_BOUNDING_CAP = "000001ffffffffff"',
+        'const NESTED_SYS_ADMIN_CAP = "0000000000200000"',
+        "outer Chromium browser capability set is nonzero",
+        "outer no-zygote-sandbox process escaped exact zero-capability policy",
+        "nested zygote capability set escaped exact allowlist",
+        "nested renderer escaped exact capability/boundary policy",
+        "unknown Chromium process role",
+        "process.namespaces.user !== browserProcess.namespaces.user",
+        "process.namespaces.pid !== browserProcess.namespaces.pid",
+        "process.namespaces.net !== browserProcess.namespaces.net",
+        "process.namespaces.mnt === browserProcess.namespaces.mnt",
+        "process.rootStat.dev !== browserProcess.rootStat.dev",
+        "outerZygote: 1, nestedZygoteZero: 1, nestedZygoteSysAdmin: 1",
         'denySocket("1.1.1.1", 443)',
     ],
 )

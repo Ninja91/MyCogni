@@ -258,16 +258,72 @@ try {
   if (processEvidence.some(process => process.status.Seccomp !== "2")) {
     throw new Error("Chromium process escaped seccomp filtering");
   }
+  const ZERO_CAP = "0000000000000000";
+  const NESTED_BOUNDING_CAP = "000001ffffffffff";
+  const NESTED_SYS_ADMIN_CAP = "0000000000200000";
+  const capabilityFields = ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"];
+  const exactCapabilities = (process, expected) => capabilityFields.every(
+    field => process.status[field] === expected[field]);
+  const allZero = process => capabilityFields.every(field => process.status[field] === ZERO_CAP);
+  const sameOuterBoundary = process => ["user", "mnt", "pid", "net"].every(
+    name => process.namespaces[name] === browserProcess.namespaces[name]) &&
+    process.rootStat.disposition === "visible" &&
+    process.rootStat.dev === browserProcess.rootStat.dev &&
+    process.rootStat.ino === browserProcess.rootStat.ino;
+  const nestedBoundary = process =>
+    process.namespaces.user !== browserProcess.namespaces.user &&
+    process.namespaces.pid !== browserProcess.namespaces.pid &&
+    process.namespaces.net !== browserProcess.namespaces.net &&
+    process.namespaces.mnt === browserProcess.namespaces.mnt &&
+    process.rootStat.disposition === "visible" &&
+    (process.rootStat.dev !== browserProcess.rootStat.dev ||
+      process.rootStat.ino !== browserProcess.rootStat.ino) &&
+    process.outerSentinel !== "visible";
+  const zeroNested = {
+    CapInh: ZERO_CAP, CapPrm: ZERO_CAP, CapEff: ZERO_CAP,
+    CapBnd: NESTED_BOUNDING_CAP, CapAmb: ZERO_CAP,
+  };
+  const sysAdminNested = {
+    CapInh: ZERO_CAP, CapPrm: NESTED_SYS_ADMIN_CAP, CapEff: NESTED_SYS_ADMIN_CAP,
+    CapBnd: NESTED_BOUNDING_CAP, CapAmb: ZERO_CAP,
+  };
+  if (!allZero(browserProcess)) {
+    throw new Error("outer Chromium browser capability set is nonzero");
+  }
+  const roleCounts = { outerZygote: 0, nestedZygoteZero: 0, nestedZygoteSysAdmin: 0,
+    gpu: 0, utility: 0, renderer: 0 };
   for (const process of processEvidence) {
-    for (const field of ["CapInh", "CapPrm", "CapEff", "CapAmb"]) {
-      if (!/^0+$/.test(process.status[field])) {
-        throw new Error(`Chromium process active capability set is nonzero: ${field}`);
+    if (process === browserProcess) continue;
+    const command = process.command.join(" ");
+    const role = command.match(/(?:^|\s)--type=([^\s]+)/)?.[1];
+    if (role === "zygote" && command.includes("--no-zygote-sandbox")) {
+      if (!sameOuterBoundary(process) || !allZero(process)) {
+        throw new Error("outer no-zygote-sandbox process escaped exact zero-capability policy");
       }
+      roleCounts.outerZygote += 1;
+    } else if (role === "zygote") {
+      if (!nestedBoundary(process)) throw new Error("nested zygote boundary mismatch");
+      if (exactCapabilities(process, zeroNested)) roleCounts.nestedZygoteZero += 1;
+      else if (exactCapabilities(process, sysAdminNested)) roleCounts.nestedZygoteSysAdmin += 1;
+      else throw new Error("nested zygote capability set escaped exact allowlist");
+    } else if (role === "gpu-process" || role === "utility") {
+      if (!sameOuterBoundary(process) || !allZero(process)) {
+        throw new Error(`outer Chromium ${role} process escaped exact zero-capability policy`);
+      }
+      roleCounts[role === "gpu-process" ? "gpu" : "utility"] += 1;
+    } else if (role === "renderer") {
+      if (!nestedBoundary(process) || !exactCapabilities(process, zeroNested)) {
+        throw new Error("nested renderer escaped exact capability/boundary policy");
+      }
+      roleCounts.renderer += 1;
+    } else {
+      throw new Error(`unknown Chromium process role: ${role ?? "browser-duplicate"}`);
     }
   }
-  if (!/^0+$/.test(browserProcess.status.CapBnd)) {
-    throw new Error("Chromium browser process bounding capability set is nonzero");
-  }
+  if (JSON.stringify(roleCounts) !== JSON.stringify({
+    outerZygote: 1, nestedZygoteZero: 1, nestedZygoteSysAdmin: 1,
+    gpu: 1, utility: 1, renderer: 1,
+  })) throw new Error(`Chromium process role counts mismatch: ${JSON.stringify(roleCounts)}`);
   if (processEvidence.some(process => process.status.NoNewPrivs !== "1")) {
     throw new Error("Chromium process escaped no-new-privileges");
   }
@@ -328,6 +384,9 @@ try {
     rendererRootDistinctOrInaccessible: true,
     rendererRootDisposition,
     rendererBoundingCapabilities: renderer.status.CapBnd,
+    nestedZygoteBoundingCapabilities: NESTED_BOUNDING_CAP,
+    nestedZygoteSysAdminCapabilities: NESTED_SYS_ADMIN_CAP,
+    nestedMountNamespaceShared: true,
   };
   await new Promise(resolve => setTimeout(resolve, 1000));
   await context.close();
@@ -368,8 +427,10 @@ process.stdout.write(`${JSON.stringify({
   sandbox: sandboxEvidence,
   cgroup,
   outerCapabilitiesZero: true,
-  chromiumActiveCapabilitiesZero: true,
+  chromiumCapabilityRolesExact: true,
+  outerChromiumCapabilitiesZero: true,
   browserBoundingCapabilitiesZero: true,
+  namespaceScopedZygoteSysAdminObserved: true,
   noSandboxFlagAbsent: true,
   privateShmUsed: true,
   seccompFiltered: true,

@@ -154,8 +154,23 @@ def validate_runner_text(text: str) -> None:
         "--no-zygote-sandbox",
     ):
         assert flag not in launch
-    assert "Chromium process active capability set is nonzero" in text
-    assert "Chromium browser process bounding capability set is nonzero" in text
+    for fragment in (
+        'const NESTED_BOUNDING_CAP = "000001ffffffffff"',
+        'const NESTED_SYS_ADMIN_CAP = "0000000000200000"',
+        "outer Chromium browser capability set is nonzero",
+        "outer no-zygote-sandbox process escaped exact zero-capability policy",
+        "nested zygote capability set escaped exact allowlist",
+        "nested renderer escaped exact capability/boundary policy",
+        "unknown Chromium process role",
+        "Chromium process role counts mismatch",
+        "process.namespaces.user !== browserProcess.namespaces.user",
+        "process.namespaces.pid !== browserProcess.namespaces.pid",
+        "process.namespaces.net !== browserProcess.namespaces.net",
+        "process.namespaces.mnt === browserProcess.namespaces.mnt",
+        "process.rootStat.dev !== browserProcess.rootStat.dev",
+        "outerZygote: 1, nestedZygoteZero: 1, nestedZygoteSysAdmin: 1",
+    ):
+        assert fragment in text
 
 
 def validate_dockerfile_text(text: str) -> None:

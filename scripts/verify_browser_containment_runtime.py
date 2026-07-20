@@ -315,8 +315,10 @@ def _validate_output(text: str) -> None:
     )
     assert value["chromiumSandboxRequested"] is True and value["rendererObserved"] is True
     assert value["privateShmUsed"] is True and value["outerCapabilitiesZero"] is True
-    assert value["chromiumActiveCapabilitiesZero"] is True
+    assert value["chromiumCapabilityRolesExact"] is True
+    assert value["outerChromiumCapabilitiesZero"] is True
     assert value["browserBoundingCapabilitiesZero"] is True
+    assert value["namespaceScopedZygoteSysAdminObserved"] is True
     assert value["seccompFiltered"] is True and value["chromiumInternalSeccompFilterAdded"] is True
     assert value["noNewPrivileges"] is True and value["uid"] == 65532
     assert value["allowedLoopbackRequests"] == 1 and value["browserAlternateRequestsDenied"] is True
@@ -337,6 +339,9 @@ def _validate_output(text: str) -> None:
         "rendererRootDistinctOrInaccessible": True,
         "rendererRootDisposition": "distinct-dev-inode",
         "rendererBoundingCapabilities": "000001ffffffffff",
+        "nestedZygoteBoundingCapabilities": "000001ffffffffff",
+        "nestedZygoteSysAdminCapabilities": "0000000000200000",
+        "nestedMountNamespaceShared": True,
     }
     assert len(value["socketDenials"]) == 8
     assert all(item["denied"] is True for item in value["socketDenials"])

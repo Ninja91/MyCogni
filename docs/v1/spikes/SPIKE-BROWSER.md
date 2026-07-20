@@ -37,12 +37,14 @@ sets, `NoNewPrivs`, and `Seccomp_filters`. The browser process sees the outer ro
 and one outer seccomp filter; the renderer must have a distinct root, nested user,
 PID and network namespaces, and an additional internal seccomp filter. Chromium's
 default shared-memory bypass is removed so the private 256 MiB `/dev/shm` is used.
-Every Chromium process must have zero inheritable, permitted, effective, and
-ambient capabilities; the outer browser process must also have a zero bounding
-set. A renderer's bounding set is interpreted only with its proven nested user
-namespace and distinct chroot and is not host authority. The exact observed value
-is emitted and checked as part of the runtime evidence rather than summarized as
-zero.
+The outer browser, no-zygote-sandbox zygote, GPU, and utility roles must have all
+five capability sets zero. Nested renderer active sets are zero. Exactly one of
+two nested zygotes may hold permitted/effective `CAP_SYS_ADMIN` (`0x200000`) for
+Chromium's internal chroot sandbox; both nested zygotes and the renderer have the
+exact recorded namespace-scoped bounding mask. This exception requires nested
+user/PID/network namespaces, a distinct chroot, and explicit observation of the
+known shared mount namespace. Unknown roles and nonexact capability states fail
+closed; the exception is not Docker `CapAdd` or host authority.
 
 ## Nonclaims and blockers
 
