@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
+import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -31,8 +33,53 @@ def _runtime_validator() -> ModuleType:
     return module
 
 
+def _head_revision() -> str:
+    root = Path(__file__).resolve().parents[2]
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def test_runner_containment_model_is_least_privilege() -> None:
     _validator().validate()
+
+
+def test_dockerignore_has_exact_runner_sources_and_terminal_bytecode_denials() -> None:
+    validator = _validator()
+    source = validator.DOCKERIGNORE.read_text(encoding="utf-8")
+    validator.validate_dockerignore(source)
+    assert "!services/runner_mailbox/**" not in source
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "!services/runner_mailbox/persistent.py\n",
+        "**/__pycache__\n",
+        "**/__pycache__/**\n",
+        "*.pyc\n",
+        "*.pyo\n",
+    ],
+)
+def test_dockerignore_rejects_source_or_terminal_exclusion_mutation(fragment: str) -> None:
+    validator = _validator()
+    source = validator.DOCKERIGNORE.read_text(encoding="utf-8")
+    assert fragment in source
+    with pytest.raises(AssertionError):
+        validator.validate_dockerignore(source.replace(fragment, "", 1))
+
+
+def test_dockerignore_rejects_runner_recursive_reinclude() -> None:
+    validator = _validator()
+    source = validator.DOCKERIGNORE.read_text(encoding="utf-8")
+    marker = "!services/runner_mailbox/__init__.py\n"
+    assert marker in source
+    with pytest.raises(AssertionError):
+        validator.validate_dockerignore(source.replace(marker, "!services/runner_mailbox/**\n"))
 
 
 def test_runner_dockerfile_packages_only_the_mailbox_artifact() -> None:
@@ -103,6 +150,108 @@ def test_runtime_cleanup_names_only_owned_resources(
     assert "owned-container" in flattened and "owned-volume" in flattened
     assert "sibling-core" not in flattened and "sibling-volume" not in flattened
     assert "down" not in flattened and "remove-orphans" not in flattened
+
+
+def _synthetic_export(extra: dict[str, bytes | None] | None = None) -> bytes:
+    root = Path(__file__).resolve().parents[2]
+    runtime = _runtime_validator()
+    entries: dict[str, bytes | None] = {
+        "opt/mycogni-runner/services": None,
+        "opt/mycogni-runner/services/runner_mailbox": None,
+        "opt/mycogni-runner/LICENSE": (root / "LICENSE").read_bytes(),
+        "opt/mycogni-runner/NOTICE": (root / "NOTICE").read_bytes(),
+    }
+    entries.update(
+        {
+            f"opt/mycogni-runner/services/runner_mailbox/{name}": (
+                root / "services/runner_mailbox" / name
+            ).read_bytes()
+            for name in runtime.RUNNER_SOURCE_FILES
+        }
+    )
+    site_packages = "opt/mycogni-runner/.venv/lib/python3.12/site-packages"
+    for package, (source_root, package_files) in runtime.LOCAL_PACKAGE_FILES.items():
+        package_root = f"{site_packages}/{package}"
+        entries[package_root] = None
+        entries.update(
+            {
+                f"{package_root}/{name}": (root / source_root / name).read_bytes()
+                for name in package_files
+            }
+        )
+    entries.update(extra or {})
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name, payload in entries.items():
+            item = tarfile.TarInfo(name)
+            if payload is None:
+                item.type = tarfile.DIRTYPE
+                item.mode = 0o555
+                archive.addfile(item)
+            else:
+                item.size = len(payload)
+                item.mode = 0o444
+                archive.addfile(item, io.BytesIO(payload))
+    return output.getvalue()
+
+
+def test_runtime_export_accepts_only_reviewed_runner_sources() -> None:
+    _runtime_validator()._validate_exported_filesystem(
+        _synthetic_export(), _head_revision()
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {
+            "opt/mycogni-runner/services/runner_mailbox/__pycache__": None,
+            "opt/mycogni-runner/services/runner_mailbox/__pycache__/persistent.cpython-313.pyc": b"dirty",
+        },
+        {"opt/mycogni-runner/services/runner_mailbox/unreviewed.py": b"dirty"},
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/connector_protocol/"
+            "__pycache__/protocol.cpython-312.pyc": b"dirty"
+        },
+        {
+            "opt/mycogni-runner/.venv/lib/python3.12/site-packages/connector_protocol/"
+            "unreviewed.py": b"dirty"
+        },
+    ],
+    ids=[
+        "runner-pycache",
+        "extra-runner-source",
+        "local-package-pyc",
+        "extra-local-package-source",
+    ],
+)
+def test_runtime_export_rejects_dirty_or_unreviewed_files(
+    extra: dict[str, bytes | None],
+) -> None:
+    with pytest.raises(AssertionError):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(extra), _head_revision()
+        )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"opt/mycogni-runner/LICENSE": b"dirty-license"},
+        {"opt/mycogni-runner/NOTICE": b"dirty-notice"},
+        {
+            "opt/mycogni-runner/services/runner_mailbox/persistent.py": b"dirty-source"
+        },
+    ],
+    ids=["license", "notice", "runner-source"],
+)
+def test_runtime_export_binds_checkout_files_to_exact_git_revision(
+    replacement: dict[str, bytes | None],
+) -> None:
+    with pytest.raises(AssertionError):
+        _runtime_validator()._validate_exported_filesystem(
+            _synthetic_export(replacement), _head_revision()
+        )
 
 
 @pytest.mark.parametrize(

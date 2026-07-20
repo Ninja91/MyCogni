@@ -13,6 +13,54 @@ from typing import Any, NamedTuple
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "deploy/compose.runner-mailbox-smoke.yml"
 DOCKERFILE = ROOT / "docker/Dockerfile.runner-mailbox"
+DOCKERIGNORE = ROOT / ".dockerignore"
+RUNNER_SOURCE_FILES = (
+    "__init__.py",
+    "domain.py",
+    "persistent.py",
+    "ports.py",
+    "service.py",
+    "volatile.py",
+)
+EXPECTED_DOCKERIGNORE = """# Deny the repository by default. Every build input below is intentional.
+**
+
+!pyproject.toml
+!uv.lock
+!build-constraints.txt
+!README.md
+!LICENSE
+!NOTICE
+
+!src/
+!src/**
+
+!packages/
+!packages/mycogni-connector-sdk/
+!packages/mycogni-connector-sdk/pyproject.toml
+!packages/mycogni-connector-sdk/README.md
+!packages/mycogni-connector-sdk/src/
+!packages/mycogni-connector-sdk/src/**
+!packages/mycogni-runner-mailbox-runtime/
+!packages/mycogni-runner-mailbox-runtime/pyproject.toml
+!packages/mycogni-runner-mailbox-runtime/src/
+!packages/mycogni-runner-mailbox-runtime/src/**
+
+!services/
+!services/runner_mailbox/
+!services/runner_mailbox/__init__.py
+!services/runner_mailbox/domain.py
+!services/runner_mailbox/persistent.py
+!services/runner_mailbox/ports.py
+!services/runner_mailbox/service.py
+!services/runner_mailbox/volatile.py
+
+# Terminal exclusions override every source-tree negation above.
+**/__pycache__
+**/__pycache__/**
+*.pyc
+*.pyo
+"""
 SERVICE_NAME = "mycogni-runner-mailbox-smoke"
 STATE_TARGET = "/var/lib/mycogni-runner"
 TMPFS = "/tmp/mycogni-runner:rw,noexec,nosuid,nodev,size=32m,uid=65532,gid=65532,mode=0700"
@@ -44,6 +92,19 @@ SERVICE_KEYS = {
 class DockerInstruction(NamedTuple):
     name: str
     value: str
+
+
+def validate_dockerignore(text: str) -> None:
+    assert text == EXPECTED_DOCKERIGNORE, ".dockerignore must match the exact build-input model"
+    runner_negations = {
+        line.removeprefix("!services/runner_mailbox/")
+        for line in text.splitlines()
+        if line.startswith("!services/runner_mailbox/")
+        and line != "!services/runner_mailbox/"
+    }
+    assert runner_negations == set(RUNNER_SOURCE_FILES)
+    lines = text.splitlines()
+    assert lines[-4:] == ["**/__pycache__", "**/__pycache__/**", "*.pyc", "*.pyo"]
 
 
 def _parse_dockerfile(text: str) -> list[DockerInstruction]:
@@ -231,6 +292,7 @@ def validate_model(model: dict[str, Any]) -> None:
 
 
 def validate() -> None:
+    validate_dockerignore(DOCKERIGNORE.read_text(encoding="utf-8"))
     validate_dockerfile(DOCKERFILE.read_text(encoding="utf-8"))
     validate_model(render_compose())
 

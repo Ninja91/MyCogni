@@ -37,6 +37,24 @@ EXPECTED_DISTRIBUTIONS = [
     "typing-extensions",
     "typing-inspection",
 ]
+RUNNER_SOURCE_FILES = (
+    "__init__.py",
+    "domain.py",
+    "persistent.py",
+    "ports.py",
+    "service.py",
+    "volatile.py",
+)
+LOCAL_PACKAGE_FILES = {
+    "connector_protocol": (
+        "packages/mycogni-connector-sdk/src/connector_protocol",
+        ("__init__.py", "manifest.py", "protocol.py", "py.typed", "result.py"),
+    ),
+    "mycogni_runner_mailbox_runtime": (
+        "packages/mycogni-runner-mailbox-runtime/src/mycogni_runner_mailbox_runtime",
+        ("__init__.py", "container_probe.py", "py.typed"),
+    ),
+}
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 PROJECT = re.compile(r"^mycogni-runner-[0-9a-f]{32}$")
 
@@ -179,27 +197,83 @@ def _validate_inspect(
     assert mount["RW"] is True
 
 
-def _validate_filesystem(container_id: str) -> None:
+def _git_object_bytes(revision: str, path: str) -> bytes:
+    assert re.fullmatch(r"[0-9a-f]{40}", revision)
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return result.stdout
+
+
+def _validate_exported_filesystem(exported: bytes, revision: str) -> None:
+    with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
+        members: dict[str, tarfile.TarInfo] = {}
+        for item in archive.getmembers():
+            name = item.name.removeprefix("./").rstrip("/")
+            assert name and name not in members, "export contains duplicate paths"
+            members[name] = item
+        for legal_file in ("LICENSE", "NOTICE"):
+            name = f"opt/mycogni-runner/{legal_file}"
+            assert name in members and members[name].isreg()
+            extracted = archive.extractfile(members[name])
+            assert extracted is not None
+            assert extracted.read() == _git_object_bytes(revision, legal_file)
+        service_root = "opt/mycogni-runner/services"
+        runner_root = f"{service_root}/runner_mailbox"
+        expected_service_paths = {service_root, runner_root} | {
+            f"{runner_root}/{name}" for name in RUNNER_SOURCE_FILES
+        }
+        actual_service_paths = {
+            name
+            for name in members
+            if name == service_root or name.startswith(f"{service_root}/")
+        }
+        assert actual_service_paths == expected_service_paths
+        assert members[service_root].isdir() and members[runner_root].isdir()
+        for source_file in RUNNER_SOURCE_FILES:
+            name = f"{runner_root}/{source_file}"
+            assert members[name].isreg(), f"runner source is not a regular file: {name}"
+            extracted = archive.extractfile(members[name])
+            assert extracted is not None
+            source_path = f"services/runner_mailbox/{source_file}"
+            assert extracted.read() == _git_object_bytes(revision, source_path)
+        site_packages = "opt/mycogni-runner/.venv/lib/python3.12/site-packages"
+        for package, (source_root, package_files) in LOCAL_PACKAGE_FILES.items():
+            package_root = f"{site_packages}/{package}"
+            expected_package_paths = {package_root} | {
+                f"{package_root}/{name}" for name in package_files
+            }
+            actual_package_paths = {
+                name
+                for name in members
+                if name == package_root or name.startswith(f"{package_root}/")
+            }
+            assert actual_package_paths == expected_package_paths
+            assert members[package_root].isdir()
+            for package_file in package_files:
+                name = f"{package_root}/{package_file}"
+                assert members[name].isreg(), f"package source is not regular: {name}"
+                extracted = archive.extractfile(members[name])
+                assert extracted is not None
+                assert extracted.read() == _git_object_bytes(
+                    revision, f"{source_root}/{package_file}"
+                )
+        for name in members:
+            path = PurePosixPath(name)
+            if name == "opt/mycogni-runner" or name.startswith("opt/mycogni-runner/"):
+                assert "__pycache__" not in path.parts
+                assert path.suffix not in {".pyc", ".pyo"}
+        assert not any("mycogni" in PurePosixPath(name).parts for name in members)
+
+
+def _validate_filesystem(container_id: str, revision: str) -> None:
     exported = subprocess.run(
         ["docker", "export", container_id], check=True, capture_output=True
     ).stdout
-    with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
-        names = {item.name.lstrip("./") for item in archive.getmembers()}
-        for legal_file in ("LICENSE", "NOTICE"):
-            name = f"opt/mycogni-runner/{legal_file}"
-            assert name in names
-            extracted = archive.extractfile(name)
-            assert extracted is not None
-            assert extracted.read() == (ROOT / legal_file).read_bytes()
-        service_root = "opt/mycogni-runner/services/"
-        runner_root = f"{service_root}runner_mailbox/"
-        assert any(name.startswith(runner_root) for name in names)
-        assert all(
-            name.startswith(runner_root)
-            for name in names
-            if name.startswith(service_root) and name.endswith(".py")
-        )
-        assert not any("mycogni" in PurePosixPath(name).parts for name in names)
+    _validate_exported_filesystem(exported, revision)
 
 
 def _validate_sentinel(output: str) -> dict[str, Any]:
@@ -246,7 +320,7 @@ def verify(image: str, revision: str, *, project: str | None = None) -> dict[str
         _validate_inspect(
             before, image_inspect, image, revision, project_name, volume_name
         )
-        _validate_filesystem(container_id)
+        _validate_filesystem(container_id, revision)
         started = _run(["docker", "start", "--attach", container_id])
         sentinel = _validate_sentinel(started.stdout)
         after = _one_json(["docker", "container", "inspect", container_id])
