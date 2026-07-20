@@ -67,8 +67,12 @@ seccomp, finite PID/CPU/RAM limits, no restart, one invocation/project-scoped
 runner-only state volume and
 one noexec/nosuid/nodev tmpfs. A strict rendered-model allowlist and exact
 stage/instruction Dockerfile model reject every undeclared surface or build
-input. Runtime export and package inventory prove the trusted-core package is
-absent and the Apache license/notice are present. Cleanup validates Compose
+input. The exact `.dockerignore` model permits only six named runner sources and
+ends with global cache/bytecode exclusions after all negations. Runtime export
+permits exactly those six files plus the named connector-contract/runtime-anchor
+package files, compares every checkout-owned byte including `LICENSE`/`NOTICE`
+to the exact revision's Git objects, rejects cache/bytecode anywhere under the
+artifact root, and proves the trusted-core package is absent. Cleanup validates Compose
 ownership labels and removes only exact resources created by that invocation.
 The synthetic probe attempts denied
 DNS, host-gateway, metadata, public IPv4, public IPv6 and ULA IPv6 connections.
@@ -76,11 +80,12 @@ DNS, host-gateway, metadata, public IPv4, public IPv6 and ULA IPv6 connections.
 For the local image-identity proof, BuildKit receives a fixed
 `SOURCE_DATE_EPOCH`, fixed OCI created label and exact source revision; bytecode
 is disabled and only uv's asserted nondeterministic local-package cache entries
-plus matching `RECORD` rows are normalized away. Two separate no-cache builds
-use the timestamp-rewriting Docker archive exporter with SBOM/provenance
-attestations explicitly disabled, are loaded separately, and must yield the
-same image ID, config creation time, labels and layers. Release attestations are
-a separate artifact and acceptance boundary.
+plus matching `RECORD` rows are normalized away. Two clean Git-archive contexts
+and an intentionally dirty developer context use separate no-cache builds and
+the timestamp-rewriting Docker archive exporter with SBOM/provenance attestations
+explicitly disabled. All three must yield the same manifest/image digest,
+config digest, creation time, labels and layers. Release attestations are a
+separate artifact and acceptance boundary.
 
 ## Consequences
 
