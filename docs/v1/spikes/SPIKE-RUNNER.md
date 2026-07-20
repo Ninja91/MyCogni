@@ -224,8 +224,14 @@ overflow without shortening replay retention.
   revocation, authorization or registry lookup is verified here. Two clean
   Git-archive contexts and one dirty developer context with ignored host
   bytecode, fixed source epoch/labels and explicit attestation exclusion
-  reproduce one native-arm64 manifest/config identity; archive tag/index bytes
-  and multi-architecture release artifacts remain nonclaims.
+  reproduced native-arm64 manifest
+  `sha256:1f8120be0efad46207e05f04cd938c984c3a4a192b7376d925665217e680fcbb`
+  and config
+  `sha256:5f9b1a40439183b9f3e14f3cb2f0a6fa61a91b065248f91571ef9b33d0a07095`
+  for exact implementation `e4290c35ca4a9792ac5974136d5b3f6e49a7a7af`.
+  Config bytes, nine layers, creation time and OCI labels matched across all
+  three archives. Archive tag/index bytes and multi-architecture release
+  artifacts remain nonclaims.
 - A separate synthetic mailbox-artifact Compose smoke has local Docker evidence for read-only root,
   default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
   namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
@@ -233,6 +239,16 @@ overflow without shortening replay retention.
   and exact invocation-owned smoke cleanup is verified. It is not an untrusted
   connector artifact, direct-egress test, action-scoped credential topology,
   wall-time watchdog or malicious-connector cleanup proof.
+- The exact source-bound live smoke for `e4290c35…` passed on native arm64:
+  isolated/no-site startup, the exact four-entry application root, exact
+  site-packages top level with the arm64 cffi extension, exact ten-distribution
+  and local-package inventory, absent virtualenv/site hooks, local
+  name/version/Apache metadata, byte-equal source and Apache legal files, six
+  network denials and exact invocation-owned cleanup all passed. Git binding
+  uses uncached raw no-replace `cat-file` reads with external Git configuration
+  disabled. Both containment entrypoints
+  reject `python -O` and `PYTHONOPTIMIZE=1` before argument parsing, validation
+  or Docker work with one exact diagnostic.
 - NET-001 remains a source/runtime safety belt, not kernel containment.
 - A valid connector result remains an untrusted attempt fact, never proof of
   transport, acknowledgement, compliance, absence, or removal.
@@ -253,10 +269,24 @@ uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest
 uv run --all-packages --frozen --python 3.13.11 ruff check .
 uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
 uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment_runtime.py --image sha256:1f8120be0efad46207e05f04cd938c984c3a4a192b7376d925665217e680fcbb --revision e4290c35ca4a9792ac5974136d5b3f6e49a7a7af
+optimizer_stdout="$(mktemp /private/tmp/mycogni-runner-opt-out.XXXXXX)"
+optimizer_stderr="$(mktemp /private/tmp/mycogni-runner-opt-err.XXXXXX)"
+for verifier in scripts/verify_runner_containment.py scripts/verify_runner_containment_runtime.py; do
+  ! uv run --all-packages --frozen --python 3.13.11 python -O "$verifier" >"$optimizer_stdout" 2>"$optimizer_stderr"
+  test ! -s "$optimizer_stdout"
+  test "$(cat "$optimizer_stderr")" = "runner containment verification requires unoptimized Python"
+  ! env PYTHONOPTIMIZE=1 uv run --all-packages --frozen --python 3.13.11 python "$verifier" >"$optimizer_stdout" 2>"$optimizer_stderr"
+  test ! -s "$optimizer_stdout"
+  test "$(cat "$optimizer_stderr")" = "runner containment verification requires unoptimized Python"
+done
 ```
 
-Exact counts and full-repository results belong in the independent review for the
-reviewed commit. Passing focused tests does not complete PF-002 or accept V1.
+For exact implementation `e4290c35…`, both supported lanes reported Ruff and
+mypy success over nine source files and 944 tests passed; the focused
+architecture file reported 71 passed. Passing these checks does not complete
+PF-002 or accept V1.
 
 ## Rollback
 

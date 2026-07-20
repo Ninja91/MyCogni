@@ -74,6 +74,19 @@ package files, compares every checkout-owned byte including `LICENSE`/`NOTICE`
 to the exact revision's Git objects, rejects cache/bytecode anywhere under the
 artifact root, and proves the trusted-core package is absent. Cleanup validates Compose
 ownership labels and removes only exact resources created by that invocation.
+The application root is an exact four-entry allowlist (`.venv`, `LICENSE`,
+`NOTICE`, `services`); site-packages is an exact top-level allowlist including
+the architecture-specific cffi extension. `_virtualenv.pth`, `_virtualenv.py`,
+every other `.pth` and both site-customization module names are absent. The two
+local distributions retain exact name, `0.0.0` version and Apache-2.0 license
+expression metadata, and their package source files are exact allowlists. Git
+binding uses raw `git --no-replace-objects cat-file`, disables replacement
+objects and system/global configuration, revalidates the exact commit object
+and reads uncached blobs rather than trusting the worktree.
+Both containment verifiers reject optimized Python at module startup, before
+argument parsing, validation or Docker work, because their executable safety
+checks use assertions; `python -O` and `PYTHONOPTIMIZE=1` therefore fail closed
+with one exact diagnostic.
 The synthetic probe attempts denied
 DNS, host-gateway, metadata, public IPv4, public IPv6 and ULA IPv6 connections.
 
@@ -86,6 +99,16 @@ the timestamp-rewriting Docker archive exporter with SBOM/provenance attestation
 explicitly disabled. All three must yield the same manifest/image digest,
 config digest, creation time, labels and layers. Release attestations are a
 separate artifact and acceptance boundary.
+
+The accepted local proof for implementation
+`e4290c35ca4a9792ac5974136d5b3f6e49a7a7af` reproduced manifest
+`sha256:1f8120be0efad46207e05f04cd938c984c3a4a192b7376d925665217e680fcbb`
+and config
+`sha256:5f9b1a40439183b9f3e14f3cb2f0a6fa61a91b065248f91571ef9b33d0a07095`
+across both clean archives and the tracked-clean bytecode-dirty context. The
+source-bound native-arm64 live verifier then passed isolated/no-site startup,
+exact source, package and license inventory, containment sentinel and scoped
+resource cleanup.
 
 ## Consequences
 
