@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "retrieved_at": "2026-07-15",
+  "retrieved_at": "2026-07-20",
   "images": [
     {
       "name": "python-runtime-and-build",
@@ -34,6 +34,22 @@
         "https://docs.astral.sh/uv/guides/integration/docker/"
       ],
       "retrieval_command": "docker buildx imagetools inspect ghcr.io/astral-sh/uv:0.9.26"
+    },
+    {
+      "name": "playwright-browser-spike-base",
+      "registry": "mcr.microsoft.com",
+      "repository": "playwright",
+      "version_tag_observed": "v1.61.1-noble",
+      "index_digest": "sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
+      "platforms": {
+        "linux/amd64": "sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6",
+        "linux/arm64": "sha256:824f1a789072e648c62541c2cfa4479c4061a290d5c27766d67dc1dcbc19b321"
+      },
+      "official_sources": [
+        "https://mcr.microsoft.com/v2/playwright/manifests/v1.61.1-noble",
+        "https://github.com/microsoft/playwright/tree/v1.61.1/utils/docker"
+      ],
+      "retrieval_command": "docker buildx imagetools inspect mcr.microsoft.com/playwright:v1.61.1-noble"
     }
   ]
 }

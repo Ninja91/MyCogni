@@ -98,6 +98,7 @@ TEST_IMPORT_ALLOWLIST = {
     "tests/architecture/test_container_skeleton.py": {"importlib"},
     "tests/architecture/test_package_boundaries.py": {"importlib"},
     "tests/architecture/test_runner_containment.py": {"importlib", "subprocess"},
+    "tests/architecture/test_browser_containment.py": {"importlib", "subprocess"},
     "tests/adapters/persistence/test_durability.py": {"subprocess"},
 }
 PROCESS_CALL_ALLOWLIST = {
@@ -112,6 +113,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/simulator/test_web_mail_safety.py",
 }
 EXACT_PROCESS_CALL_ALLOWLIST = {
+    "tests/architecture/test_browser_containment.py": {"subprocess.run"},
     "tests/architecture/test_runner_containment.py": {"subprocess.run"},
     "tests/runner_mailbox/test_persistent.py": {"os.fork"},
 }

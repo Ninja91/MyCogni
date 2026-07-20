@@ -9,8 +9,8 @@ conformance remain later work packages.
 ## Immutable inputs
 
 `images.lock.json` records the OCI index and architecture manifest digests
-observed on 2026-07-15 for the official Python 3.12.12 slim-bookworm and Astral
-uv 0.9.26 images. The Dockerfile consumes the index digests, so BuildKit selects
+observed through 2026-07-20 for the official Python 3.12.12 slim-bookworm,
+Astral uv 0.9.26, and Playwright 1.61.1 Noble images. The Dockerfiles consume the index digests, so BuildKit selects
 the matching immutable amd64 or arm64 manifest. The inventory records the exact
 retrieval commands and official upstream sources.
 
@@ -67,3 +67,9 @@ Buildx log and image inspection were recorded. Bit-for-bit reproducibility,
 published multi-platform artifacts, signatures, SBOMs and provenance are not
 claimed here. The dated [PF-002 build evidence](../docs/v1/PF-002-BUILD-EVIDENCE.md)
 records the current attempt and any unresolved environmental blocker.
+
+`Dockerfile.browser`, `seccomp.browser.json`, and
+`deploy/compose.browser-smoke.yml` are a separate networkless synthetic-only
+decision artifact governed by ADR-0015. They do not extend PF-002 acceptance,
+package a connector, or authorize live navigation. See
+`browser-spike/THIRD_PARTY.md` for upstream provenance and license boundaries.

@@ -42,3 +42,15 @@ target "runner-mailbox" {
     VCS_REF       = VCS_REF
   }
 }
+
+target "browser-spike" {
+  context    = "."
+  dockerfile = "docker/Dockerfile.browser"
+  platforms  = ["linux/amd64", "linux/arm64"]
+  tags       = ["mycogni/browser-spike:${VERSION}"]
+  args = {
+    BUILD_CREATED = BUILD_CREATED
+    VERSION       = VERSION
+    VCS_REF       = VCS_REF
+  }
+}

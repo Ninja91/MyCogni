@@ -36,6 +36,12 @@ EXPECTED_DOCKERIGNORE = """# Deny the repository by default. Every build input b
 !LICENSE
 !NOTICE
 
+!browser-spike/
+!browser-spike/package.json
+!browser-spike/package-lock.json
+!browser-spike/run.mjs
+!browser-spike/synthetic.html
+
 !src/
 !src/**
 

@@ -19,6 +19,11 @@ EXPECTED_CONTEXT_ALLOWLIST = {
     "!README.md",
     "!LICENSE",
     "!NOTICE",
+    "!browser-spike/",
+    "!browser-spike/package.json",
+    "!browser-spike/package-lock.json",
+    "!browser-spike/run.mjs",
+    "!browser-spike/synthetic.html",
     "!src/",
     "!src/**",
     "!packages/",
@@ -83,7 +88,12 @@ def parse_dockerfile(text: str) -> list[DockerInstruction]:
 def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
     instructions = parse_dockerfile(text)
     images = inventory["images"]
-    assert isinstance(images, list) and len(images) == 2
+    assert isinstance(images, list) and len(images) == 3
+    assert [image["name"] for image in images] == [
+        "python-runtime-and-build",
+        "uv-build-tool",
+        "playwright-browser-spike-base",
+    ]
 
     for image in images:
         digest = image["index_digest"]
@@ -101,7 +111,7 @@ def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
     assert len(from_sources) == 3
     assert all(re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", source) for source in from_sources)
     inventory_references = {
-        f"{image['registry']}/{image['repository']}@{image['index_digest']}" for image in images
+        f"{image['registry']}/{image['repository']}@{image['index_digest']}" for image in images[:2]
     }
     assert set(from_sources) == inventory_references
     assert all(
