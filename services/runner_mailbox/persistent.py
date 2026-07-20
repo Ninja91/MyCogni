@@ -175,7 +175,14 @@ class PersistentMailboxRepository:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
 
     def close(self) -> None:
-        """Idempotently close; poisoned instances skip all mutating/checkpoint work."""
+        """Idempotently close this process-owned connection.
+
+        Independent mailbox processes may still hold valid readers, writers or
+        checkpoint locks.  Per-handle close therefore cannot require an
+        exclusive WAL truncate checkpoint: a busy checkpoint describes a live
+        peer, not storage uncertainty.  SQLite retains committed WAL frames and
+        checkpoints them through its normal WAL lifecycle.
+        """
 
         if os.getpid() != self._owner_pid:
             raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
@@ -188,9 +195,6 @@ class PersistentMailboxRepository:
                 self._close_quietly()
                 return
             try:
-                checkpoint = self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                if checkpoint != (0, 0, 0):
-                    raise sqlite3.DatabaseError("checkpoint incomplete")
                 self._connection.close()
                 self._closed = True
             except sqlite3.DatabaseError:
