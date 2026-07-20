@@ -563,6 +563,10 @@ class VolatileMailboxRepository:
             for record in self._records.values():
                 if now < record.last_seen_utc:
                     raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY)
+            try:
+                tombstone_expires_at = now + self._limits.tombstone_retention
+            except OverflowError:
+                raise MailboxError(MailboxDenial.INTERNAL_UNCERTAINTY) from None
             # The installation sweep is itself an observation of time. Advance
             # every surviving record's high-water in the same locked transaction
             # so a later caller cannot roll the clock back past a completed GC.
@@ -589,7 +593,7 @@ class VolatileMailboxRepository:
                     self._discard_record(record)
                     del self._records[mailbox_id]
                     self._tombstones[mailbox_id] = _Tombstone(
-                        created_at=now, expires_at=now + self._limits.tombstone_retention
+                        created_at=now, expires_at=tombstone_expires_at
                     )
                     removed.append(mailbox_id)
             return tuple(sorted(removed, key=str))

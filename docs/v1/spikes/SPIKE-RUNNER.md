@@ -1,8 +1,9 @@
 # SPIKE-RUNNER — finite mailbox and protocol decision slice
 
-Status: remediated implementation evidence awaiting independent adversarial
-re-review. This is not package acceptance, OCI isolation evidence, or a runnable
-connector service.
+Status: successor persistent-state and separate synthetic mailbox-artifact
+containment evidence is implemented, awaiting independent adversarial re-review. This is not package
+acceptance, untrusted-connector OCI isolation evidence, or a runnable connector
+service. See ADR-0014 and `RUNNER-PERSISTENCE-OCI-EVIDENCE.md`.
 
 Decision target: determine whether a statically declared connector can receive one
 action and return a bounded untrusted attempt fact without a Docker socket, shared
@@ -90,8 +91,9 @@ caller blocked behind another transaction cannot carry a stale service-layer tim
 sample across the lock. Rollback against the per-record high-water fails before
 mutation. Authenticated GC advances both the installation high-water and every
 surviving record's high-water in the same locked transaction; a later claim or new
-mailbox cannot roll back behind a completed sweep. Durable time high-water and
-restore-epoch handling remain persistent adapter requirements.
+mailbox cannot roll back behind a completed sweep. The persistent successor
+stores and authenticates that time high-water and binds its restore epoch;
+external monotonic rollback detection and restore/rebind ceremony remain open.
 
 Four per-action secrets are pairwise distinct and at least 256 bits:
 
@@ -205,12 +207,12 @@ overflow without shortening replay retention.
 ## Nonclaims and remaining runtime work
 
 - `VolatileMailboxRepository` loses all state and its wrapping key on restart. It
-  must never carry a real action.
-- A persistent adapter must atomically recover/redeliver unacknowledged bundles
-  after restart before it can carry a real action.
+  must never carry a real action. `PersistentMailboxRepository` is its SQLite
+  successor; it atomically reopens unacknowledged delivery state but remains
+  synthetic-only until the separate connector/gateway packages are accepted.
 - AES-GCM here proves the adapter contract only. Production requires durable
   envelope-key management, rotation, restore-epoch invalidation, backup policy,
-  and restart/crash recovery.
+  backup/restore rebind, external rollback detection and host power-loss qualification.
 - An explicit storage key is accepted only when it is exact immutable 32-byte
   material. Only explicit `None` generates an ephemeral key; falsey or malformed
   values fail instead of silently replacing operator input.
@@ -218,19 +220,43 @@ overflow without shortening replay retention.
   guaranteed zeroized.
 - SHA-256 credential digests assume uniformly random credentials; they are not a
   password KDF.
-- No signature, SBOM, provenance, manifest freshness, revocation, authorization,
-  image lookup, or runtime digest is verified here.
-- No Compose/OCI topology, read-only filesystem, namespace, seccomp, dropped
-  capability, PID/CPU/RAM/wall enforcement, network containment, or real cleanup
-  has been exercised by this slice.
+- No signature, release SBOM/provenance, published-manifest freshness,
+  revocation, authorization or registry lookup is verified here. Two clean
+  Git-archive contexts and one dirty developer context with ignored host
+  bytecode, fixed source epoch/labels and explicit attestation exclusion
+  reproduced native-arm64 manifest
+  `sha256:1f8120be0efad46207e05f04cd938c984c3a4a192b7376d925665217e680fcbb`
+  and config
+  `sha256:5f9b1a40439183b9f3e14f3cb2f0a6fa61a91b065248f91571ef9b33d0a07095`
+  for exact implementation `e4290c35ca4a9792ac5974136d5b3f6e49a7a7af`.
+  Config bytes, nine layers, creation time and OCI labels matched across all
+  three archives. Archive tag/index bytes and multi-architecture release
+  artifacts remain nonclaims.
+- A separate synthetic mailbox-artifact Compose smoke has local Docker evidence for read-only root,
+  default seccomp, dropped capabilities, no-new-privileges, private IPC/cgroup
+  namespaces, PID/CPU/RAM caps, network none, socket absence and bounded tmpfs.
+  Runtime distribution/export inventory proves it contains no trusted-core package
+  and exact invocation-owned smoke cleanup is verified. It is not an untrusted
+  connector artifact, direct-egress test, action-scoped credential topology,
+  wall-time watchdog or malicious-connector cleanup proof.
+- The exact source-bound live smoke for `e4290c35…` passed on native arm64:
+  isolated/no-site startup, the exact four-entry application root, exact
+  site-packages top level with the arm64 cffi extension, exact ten-distribution
+  and local-package inventory, absent virtualenv/site hooks, local
+  name/version/Apache metadata, byte-equal source and Apache legal files, six
+  network denials and exact invocation-owned cleanup all passed. Git binding
+  uses uncached raw no-replace `cat-file` reads with external Git configuration
+  disabled. Both containment entrypoints
+  reject `python -O` and `PYTHONOPTIMIZE=1` before argument parsing, validation
+  or Docker work with one exact diagnostic.
 - NET-001 remains a source/runtime safety belt, not kernel containment.
 - A valid connector result remains an untrusted attempt fact, never proof of
   transport, acknowledgement, compliance, absence, or removal.
 
-PF-002 must record effective multi-architecture image and runtime evidence,
-malicious containment probes, storage/log cleanup, restart/orphan recovery, and
-resource termination. Failure to prove those controls rejects the sidecar proposal
-before an ADR can be accepted.
+Connector OCI acceptance must separately record effective multi-architecture
+artifact evidence, malicious containment probes, storage/log cleanup,
+restart/orphan recovery, action-scoped credentials, fenced egress and resource
+termination. ADR-0014 accepts only the synthetic mailbox successor boundary.
 
 ## Verification
 
@@ -238,19 +264,36 @@ Run the locked toolchain on both supported Python versions:
 
 ```text
 uv run --all-packages --frozen --python 3.12.12 ruff check .
-uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.12.12 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.12.12 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
 uv run --all-packages --frozen --python 3.13.11 ruff check .
-uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox
-uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 mypy -p services.runner_mailbox -p mycogni_runner_mailbox_runtime
+uv run --all-packages --frozen --python 3.13.11 python scripts/ci/guarded_pytest.py tests/runner_mailbox tests/architecture/test_runner_containment.py packages/mycogni-connector-sdk/tests tests/ci/test_safety_guard.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment.py
+uv run --all-packages --frozen --python 3.13.11 python scripts/verify_runner_containment_runtime.py --image sha256:1f8120be0efad46207e05f04cd938c984c3a4a192b7376d925665217e680fcbb --revision e4290c35ca4a9792ac5974136d5b3f6e49a7a7af
+optimizer_stdout="$(mktemp /private/tmp/mycogni-runner-opt-out.XXXXXX)"
+optimizer_stderr="$(mktemp /private/tmp/mycogni-runner-opt-err.XXXXXX)"
+for verifier in scripts/verify_runner_containment.py scripts/verify_runner_containment_runtime.py; do
+  ! uv run --all-packages --frozen --python 3.13.11 python -O "$verifier" >"$optimizer_stdout" 2>"$optimizer_stderr"
+  test ! -s "$optimizer_stdout"
+  test "$(cat "$optimizer_stderr")" = "runner containment verification requires unoptimized Python"
+  ! env PYTHONOPTIMIZE=1 uv run --all-packages --frozen --python 3.13.11 python "$verifier" >"$optimizer_stdout" 2>"$optimizer_stderr"
+  test ! -s "$optimizer_stdout"
+  test "$(cat "$optimizer_stderr")" = "runner containment verification requires unoptimized Python"
+done
 ```
 
-Exact counts and full-repository results belong in the independent review for the
-reviewed commit. Passing focused tests does not complete PF-002 or accept V1.
+For exact implementation `e4290c35…`, both supported lanes reported Ruff and
+mypy success over nine source files and 944 tests passed; the focused
+architecture file reported 71 passed. Passing these checks does not complete
+PF-002 or accept V1.
 
 ## Rollback
 
-Remove `services/runner_mailbox/`, its focused tests, and this spike note; revert
-the connector-protocol evidence-field rename and regenerated schema snapshot; then
-remove the service from static guards/type-check targets. Preserve negative review
-evidence and never reuse synthetic credentials.
+Revert only the successor additions: ADR-0014/index row, `persistent.py` and its
+export, `CONTENDED`, persistent/OCI-focused tests, runtime anchor and lock entry,
+runner Dockerfile/bake target, Compose profile, both containment validators,
+evidence/roadmap/site changes and `.dockerignore`/container-skeleton additions.
+Preserve the pre-existing domain/service/volatile runner slice, its tests and
+review 13. Remove only the project-scoped smoke container/volume and local runner
+image; preserve negative review evidence and never reuse synthetic credentials.

@@ -78,6 +78,16 @@ PROCESS_DYNAMIC_CALLS = {
 RUNTIME_IMPORT_ALLOWLIST = {
     "src/mycogni/adapters/persistence/durability.py": {"subprocess"},
 }
+CONTAINER_PROBE = (
+    "packages/mycogni-runner-mailbox-runtime/src/mycogni_runner_mailbox_runtime/container_probe.py"
+)
+REVIEWED_RUNTIME_IMPORT_ALLOWLIST = {
+    # Synthetic-only OCI containment probe; not imported by the mailbox service.
+    CONTAINER_PROBE: (
+        {"socket"},
+        "0d349a164a0b0207e94af1cd2a11978a666718e00d7bd02b611ad0256f669d82",
+    ),
+}
 TEST_IMPORT_ALLOWLIST = {
     "tests/ci/test_network_guard.py": TEST_ESCAPE_IMPORTS,
     "tests/simulator/test_network_guard_simulator.py": {"httpx", "socket"},
@@ -87,6 +97,7 @@ TEST_IMPORT_ALLOWLIST = {
     "tests/architecture/test_distribution_boundaries.py": {"subprocess"},
     "tests/architecture/test_container_skeleton.py": {"importlib"},
     "tests/architecture/test_package_boundaries.py": {"importlib"},
+    "tests/architecture/test_runner_containment.py": {"importlib", "subprocess"},
     "tests/adapters/persistence/test_durability.py": {"subprocess"},
 }
 PROCESS_CALL_ALLOWLIST = {
@@ -100,6 +111,10 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/adapters/keys/test_owner_file.py",
     "tests/simulator/test_web_mail_safety.py",
 }
+EXACT_PROCESS_CALL_ALLOWLIST = {
+    "tests/architecture/test_runner_containment.py": {"subprocess.run"},
+    "tests/runner_mailbox/test_persistent.py": {"os.fork"},
+}
 
 
 def _attribute(node: ast.AST) -> str:
@@ -111,6 +126,33 @@ def _attribute(node: ast.AST) -> str:
     if isinstance(current, ast.Name):
         parts.append(current.id)
     return ".".join(reversed(parts))
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                bound = item.asname or item.name.partition(".")[0]
+                aliases[bound] = item.name if item.asname else item.name.partition(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for item in node.names:
+                if item.name != "*":
+                    aliases[item.asname or item.name] = f"{node.module}.{item.name}"
+    return aliases
+
+
+def _canonical_calls(tree: ast.AST) -> set[str]:
+    aliases = _import_aliases(tree)
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call = _attribute(node.func)
+        head, separator, tail = call.partition(".")
+        canonical_head = aliases.get(head, head)
+        calls.add(f"{canonical_head}.{tail}" if separator else canonical_head)
+    return calls
 
 
 def _decorators(function: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -148,6 +190,32 @@ def _imports(path: Path) -> set[str]:
     return imports
 
 
+def reviewed_runtime_import_provenance_valid(path: Path, relative: str) -> bool:
+    """Return whether an exact runtime import exemption matches its reviewed bytes."""
+
+    review = REVIEWED_RUNTIME_IMPORT_ALLOWLIST.get(relative)
+    if review is None:
+        return True
+    _, expected_sha256 = review
+    return hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha256
+
+
+def runtime_import_violations(path: Path, relative: str) -> set[str]:
+    """Return runtime imports not exempted by exact path and reviewed provenance."""
+
+    allowed = set(RUNTIME_IMPORT_ALLOWLIST.get(relative, set()))
+    review = REVIEWED_RUNTIME_IMPORT_ALLOWLIST.get(relative)
+    if review is not None and reviewed_runtime_import_provenance_valid(path, relative):
+        allowed.update(review[0])
+    imported = _imports(path)
+    return {
+        forbidden
+        for forbidden in FORBIDDEN_RUNTIME_IMPORTS
+        if forbidden not in allowed
+        if any(name == forbidden or name.startswith(f"{forbidden}.") for name in imported)
+    }
+
+
 def _runtime_errors() -> list[str]:
     errors: list[str] = []
     guarded = {
@@ -160,16 +228,9 @@ def _runtime_errors() -> list[str]:
             if path in guarded or "tests" in path.parts:
                 continue
             relative = path.relative_to(ROOT).as_posix()
-            allowed = RUNTIME_IMPORT_ALLOWLIST.get(relative, set())
-            violations = {
-                forbidden
-                for forbidden in FORBIDDEN_RUNTIME_IMPORTS
-                if forbidden not in allowed
-                if any(
-                    imported == forbidden or imported.startswith(f"{forbidden}.")
-                    for imported in _imports(path)
-                )
-            }
+            if not reviewed_runtime_import_provenance_valid(path, relative):
+                errors.append(f"{relative}: reviewed runtime import provenance differs")
+            violations = runtime_import_violations(path, relative)
             if violations:
                 errors.append(f"{relative}: unguarded network/process import")
     return errors
@@ -246,11 +307,8 @@ def _test_escape_errors() -> list[str]:
         }
         if violations:
             errors.append(f"{relative}: unreviewed test network/process/dynamic import")
-        if relative not in PROCESS_CALL_ALLOWLIST:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            calls = {_attribute(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
-            if calls & PROCESS_DYNAMIC_CALLS:
-                errors.append(f"{relative}: unreviewed test process/dynamic call")
+        if process_call_violations(path, relative):
+            errors.append(f"{relative}: unreviewed test process/dynamic call")
     return errors
 
 
@@ -388,8 +446,15 @@ def test_call_violations(path: Path) -> set[str]:
     """Return denied process/dynamic calls for an unreviewed test source."""
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    calls = {_attribute(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
-    return calls & PROCESS_DYNAMIC_CALLS
+    return _canonical_calls(tree) & PROCESS_DYNAMIC_CALLS
+
+
+def process_call_violations(path: Path, relative: str) -> set[str]:
+    """Return process/dynamic calls outside a path's exact reviewed call set."""
+
+    if relative in PROCESS_CALL_ALLOWLIST:
+        return set()
+    return test_call_violations(path) - EXACT_PROCESS_CALL_ALLOWLIST.get(relative, set())
 
 
 def check() -> list[str]:

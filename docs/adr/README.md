@@ -17,5 +17,6 @@ ADRs capture decisions that constrain implementation or materially affect privac
 | [0011](0011-advisory-local-intelligence.md) | Accepted as a boundary; runtime deferred until post-v1 evidence | optional local models return untrusted suggestions only |
 | [0012](0012-sqlite-local-lite-durability.md) | Accepted for initial build | one SQLite owner, exact-target code review accepted, storage eligibility, dirty recovery and fail-closed readiness; host qualification pending |
 | [0013](0013-local-kek-provider-and-wrap-format.md) | Accepted for initial build | explicit provider, strict profile-key wrap/AAD, no fallback, and owner-only native baseline; conformance pending |
+| [0014](0014-runner-mailbox-persistent-state.md) | Accepted for initial build | bounded encrypted SQLite mailbox frame and isolated synthetic runner artifact; connector acceptance remains open |
 
 New ADRs use: context, decision, consequences, alternatives, security/privacy impact, and review trigger.

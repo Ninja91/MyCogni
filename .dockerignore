@@ -17,3 +17,22 @@
 !packages/mycogni-connector-sdk/README.md
 !packages/mycogni-connector-sdk/src/
 !packages/mycogni-connector-sdk/src/**
+!packages/mycogni-runner-mailbox-runtime/
+!packages/mycogni-runner-mailbox-runtime/pyproject.toml
+!packages/mycogni-runner-mailbox-runtime/src/
+!packages/mycogni-runner-mailbox-runtime/src/**
+
+!services/
+!services/runner_mailbox/
+!services/runner_mailbox/__init__.py
+!services/runner_mailbox/domain.py
+!services/runner_mailbox/persistent.py
+!services/runner_mailbox/ports.py
+!services/runner_mailbox/service.py
+!services/runner_mailbox/volatile.py
+
+# Terminal exclusions override every source-tree negation above.
+**/__pycache__
+**/__pycache__/**
+*.pyc
+*.pyo

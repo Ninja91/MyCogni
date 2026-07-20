@@ -1,0 +1,34 @@
+# Synthetic runner-mailbox sidecar containment probe. The required image value
+# must be an exact local sha256 image ID; a tag is rejected by the validator.
+# There is no connector, broker, trusted-core, vault or Docker-socket mount.
+services:
+  mycogni-runner-mailbox-smoke:
+    image: ${MYCOGNI_RUNNER_IMAGE:?set MYCOGNI_RUNNER_IMAGE to an exact sha256 image ID}
+    pull_policy: never
+    user: "65532:65532"
+    read_only: true
+    network_mode: none
+    ipc: private
+    cgroup: private
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: "no"
+    pids_limit: 64
+    cpus: 1.0
+    mem_limit: 512m
+    tmpfs:
+      - /tmp/mycogni-runner:rw,noexec,nosuid,nodev,size=32m,uid=65532,gid=65532,mode=0700
+    volumes:
+      - type: volume
+        source: runner-mailbox-state
+        target: /var/lib/mycogni-runner
+        read_only: false
+        volume:
+          nocopy: false
+    command: ["--state", "/var/lib/mycogni-runner/probe.sqlite"]
+volumes:
+  runner-mailbox-state:
+    driver: local

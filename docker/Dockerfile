@@ -46,7 +46,8 @@ ENV HOME=/tmp/mycogni \
     TMPDIR=/tmp/mycogni
 
 RUN install -d -o 0 -g 0 -m 0555 /opt/mycogni \
-    && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni /tmp/mycogni
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni /tmp/mycogni \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/mycogni-runner
 
 COPY --from=build /opt/mycogni/.venv /opt/mycogni/.venv
 
