@@ -12,25 +12,29 @@ negative outer-boundary probes, and invocation-owned cleanup.
 
 ## Exact source and image
 
-- source commit: `d656c08a62080598f8b6676b9b9435c0d7169667`;
+- source commit: `2d847d75373f7decf9ce463df931c6451d286610`;
 - local native-arm64 image ID/manifest:
-  `sha256:6e443f187b621c378861813a2400571d7e2cd14e9f37c99b8b2f74a567c5c2ba`;
+  `sha256:ad889b493c0809f17466fff68933686be14cbbd90297feddce9536c920373cb5`;
 - build-reported config digest:
-  `sha256:5c553cd7c6a4411120b844f274fc48ff80c7ed3e3ef9916bd890b737c42b2b56`;
-- image size: 942,493,198 bytes;
+  `sha256:5e0b4b864e329f8e7178ef0aaacca928e84769056c0fb9ea55c1d324d3f3e520`;
+- image size: 942,493,738 bytes;
 - base index: Playwright 1.61.1 Noble
   `sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48`;
 - selected arm64 base manifest:
   `sha256:824f1a789072e648c62541c2cfa4479c4061a290d5c27766d67dc1dcbc19b321`;
-- image labels bind the exact source revision, Apache-2.0 project-source label,
-  `0.0.0` version and fixed OCI label time `2026-07-20T00:00:00Z`.
+- image labels bind the exact source revision, `0.0.0` version and fixed OCI
+  label time `2026-07-20T00:00:00Z`. The image intentionally has no blanket OCI
+  license label; component provenance and licenses are recorded separately in
+  `browser-spike/THIRD_PARTY.md`.
 
 The image's generated `Created` timestamp was not normalized. Reproducible image,
 archive/index bytes and release attestations are explicit nonclaims.
 
 The final no-cache build used Buildx with provenance/SBOM attestations disabled
-for this local decision image. That does not waive `REL-001`; release artifacts
-must add reviewed SBOM, provenance, signatures and notices as separate outputs.
+for this local decision image. The runtime verifier proves the exact local image,
+source binding, configured boundary, and observed probe result; it is not a
+supply-chain attestation. This does not waive `REL-001`; release artifacts must
+add reviewed SBOM, provenance, signatures and notices as separate outputs.
 
 ## Host and effective container
 
@@ -56,16 +60,24 @@ the bounded temporary path is writable.
 
 ## Renderer and network result
 
-Three invocations of the exact runtime verifier passed, including an independent
-root-orchestrator reproduction after the implementation-owner runs. Each required:
+Two implementation-owner invocations of the exact runtime verifier passed. An
+independent re-run remains required before review acceptance. Each run required:
 
 - one exact owned loopback fixture request and denials for fetch, image, worker,
   WebSocket and alternate navigation attempts;
 - TCP denial for undeclared IPv4/IPv6 loopback, TEST-NET addresses, public DNS,
   link-local metadata and Docker Desktop host-gateway addresses;
 - DNS denial for reserved synthetic names;
-- CDP-correlated renderer process evidence with UID 65532, all outer capability
-  sets zero, `NoNewPrivs=1`, and seccomp mode 2;
+- CDP-correlated renderer process evidence with UID 65532, `NoNewPrivs=1`, and
+  seccomp mode 2;
+- all five capability sets zero for Node and the outer browser,
+  no-zygote-sandbox zygote, GPU, and utility roles;
+- exact nested-role policy: two nested zygotes and one renderer with nested
+  user/PID/network namespaces, distinct chroot and the explicitly recorded shared
+  mount namespace; renderer and one zygote active sets zero, while exactly one
+  zygote has namespace-scoped permitted/effective `CAP_SYS_ADMIN`
+  (`0000000000200000`); all three have bounding mask
+  `000001ffffffffff`; unknown roles or capability states fail closed;
 - browser outer seccomp filter count 1 and renderer count 2;
 - renderer user, PID and network namespaces distinct from the Node/browser
   process; mount namespace shared;
@@ -78,10 +90,26 @@ root-orchestrator reproduction after the implementation-owner runs. Each require
   the invocation-owned container.
 
 The runtime verifier has a 30-second host timeout and the payload has a fixed
-20-second deadline. A prior full-Chromium diagnostic hung until manually stopped;
-the accepted exact target uses the bounded Chromium headless-shell path. Exact
-SIGTERM timing, zombie/reaping observation and malicious child-tree termination
-remain an explicit P1 blocker, not accepted evidence.
+20-second deadline. Every diagnostic is pre-registered with an invocation-derived
+name and exact ownership label before Docker is called. The verifier deliberately
+times out one long-running diagnostic, then its main cleanup path stops and
+removes all owned Compose and diagnostic containers and proves both names and IDs
+absent. A prior full-Chromium diagnostic hung until manually stopped; the accepted
+exact target uses the bounded Chromium headless-shell path. Exact SIGTERM timing,
+zombie/reaping observation and malicious child-tree termination remain an explicit
+P1 blocker, not accepted evidence.
+
+## Verification summary
+
+- exact static/mutation browser suite: 46 passed;
+- Python 3.12.12: 1,736 tests passed with two known fork deprecation warnings;
+  Ruff lint, mypy, import contracts, safety, site, claim, threat, governance,
+  network-source, and namespace guards passed;
+- Python 3.13.11: 1,736 tests passed with the same two warnings; the complete
+  compatibility lane and all guards passed;
+- the complete repository-wide Python 3.12 `make check` lane passed after the
+  milestone-owned container verifier received its required mechanical Ruff
+  formatting correction.
 
 Required commands:
 
@@ -89,8 +117,8 @@ Required commands:
 python scripts/verify_browser_containment.py
 python scripts/ci/guarded_pytest.py -q tests/architecture/test_browser_containment.py
 python scripts/verify_browser_containment_runtime.py \
-  --image sha256:6e443f187b621c378861813a2400571d7e2cd14e9f37c99b8b2f74a567c5c2ba \
-  --revision d656c08a62080598f8b6676b9b9435c0d7169667
+  --image sha256:ad889b493c0809f17466fff68933686be14cbbd90297feddce9536c920373cb5 \
+  --revision 2d847d75373f7decf9ce463df931c6451d286610
 ```
 
 ## Current fail-closed boundary

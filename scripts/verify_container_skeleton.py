@@ -90,7 +90,9 @@ def validate_dockerfile(text: str, inventory: dict[str, Any]) -> None:
     images = inventory["images"]
     assert isinstance(images, list) and len(images) == 3
     assert [image["name"] for image in images] == [
-        "python-runtime-and-build", "uv-build-tool", "playwright-browser-spike-base"
+        "python-runtime-and-build",
+        "uv-build-tool",
+        "playwright-browser-spike-base",
     ]
 
     for image in images:
