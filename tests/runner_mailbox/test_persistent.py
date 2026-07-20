@@ -148,6 +148,27 @@ def _claim_process(
         repository.close()
 
 
+def _coordinated_close_process(
+    database_path: str,
+    ready: multiprocessing.Queue[str],
+    release: multiprocessing.synchronize.Event,
+    outcomes: multiprocessing.Queue[tuple[str, str]],
+) -> None:
+    """Open independently, then close only after every peer is ready."""
+
+    repository = _repository(Path(database_path))
+    ready.put("ready")
+    if not release.wait(timeout=10):
+        outcomes.put(("denied", "release-timeout"))
+        return
+    try:
+        repository.close()
+    except MailboxError as error:
+        outcomes.put(("denied", error.denial.value))
+    else:
+        outcomes.put(("closed", ""))
+
+
 def _claim_and_exit_at_boundary(
     database_path: str, binding: ActionBinding, current: datetime, edge: str
 ) -> None:
@@ -326,6 +347,80 @@ def test_sqlite_begin_immediate_serializes_two_independent_claim_processes(tmp_p
         except Empty as error:  # pragma: no cover - explicit process regression guard
             raise AssertionError("claim worker did not report") from error
     assert sorted(outcomes) == [("claimed", ""), ("denied", MailboxDenial.REPLAY.value)]
+
+
+def test_close_succeeds_while_peer_reader_pins_committed_wal(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service, binding = _offered(path, clock, _action())
+    repository = service._repository  # type: ignore[attr-defined]
+    reader = sqlite3.connect(path, isolation_level=None)
+    reader.execute("BEGIN")
+    before = reader.execute(
+        "SELECT generation FROM runner_mailbox_state WHERE singleton = 1"
+    ).fetchone()
+    try:
+        service.claim(binding, claim_credential=CLAIM_CREDENTIAL)
+        assert (
+            reader.execute(
+                "SELECT generation FROM runner_mailbox_state WHERE singleton = 1"
+            ).fetchone()
+            == before
+        )
+        repository.close()
+        repository.close()
+        assert repository.recovery_required is False
+    finally:
+        reader.execute("ROLLBACK")
+        reader.close()
+
+    resumed = _service(path, clock)
+    with pytest.raises(MailboxError) as replay:
+        resumed.claim(binding, claim_credential=CLAIM_CREDENTIAL)
+    assert replay.value.denial is MailboxDenial.REPLAY
+    resumed._repository.close()  # type: ignore[attr-defined]
+
+
+def test_two_independent_processes_close_while_peer_reader_pins_wal(tmp_path: Path) -> None:
+    path = tmp_path / "runner.sqlite"
+    clock = StaticClock(datetime(2030, 1, 1, tzinfo=UTC))
+    service, binding = _offered(path, clock, _action())
+    reader = sqlite3.connect(path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT generation FROM runner_mailbox_state").fetchone()
+    service.claim(binding, claim_credential=CLAIM_CREDENTIAL)
+    service._repository.close()  # type: ignore[attr-defined]
+
+    context = multiprocessing.get_context("spawn")
+    ready: multiprocessing.Queue[str] = context.Queue()
+    release = context.Event()
+    outcomes: multiprocessing.Queue[tuple[str, str]] = context.Queue()
+    processes = [
+        context.Process(
+            target=_coordinated_close_process,
+            args=(str(path), ready, release, outcomes),
+        )
+        for _ in range(2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        for _ in processes:
+            assert ready.get(timeout=10) == "ready"
+        release.set()
+        for process in processes:
+            process.join(timeout=15)
+            assert process.exitcode == 0
+        assert sorted(outcomes.get(timeout=3) for _ in processes) == [
+            ("closed", ""),
+            ("closed", ""),
+        ]
+    finally:
+        release.set()
+        for process in processes:
+            process.join(timeout=3)
+        reader.execute("ROLLBACK")
+        reader.close()
 
 
 def test_state_frame_rejects_epoch_substitution_and_sqlite_is_hardened(tmp_path: Path) -> None:
@@ -825,6 +920,25 @@ def test_post_commit_uncertainty_poison_can_be_closed_idempotently(tmp_path: Pat
     assert repository.recovery_required is True
     repository.close()
     repository.close()
+
+
+def test_genuine_connection_close_failure_poison_is_reported(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "runner.sqlite")
+    connection = repository._connection  # type: ignore[attr-defined]
+
+    class FailingClose:
+        def close(self) -> None:
+            raise sqlite3.DatabaseError("synthetic connection close failure")
+
+    repository._connection = FailingClose()  # type: ignore[attr-defined,assignment]
+    try:
+        with pytest.raises(MailboxError) as uncertain:
+            repository.close()
+        assert uncertain.value.denial is MailboxDenial.INTERNAL_UNCERTAINTY
+        assert repository.recovery_required is True
+        repository.close()
+    finally:
+        connection.close()
 
 
 def test_oversize_outer_frame_fails_closed_before_authentication(tmp_path: Path) -> None:

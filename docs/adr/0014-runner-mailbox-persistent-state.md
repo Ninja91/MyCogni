@@ -56,6 +56,15 @@ noncanonical encoding and unknown versions. There is no in-place
 migration: a future format requires a separately reviewed, offline, paused
 migration with backup and rollback evidence.
 
+Repository handles are process-owned but the database deliberately has no
+single-process owner lease. Closing one handle closes only that connection; it
+does not require `wal_checkpoint(TRUNCATE)`, because another valid mailbox
+process may hold a reader, writer or checkpoint lock. A busy checkpoint is not
+commit uncertainty, and committed WAL frames remain recoverable under SQLite's
+normal WAL/autocheckpoint lifecycle. This differs from ADR-0012's application
+database shutdown: that database has one explicit owner that must obtain an
+exclusive clean-shutdown boundary before removing its dirty marker.
+
 Package the executable probe as `docker/Dockerfile.runner-mailbox`, installing
 only the connector contract dependency anchor and `services.runner_mailbox`;
 the trusted `mycogni` application package is build-time asserted absent. The
