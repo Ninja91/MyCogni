@@ -1,0 +1,35 @@
+FROM mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+
+ARG BUILD_CREATED="1970-01-01T00:00:00Z"
+ARG VERSION="0.0.0"
+ARG VCS_REF="unknown"
+
+LABEL org.opencontainers.image.created="${BUILD_CREATED}" \
+      org.opencontainers.image.description="MyCogni networkless synthetic Chromium boundary probe" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/Ninja91/MyCogni" \
+      org.opencontainers.image.title="MyCogni browser boundary probe" \
+      org.opencontainers.image.version="${VERSION}"
+
+ENV HOME=/tmp/mycogni-browser \
+    NODE_ENV=production \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    TMPDIR=/tmp/mycogni-browser
+
+WORKDIR /opt/mycogni-browser
+
+COPY browser-spike/package.json browser-spike/package-lock.json ./
+RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+    && npm cache clean --force \
+    && rm -rf /root/.npm \
+    && useradd --uid 65532 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mycogni-browser \
+    && install -d -o 65532 -g 65532 -m 0700 /tmp/mycogni-browser \
+    && find /ms-playwright -type f \( -name chrome-sandbox -o -name chrome_sandbox \) -exec chmod 0755 {} + \
+    && chown -R 0:0 /opt/mycogni-browser \
+    && chmod -R a-w /opt/mycogni-browser
+
+COPY --chown=0:0 --chmod=0444 browser-spike/run.mjs browser-spike/synthetic.html ./
+
+USER 65532:65532
+ENTRYPOINT ["/usr/bin/node", "/opt/mycogni-browser/run.mjs"]

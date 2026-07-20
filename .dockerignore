@@ -8,6 +8,12 @@
 !LICENSE
 !NOTICE
 
+!browser-spike/
+!browser-spike/package.json
+!browser-spike/package-lock.json
+!browser-spike/run.mjs
+!browser-spike/synthetic.html
+
 !src/
 !src/**
 

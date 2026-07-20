@@ -1,0 +1,11 @@
+{
+  "name": "@mycogni/browser-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Networkless synthetic-only Chromium containment decision spike",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

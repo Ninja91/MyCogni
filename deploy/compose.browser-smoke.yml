@@ -1,0 +1,38 @@
+# Networkless synthetic-only decision probe. The image must be an exact local
+# sha256 image ID. No broker, credential, core, vault, socket or host path exists.
+services:
+  mycogni-browser-smoke:
+    image: ${MYCOGNI_BROWSER_IMAGE:?set MYCOGNI_BROWSER_IMAGE to an exact sha256 image ID}
+    pull_policy: never
+    user: "65532:65532"
+    read_only: true
+    network_mode: none
+    ipc: private
+    cgroup: private
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:../docker/seccomp.browser.json
+    init: true
+    restart: "no"
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1g
+    shm_size: 256m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+      nofile:
+        soft: 1024
+        hard: 1024
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "1"
+        compress: "false"
+    tmpfs:
+      - /tmp/mycogni-browser:rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=0700
