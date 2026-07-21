@@ -23,7 +23,7 @@ from mycogni.adapters.persistence import (
 )
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
-HEAD_REVISION = "0001_database_baseline"
+HEAD_REVISION = "0002_auth_decision_state"
 
 
 @pytest.fixture(autouse=True)
@@ -61,13 +61,19 @@ def _current_revision(database_path: Path) -> str | None:
         engine.dispose()
 
 
-def test_fresh_database_upgrades_to_head_without_business_schema(tmp_path: Path) -> None:
+def test_fresh_database_upgrades_to_digest_only_auth_state_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "fresh.sqlite"
     command.upgrade(_config(database_path), "head")
 
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert inspect(engine).get_table_names() == ["alembic_version"]
+        assert inspect(engine).get_table_names() == [
+            "alembic_version",
+            "auth_authority_handles",
+            "auth_decision_state",
+        ]
+        columns = {column["name"] for column in inspect(engine).get_columns("auth_decision_state")}
+        assert columns == {"singleton_id", "schema_version", "revision", "state_json"}
     finally:
         engine.dispose()
     assert _current_revision(database_path) == HEAD_REVISION
