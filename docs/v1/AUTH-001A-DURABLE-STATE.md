@@ -34,7 +34,8 @@ invalid digest sizes and malformed domain records.
 Focused tests cover migration round trips, session/replay survival after clean restart, two
 concurrent clients through the single service with exactly one bootstrap winner, rollback before
 commit, committed-but-undelivered outcome handling, raw-secret absence, and static denial of
-network/browser/broker/PII dependencies.
+network/browser/broker/PII dependencies. The pre-integration focused lane passed 115 tests,
+including the complete accepted volatile auth-spike oracle and governance reconstruction tests.
 
 This is software-level evidence only. Physical power interruption, exact-host storage behavior,
 backup/restore epoch policy, externally authenticated review, and qualified human acceptance
