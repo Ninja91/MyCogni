@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "registry_version": "2.0.3",
+  "registry_version": "2.0.4",
   "milestone_definitions": [
     {
       "id": "MDEF-M0",
@@ -72,7 +72,7 @@
     },
     {
       "id": "AUTH-001",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence_ids": []
     },
     {

@@ -54,7 +54,7 @@ Documentation describing a future component is not implementation evidence for t
 
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
-| Local authentication and authority | AUTH-001–003 | `NOT_STARTED` | — | M0 auth ADR/contracts |
+| Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A migration, SQLite decision adapter and focused restart/replay/concurrency/crash-boundary tests; AUTH-002/003 remain unstarted | host-secret custody, real TTY, restore policy, exact-host evidence and authenticated acceptance remain open |
 | Profile keys, encrypted identity and deletion | KEY-001–002, DATA-001 | `NOT_STARTED` | — | M0 key spike |
 | Events, checkpoint, jobs and catch-up | EVT-001, CHECKPOINT-001, JOB-STATE-001, OUTBOX-001, SCHED-001 | `NOT_STARTED` | — | DB/contracts/key foundation |
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
@@ -163,7 +163,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: ACTION-001 | ACTION-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ALPHA-001 | ALPHA-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ARTIFACT-VERIFY-001 | ARTIFACT-VERIFY-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: AUTH-001 | AUTH-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: AUTH-001 | AUTH-001 | `IN_PROGRESS` | AUTH-001A durable decision-state implementation and tests | no package promotion; host-secret, real-terminal, restore and acceptance gates remain open |
 | Canonical inventory: AUTH-002 | AUTH-002 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTH-003 | AUTH-003 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTHORITY-001 | AUTHORITY-001 | `NOT_STARTED` | — | follow work-package dependency order |

@@ -15,6 +15,7 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 | [Implementation-planner synthesis](reviews/01-implementation-planner-synthesis.md) | independent product, backend, and platform planning findings and council disposition |
 | [Adversarial review disposition](reviews/02-adversarial-review.md) | independent product, security/platform, and backend/OSS findings plus applied corrections |
 | [SPIKE-KEY exact-target review](reviews/17-spike-key-exact-target-adversarial-review.md) | initial rejection, required remediation and repeat-review gate |
+| [AUTH-001A durable state](AUTH-001A-DURABLE-STATE.md) | digest-only SQLite decision state, atomic one-use boundaries and explicit remaining blockers |
 
 ## Current program state
 
