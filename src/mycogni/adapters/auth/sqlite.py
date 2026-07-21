@@ -51,6 +51,10 @@ class AuthCommitOutcomeUnknown(RuntimeError):
     """A decision committed but its credential-bearing response was not delivered."""
 
 
+class AuthStateCorrupt(RuntimeError):
+    """Persisted auth state is malformed; rendering never includes stored content."""
+
+
 _RECORD_TYPES: dict[str, type[Any]] = {
     cls.__name__: cls
     for cls in (
@@ -171,7 +175,7 @@ def _snapshot(store: VolatileAuthDecisionStore) -> str:
     return payload
 
 
-def _restore(payload: str) -> VolatileAuthDecisionStore:
+def _restore_canonical(payload: str) -> VolatileAuthDecisionStore:
     parsed = json.loads(payload)
     if type(parsed) is not dict:
         raise ValueError("auth state document must be an object")
@@ -203,6 +207,13 @@ def _restore(payload: str) -> VolatileAuthDecisionStore:
             restored[key] = item
         setattr(store, f"_{name}", restored)
     return store
+
+
+def _restore(payload: str) -> VolatileAuthDecisionStore:
+    try:
+        return _restore_canonical(payload)
+    except (KeyError, TypeError, ValueError):
+        raise AuthStateCorrupt("persisted auth decision state is corrupt") from None
 
 
 def _authority_registry(store: VolatileAuthDecisionStore) -> list[dict[str, str]]:

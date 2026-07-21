@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from mycogni.adapters.auth import (
     AuthCommitOutcomeUnknown,
+    AuthStateCorrupt,
     DurableAuthCrashPoint,
     SqliteAuthDecisionStore,
 )
@@ -214,5 +215,26 @@ def test_persisted_state_is_canonical_digest_only_and_has_no_raw_credential(
         assert "auth_secret" not in payload
         assert len(authority_rows) == 5
         assert {row.authority_kind for row in authority_rows} == {"root", "operator", "service"}
+    finally:
+        runtime.close_cleanly()
+
+
+def test_corrupt_state_fails_closed_without_rendering_stored_content(tmp_path: Path) -> None:
+    database_path = tmp_path / "auth-corrupt.sqlite"
+    _migrate(database_path)
+    runtime = _open(database_path)
+    canary = "synthetic-private-canary.invalid"
+    try:
+        service, _setup, _roots = _initialized(runtime)
+        with runtime.unit_of_work() as unit_of_work:
+            unit_of_work.session.execute(
+                text("UPDATE auth_decision_state SET state_json=:payload"),
+                {"payload": '{"actors":"' + canary + '"}'},
+            )
+            unit_of_work.commit()
+        with pytest.raises(AuthStateCorrupt) as raised:
+            service.garbage_collect(0)
+        assert canary not in str(raised.value)
+        assert canary not in repr(raised.value)
     finally:
         runtime.close_cleanly()

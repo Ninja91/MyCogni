@@ -2,6 +2,7 @@
 
 from mycogni.adapters.auth.sqlite import (
     AuthCommitOutcomeUnknown,
+    AuthStateCorrupt,
     DurableAuthCrashPoint,
     SqliteAuthDecisionStore,
 )
@@ -14,6 +15,7 @@ from mycogni.adapters.auth.volatile import (
 
 __all__ = (
     "AuthCommitOutcomeUnknown",
+    "AuthStateCorrupt",
     "CrashPoint",
     "DurableAuthCrashPoint",
     "OsTokenSource",
