@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
+from typing import Any, get_type_hints
+
+from mycogni.adapters.auth import SqliteAuthDecisionStore
+from mycogni.application.auth import AuthDecisionStore
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 AUTH_SOURCE = REPOSITORY_ROOT / "src/mycogni/adapters/auth/sqlite.py"
@@ -34,3 +39,17 @@ def test_auth_migration_has_no_raw_secret_column() -> None:
     )
     for forbidden in ("credential", "token", "password", "plaintext", "secret_value"):
         assert f'column("{forbidden}' not in migration
+
+
+def test_durable_store_public_decision_api_has_no_variadic_or_any_types() -> None:
+    for name, protocol_method in AuthDecisionStore.__dict__.items():
+        if name.startswith("_") or not callable(protocol_method):
+            continue
+        method = getattr(SqliteAuthDecisionStore, name)
+        signature = inspect.signature(method)
+        assert all(
+            parameter.kind not in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+            for parameter in signature.parameters.values()
+        )
+        hints = get_type_hints(method)
+        assert Any not in hints.values()

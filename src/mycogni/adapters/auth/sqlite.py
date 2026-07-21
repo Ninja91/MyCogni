@@ -2,9 +2,11 @@
 
 The persisted document is a strict, versioned encoding of finite decision state.
 It contains opaque identifiers, fixed-size secret digests and policy metadata, but
-never an ``OpaqueCredential`` or raw credential material.  Every public decision
-reloads and commits the complete state under ``BEGIN IMMEDIATE`` so two processes
-cannot both consume one-use authority.
+never an ``OpaqueCredential`` or raw credential material. Every mutating decision
+reloads and commits the complete state under the single-owner runtime's
+``BEGIN IMMEDIATE`` boundary so concurrent clients cannot both consume one-use
+authority. A second database-owning process remains unsupported and is rejected
+by ``SQLiteRuntime``.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import fields, is_dataclass
 from datetime import datetime
 from enum import Enum, StrEnum
@@ -19,19 +22,35 @@ from threading import RLock
 from typing import Any, TypeVar, cast
 
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 
-from mycogni.adapters.auth import volatile as volatile_module
 from mycogni.adapters.auth.volatile import VolatileAuthDecisionStore
 from mycogni.adapters.persistence.durability import SQLiteRuntime
+from mycogni.application.auth import AuthDecisionStore, AuthStateSnapshotV1
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     ActorRecord,
+    AuthDenial,
     AuthorityGrant,
+    AuthOutcome,
+    AuthPurpose,
+    AuthScope,
+    BootstrapDecision,
+    BootstrapIssue,
     BootstrapRecord,
+    CompositionBindingRecord,
     GrantProvenanceRecord,
+    OpaqueCredential,
+    RecoveryIssue,
     RecoveryRecord,
+    ReprovisionCeremonyIssue,
+    ReprovisionCeremonyRecord,
+    RootCapability,
+    RootCapabilityIssue,
     RootCapabilityRecord,
+    RootPurpose,
     SecretDigest,
+    SessionIssue,
     SessionRecord,
     StepUpRecord,
 )
@@ -48,11 +67,15 @@ class DurableAuthCrashPoint(StrEnum):
 
 
 class AuthCommitOutcomeUnknown(RuntimeError):
-    """A decision committed but its credential-bearing response was not delivered."""
+    """Commit status or credential delivery is unknown; reconciliation is required."""
 
 
 class AuthStateCorrupt(RuntimeError):
     """Persisted auth state is malformed; rendering never includes stored content."""
+
+
+class _CommitAmbiguous(RuntimeError):
+    """Internal marker stripped before crossing the adapter boundary."""
 
 
 _RECORD_TYPES: dict[str, type[Any]] = {
@@ -66,8 +89,8 @@ _RECORD_TYPES: dict[str, type[Any]] = {
         RootCapabilityRecord,
         SessionRecord,
         StepUpRecord,
-        volatile_module._CompositionBinding,
-        volatile_module._ReprovisionCeremonyRecord,
+        CompositionBindingRecord,
+        ReprovisionCeremonyRecord,
     )
 }
 
@@ -77,9 +100,6 @@ for record_type in _RECORD_TYPES.values():
         annotation = field.type
         if isinstance(annotation, type) and issubclass(annotation, Enum):
             _ENUM_TYPES[annotation.__name__] = annotation
-
-# Postponed annotations mean explicit registration is clearer and fail-closed.
-from mycogni.domain.auth import AuthDenial, AuthPurpose, AuthScope, RootPurpose  # noqa: E402
 
 for enum_type in (AuthDenial, AuthPurpose, AuthScope, RootPurpose):
     _ENUM_TYPES[enum_type.__name__] = enum_type
@@ -117,14 +137,22 @@ def _decode(value: object) -> object:
         raise ValueError("auth state contains malformed canonical data")
     kind = value["type"]
     if kind == "opaque_id":
+        if set(value) != {"type", "value"} or type(value["value"]) is not str:
+            raise ValueError("auth state opaque ID encoding is not canonical")
         return OpaqueId.parse(value["value"])
     if kind == "secret_digest":
+        if set(value) != {"type", "value"} or type(value["value"]) is not str:
+            raise ValueError("auth state digest encoding is not canonical")
         raw = base64.b64decode(value["value"], validate=True)
         return SecretDigest(raw)
     if kind == "utc_datetime":
+        if set(value) != {"type", "value"} or type(value["value"]) is not str:
+            raise ValueError("auth state datetime encoding is not canonical")
         parsed = datetime.fromisoformat(value["value"])
         return parsed
     if kind == "enum":
+        if set(value) != {"type", "name", "value"} or type(value.get("value")) is not str:
+            raise ValueError("auth state enum encoding is not canonical")
         enum_name = value.get("name")
         if type(enum_name) is not str:
             raise ValueError("auth state contains an invalid enum name")
@@ -133,8 +161,12 @@ def _decode(value: object) -> object:
             raise ValueError("auth state contains an unknown enum")
         return enum_type(value["value"])
     if kind == "frozenset":
+        if set(value) != {"type", "items"} or type(value["items"]) is not list:
+            raise ValueError("auth state set encoding is not canonical")
         return frozenset(_decode(item) for item in value["items"])
     if kind == "record":
+        if set(value) != {"type", "name", "fields"}:
+            raise ValueError("auth state record encoding is not canonical")
         record_name = value.get("name")
         if type(record_name) is not str:
             raise ValueError("auth state contains an invalid record name")
@@ -150,17 +182,22 @@ def _decode(value: object) -> object:
 
 
 def _snapshot(store: VolatileAuthDecisionStore) -> str:
+    snapshot = store.export_durable_state_v1()
     state: dict[str, dict[OpaqueId, object]] = {
-        "actors": cast(dict[OpaqueId, object], store._actors),
-        "installation_actors": cast(dict[OpaqueId, object], store._installation_actors),
-        "roots": cast(dict[OpaqueId, object], store._roots),
-        "bootstraps": cast(dict[OpaqueId, object], store._bootstraps),
-        "sessions": cast(dict[OpaqueId, object], store._sessions),
-        "recoveries": cast(dict[OpaqueId, object], store._recoveries),
-        "step_ups": cast(dict[OpaqueId, object], store._step_ups),
-        "grant_provenance": cast(dict[OpaqueId, object], store._grant_provenance),
-        "composition_bindings": cast(dict[OpaqueId, object], store._composition_bindings),
-        "reprovision_ceremonies": cast(dict[OpaqueId, object], store._reprovision_ceremonies),
+        "actors": {item.actor_id: item for item in snapshot.actors},
+        "installation_actors": dict(snapshot.installation_actors),
+        "roots": {item.handle: item for item in snapshot.roots},
+        "bootstraps": {item.handle: item for item in snapshot.bootstraps},
+        "sessions": {item.handle: item for item in snapshot.sessions},
+        "recoveries": {item.handle: item for item in snapshot.recoveries},
+        "step_ups": {item.handle: item for item in snapshot.step_ups},
+        "grant_provenance": {
+            item.grant.authority_evidence_id: item for item in snapshot.grant_provenance
+        },
+        "composition_bindings": {
+            item.installation_id: item for item in snapshot.composition_bindings
+        },
+        "reprovision_ceremonies": {item.handle: item for item in snapshot.reprovision_ceremonies},
     }
     canonical = {
         name: [
@@ -175,8 +212,17 @@ def _snapshot(store: VolatileAuthDecisionStore) -> str:
     return payload
 
 
+def _reject_duplicate_object_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    decoded: dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise ValueError("auth state contains a duplicate object key")
+        decoded[key] = value
+    return decoded
+
+
 def _restore_canonical(payload: str) -> VolatileAuthDecisionStore:
-    parsed = json.loads(payload)
+    parsed = json.loads(payload, object_pairs_hook=_reject_duplicate_object_keys)
     if type(parsed) is not dict:
         raise ValueError("auth state document must be an object")
     expected = {
@@ -193,20 +239,62 @@ def _restore_canonical(payload: str) -> VolatileAuthDecisionStore:
     }
     if set(parsed) != expected:
         raise ValueError("auth state document fields are not canonical")
-    store = VolatileAuthDecisionStore()
+    collection_types: dict[str, tuple[type[object], str | None]] = {
+        "actors": (ActorRecord, "actor_id"),
+        "installation_actors": (OpaqueId, None),
+        "roots": (RootCapabilityRecord, "handle"),
+        "bootstraps": (BootstrapRecord, "handle"),
+        "sessions": (SessionRecord, "handle"),
+        "recoveries": (RecoveryRecord, "handle"),
+        "step_ups": (StepUpRecord, "handle"),
+        "grant_provenance": (GrantProvenanceRecord, "grant.authority_evidence_id"),
+        "composition_bindings": (CompositionBindingRecord, "installation_id"),
+        "reprovision_ceremonies": (ReprovisionCeremonyRecord, "handle"),
+    }
+    decoded: dict[str, list[tuple[OpaqueId, object]]] = {}
     for name, pairs in parsed.items():
         if type(pairs) is not list:
             raise ValueError("auth state collection must be a list")
-        restored: dict[object, object] = {}
+        restored: dict[OpaqueId, object] = {}
+        item_type, key_attribute = collection_types[name]
         for pair in pairs:
             if type(pair) is not list or len(pair) != 2:
                 raise ValueError("auth state entry must be a key/value pair")
             key, item = _decode(pair[0]), _decode(pair[1])
             if type(key) is not OpaqueId or key in restored:
                 raise ValueError("auth state key is invalid or duplicated")
+            if type(item) is not item_type:
+                raise ValueError("auth state collection contains the wrong record type")
+            if key_attribute is not None:
+                actual: object = item
+                for attribute in key_attribute.split("."):
+                    actual = getattr(actual, attribute)
+                if actual != key:
+                    raise ValueError("auth state key does not match its record handle")
             restored[key] = item
-        setattr(store, f"_{name}", restored)
-    return store
+        decoded[name] = list(restored.items())
+    snapshot = AuthStateSnapshotV1(
+        actors=tuple(cast(ActorRecord, item) for _key, item in decoded["actors"]),
+        installation_actors=tuple(
+            (key, cast(OpaqueId, item)) for key, item in decoded["installation_actors"]
+        ),
+        roots=tuple(cast(RootCapabilityRecord, item) for _key, item in decoded["roots"]),
+        bootstraps=tuple(cast(BootstrapRecord, item) for _key, item in decoded["bootstraps"]),
+        sessions=tuple(cast(SessionRecord, item) for _key, item in decoded["sessions"]),
+        recoveries=tuple(cast(RecoveryRecord, item) for _key, item in decoded["recoveries"]),
+        step_ups=tuple(cast(StepUpRecord, item) for _key, item in decoded["step_ups"]),
+        grant_provenance=tuple(
+            cast(GrantProvenanceRecord, item) for _key, item in decoded["grant_provenance"]
+        ),
+        composition_bindings=tuple(
+            cast(CompositionBindingRecord, item) for _key, item in decoded["composition_bindings"]
+        ),
+        reprovision_ceremonies=tuple(
+            cast(ReprovisionCeremonyRecord, item)
+            for _key, item in decoded["reprovision_ceremonies"]
+        ),
+    )
+    return VolatileAuthDecisionStore.from_durable_state_v1(snapshot)
 
 
 def _restore(payload: str) -> VolatileAuthDecisionStore:
@@ -224,11 +312,12 @@ def _authority_registry(store: VolatileAuthDecisionStore) -> list[dict[str, str]
             raise RuntimeError("auth authority handle is not globally unique")
         registry[handle] = (kind, installation_id)
 
-    for root in store._roots.values():
+    snapshot = store.export_durable_state_v1()
+    for root in snapshot.roots:
         register(root.handle, "root", root.installation_id)
-    for installation_id, binding in store._composition_bindings.items():
-        register(binding.operator_handle, "operator", installation_id)
-        register(binding.service_handle, "service", installation_id)
+    for binding in snapshot.composition_bindings:
+        register(binding.operator_handle, "operator", binding.installation_id)
+        register(binding.service_handle, "service", binding.installation_id)
     return [
         {"handle": str(handle), "authority_kind": kind, "installation_id": str(installation_id)}
         for handle, (kind, installation_id) in sorted(
@@ -264,23 +353,68 @@ class SqliteAuthDecisionStore:
 
     def _decision(self, operation: Callable[[VolatileAuthDecisionStore], _T]) -> _T:
         with self._client_lock:
-            return self._decision_locked(operation)
+            try:
+                return self._decision_locked(operation)
+            except AuthStateCorrupt:
+                self._latch_recovery()
+                raise
+            except (_CommitAmbiguous, AuthCommitOutcomeUnknown):
+                self._latch_recovery()
+                raise AuthCommitOutcomeUnknown(
+                    "auth decision outcome is unknown; do not retry; reconciliation is required"
+                ) from None
+
+    def _read(self, operation: Callable[[VolatileAuthDecisionStore], _T]) -> _T:
+        with self._client_lock:
+            try:
+                with self._runtime.unit_of_work() as unit_of_work:
+                    row = self._load_row(unit_of_work.session)
+                    if row is None:
+                        store = VolatileAuthDecisionStore()
+                    else:
+                        store = _restore(cast(str, row["state_json"]))
+                        self._validate_authority_registry(unit_of_work.session, store)
+                    return operation(store)
+            except AuthStateCorrupt:
+                self._latch_recovery()
+                raise
+
+    def _latch_recovery(self) -> None:
+        with suppress(BaseException):
+            self._runtime.abandon()
+
+    @staticmethod
+    def _load_row(session: Any) -> Any:
+        return (
+            session.execute(
+                text(
+                    "SELECT schema_version, revision, state_json "
+                    "FROM auth_decision_state WHERE singleton_id=1"
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+
+    @staticmethod
+    def _validate_authority_registry(session: Any, store: VolatileAuthDecisionStore) -> None:
+        expected = {
+            (item["handle"], item["authority_kind"], item["installation_id"])
+            for item in _authority_registry(store)
+        }
+        rows = session.execute(
+            text("SELECT handle, authority_kind, installation_id FROM auth_authority_handles")
+        ).all()
+        actual = {(row.handle, row.authority_kind, row.installation_id) for row in rows}
+        if actual != expected:
+            raise AuthStateCorrupt("persisted auth decision state is corrupt")
 
     def _decision_locked(self, operation: Callable[[VolatileAuthDecisionStore], _T]) -> _T:
         # SQLiteRuntime admits one owned application UoW and starts it with
         # BEGIN IMMEDIATE. A commit exception returns no newly issued material;
         # callers must treat it as outcome-unknown and must not auto-retry.
         with self._runtime.unit_of_work() as unit_of_work:
-            row = (
-                unit_of_work.session.execute(
-                    text(
-                        "SELECT schema_version, revision, state_json "
-                        "FROM auth_decision_state WHERE singleton_id=1"
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
+            row = self._load_row(unit_of_work.session)
             if row is None:
                 store = VolatileAuthDecisionStore()
                 revision = 0
@@ -288,31 +422,42 @@ class SqliteAuthDecisionStore:
                 if row["schema_version"] != _STATE_SCHEMA_VERSION:
                     raise RuntimeError("unsupported auth decision state schema")
                 store = _restore(row["state_json"])
+                self._validate_authority_registry(unit_of_work.session, store)
                 revision = row["revision"]
             result = operation(store)
             payload = _snapshot(store)
             authorities = _authority_registry(store)
             if row is None:
-                unit_of_work.session.execute(
-                    text(
-                        "INSERT INTO auth_decision_state"
-                        "(singleton_id,schema_version,revision,state_json) "
-                        "VALUES(1,:schema_version,1,:state_json)"
+                changed = cast(
+                    CursorResult[Any],
+                    unit_of_work.session.execute(
+                        text(
+                            "INSERT INTO auth_decision_state"
+                            "(singleton_id,schema_version,revision,state_json) "
+                            "VALUES(1,:schema_version,1,:state_json)"
+                        ),
+                        {"schema_version": _STATE_SCHEMA_VERSION, "state_json": payload},
                     ),
-                    {"schema_version": _STATE_SCHEMA_VERSION, "state_json": payload},
                 )
+                if changed.rowcount != 1:
+                    raise RuntimeError("auth decision state revision changed unexpectedly")
             else:
-                unit_of_work.session.execute(
-                    text(
-                        "UPDATE auth_decision_state SET revision=:next_revision, "
-                        "state_json=:state_json WHERE singleton_id=1 AND revision=:revision"
+                changed = cast(
+                    CursorResult[Any],
+                    unit_of_work.session.execute(
+                        text(
+                            "UPDATE auth_decision_state SET revision=:next_revision, "
+                            "state_json=:state_json WHERE singleton_id=1 AND revision=:revision"
+                        ),
+                        {
+                            "next_revision": revision + 1,
+                            "state_json": payload,
+                            "revision": revision,
+                        },
                     ),
-                    {
-                        "next_revision": revision + 1,
-                        "state_json": payload,
-                        "revision": revision,
-                    },
                 )
+                if changed.rowcount != 1:
+                    raise RuntimeError("auth decision state revision changed unexpectedly")
             unit_of_work.session.execute(text("DELETE FROM auth_authority_handles"))
             if authorities:
                 unit_of_work.session.execute(
@@ -324,66 +469,285 @@ class SqliteAuthDecisionStore:
                     authorities,
                 )
             self._crash_if_armed(DurableAuthCrashPoint.BEFORE_COMMIT)
-            unit_of_work.commit()
+            try:
+                unit_of_work.commit()
+            except BaseException:
+                raise _CommitAmbiguous from None
             self._crash_if_armed(DurableAuthCrashPoint.AFTER_COMMIT)
             return result
 
-    def initialize_installation(self, **kwargs: Any) -> None:
-        self._decision(lambda store: store.initialize_installation(**kwargs))
+    def initialize_installation(
+        self,
+        *,
+        installation_id: OpaqueId,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        records: tuple[RootCapabilityRecord, ...],
+        operator_authority: RootCapabilityIssue,
+        service_identity: RootCapabilityIssue,
+        now: datetime,
+    ) -> None:
+        self._decision(
+            lambda store: store.initialize_installation(
+                installation_id=installation_id,
+                actor_id=actor_id,
+                represented_profile_id=represented_profile_id,
+                records=records,
+                operator_authority=operator_authority,
+                service_identity=service_identity,
+                now=now,
+            )
+        )
 
-    def create_root_bootstrap(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.create_root_bootstrap(*args, **kwargs))
+    def create_root_bootstrap(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        return self._decision(
+            lambda store: store.create_root_bootstrap(root, root_digest, record, now)
+        )
 
-    def create_authenticated_bootstrap(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.create_authenticated_bootstrap(*args, **kwargs))
+    def create_authenticated_bootstrap(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        record: BootstrapRecord,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        return self._decision(
+            lambda store: store.create_authenticated_bootstrap(
+                session, session_digest, grant, record, now
+            )
+        )
 
-    def create_reprovision_bootstrap(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.create_reprovision_bootstrap(*args, **kwargs))
+    def create_reprovision_bootstrap(
+        self,
+        reprovision: OpaqueCredential,
+        reprovision_digest: SecretDigest,
+        issue: BootstrapIssue,
+        now: datetime,
+    ) -> AuthOutcome[BootstrapRecord]:
+        return self._decision(
+            lambda store: store.create_reprovision_bootstrap(
+                reprovision, reprovision_digest, issue, now
+            )
+        )
 
-    def cancel_bootstrap(self, *args: Any, **kwargs: Any) -> None:
-        self._decision(lambda store: store.cancel_bootstrap(*args, **kwargs))
+    def cancel_bootstrap(self, handle: OpaqueId, now: datetime) -> None:
+        self._decision(lambda store: store.cancel_bootstrap(handle, now))
 
-    def exchange_bootstrap(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.exchange_bootstrap(*args, **kwargs))
+    def exchange_bootstrap(
+        self,
+        handle: OpaqueId,
+        presented_digest: SecretDigest,
+        now: datetime,
+        session: SessionRecord,
+        recovery: RecoveryRecord,
+        replacement_reprovision: RootCapabilityIssue,
+    ) -> AuthOutcome[BootstrapDecision]:
+        return self._decision(
+            lambda store: store.exchange_bootstrap(
+                handle, presented_digest, now, session, recovery, replacement_reprovision
+            )
+        )
 
-    def create_reprovision_ceremony(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.create_reprovision_ceremony(*args, **kwargs))
+    def create_reprovision_ceremony(
+        self,
+        service_identity: OpaqueCredential,
+        service_digest: SecretDigest,
+        operator_identity: OpaqueCredential,
+        operator_digest: SecretDigest,
+        bootstrap_handle: OpaqueId,
+        issue: ReprovisionCeremonyIssue,
+        now: datetime,
+        *,
+        active_capacity: int,
+        tombstone_capacity: int,
+        replay_seconds: int,
+    ) -> AuthOutcome[OpaqueId]:
+        return self._decision(
+            lambda store: store.create_reprovision_ceremony(
+                service_identity,
+                service_digest,
+                operator_identity,
+                operator_digest,
+                bootstrap_handle,
+                issue,
+                now,
+                active_capacity=active_capacity,
+                tombstone_capacity=tombstone_capacity,
+                replay_seconds=replay_seconds,
+            )
+        )
 
-    def exchange_reprovision_bootstrap(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.exchange_reprovision_bootstrap(*args, **kwargs))
+    def exchange_reprovision_bootstrap(
+        self,
+        handle: OpaqueId,
+        presented_digest: SecretDigest,
+        service_identity: OpaqueCredential,
+        service_digest: SecretDigest,
+        ceremony: OpaqueCredential,
+        ceremony_digest: SecretDigest,
+        now: datetime,
+        session: SessionRecord,
+        recovery: RecoveryRecord,
+        replacement_reprovision: RootCapabilityIssue,
+        *,
+        tombstone_capacity: int,
+        replay_seconds: int,
+    ) -> AuthOutcome[BootstrapDecision]:
+        return self._decision(
+            lambda store: store.exchange_reprovision_bootstrap(
+                handle,
+                presented_digest,
+                service_identity,
+                service_digest,
+                ceremony,
+                ceremony_digest,
+                now,
+                session,
+                recovery,
+                replacement_reprovision,
+                tombstone_capacity=tombstone_capacity,
+                replay_seconds=replay_seconds,
+            )
+        )
 
-    def reprovision_ceremony_counts(self, *args: Any, **kwargs: Any) -> dict[str, int]:
-        return self._decision(lambda store: store.reprovision_ceremony_counts(*args, **kwargs))
+    def reprovision_ceremony_counts(self, service_handle: OpaqueId) -> dict[str, int]:
+        return self._read(lambda store: store.reprovision_ceremony_counts(service_handle))
 
-    def authenticate_session(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.authenticate_session(*args, **kwargs))
+    def authenticate_session(
+        self,
+        credential: OpaqueCredential,
+        presented_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[SessionRecord]:
+        return self._decision(
+            lambda store: store.authenticate_session(credential, presented_digest, now)
+        )
 
-    def create_step_up(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.create_step_up(*args, **kwargs))
+    def create_step_up(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        now: datetime,
+        challenge: StepUpRecord,
+    ) -> AuthOutcome[StepUpRecord]:
+        return self._decision(
+            lambda store: store.create_step_up(session, session_digest, now, challenge)
+        )
 
-    def consume_step_up(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.consume_step_up(*args, **kwargs))
+    def consume_step_up(
+        self,
+        challenge: OpaqueCredential,
+        challenge_digest: SecretDigest,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        purpose: AuthPurpose,
+        scopes: frozenset[AuthScope],
+        now: datetime,
+    ) -> AuthOutcome[StepUpRecord]:
+        return self._decision(
+            lambda store: store.consume_step_up(
+                challenge,
+                challenge_digest,
+                session,
+                session_digest,
+                actor_id,
+                represented_profile_id,
+                purpose,
+                scopes,
+                now,
+            )
+        )
 
-    def rotate_session(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.rotate_session(*args, **kwargs))
+    def rotate_session(
+        self,
+        current: OpaqueCredential,
+        current_digest: SecretDigest,
+        now: datetime,
+        replacement: SessionRecord,
+    ) -> AuthOutcome[SessionRecord]:
+        return self._decision(
+            lambda store: store.rotate_session(current, current_digest, now, replacement)
+        )
 
-    def revoke_session(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.revoke_session(*args, **kwargs))
+    def revoke_session(
+        self,
+        current: OpaqueCredential,
+        current_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[OpaqueId]:
+        return self._decision(lambda store: store.revoke_session(current, current_digest, now))
 
-    def renew_recovery(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.renew_recovery(*args, **kwargs))
+    def renew_recovery(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]:
+        return self._decision(
+            lambda store: store.renew_recovery(session, session_digest, grant, replacement, now)
+        )
 
-    def revoke_all_authenticated(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.revoke_all_authenticated(*args, **kwargs))
+    def revoke_all_authenticated(
+        self,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        grant: AuthorityGrant,
+        replacement: RecoveryRecord,
+        now: datetime,
+    ) -> AuthOutcome[RecoveryRecord]:
+        return self._decision(
+            lambda store: store.revoke_all_authenticated(
+                session, session_digest, grant, replacement, now
+            )
+        )
 
-    def emergency_revoke(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.emergency_revoke(*args, **kwargs))
+    def emergency_revoke(
+        self,
+        root: RootCapability,
+        root_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[int]:
+        return self._decision(lambda store: store.emergency_revoke(root, root_digest, now))
 
-    def recover(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.recover(*args, **kwargs))
+    def recover(
+        self,
+        recovery: OpaqueCredential,
+        recovery_digest: SecretDigest,
+        now: datetime,
+        session: SessionIssue,
+        replacement_recovery: RecoveryIssue,
+    ) -> AuthOutcome[SessionRecord]:
+        return self._decision(
+            lambda store: store.recover(
+                recovery, recovery_digest, now, session, replacement_recovery
+            )
+        )
 
-    def validate_grant(self, *args: Any, **kwargs: Any) -> Any:
-        return self._decision(lambda store: store.validate_grant(*args, **kwargs))
+    def validate_grant(
+        self,
+        grant: object,
+        session: OpaqueCredential,
+        session_digest: SecretDigest,
+        now: datetime,
+    ) -> AuthOutcome[AuthorityGrant]:
+        return self._decision(
+            lambda store: store.validate_grant(grant, session, session_digest, now)
+        )
 
-    def garbage_collect(self, *args: Any, **kwargs: Any) -> int:
-        return self._decision(lambda store: store.garbage_collect(*args, **kwargs))
+    def garbage_collect(self, now: datetime, retention_seconds: int) -> int:
+        return self._decision(lambda store: store.garbage_collect(now, retention_seconds))
+
+
+def _auth_store_conformance(store: SqliteAuthDecisionStore) -> AuthDecisionStore:
+    return store
