@@ -89,6 +89,7 @@ REVIEWED_RUNTIME_IMPORT_ALLOWLIST = {
     ),
 }
 TEST_IMPORT_ALLOWLIST = {
+    "tests/adapters/auth/test_owner_file_custody.py": {"subprocess"},
     "tests/ci/test_network_guard.py": TEST_ESCAPE_IMPORTS,
     "tests/simulator/test_network_guard_simulator.py": {"httpx", "socket"},
     "tests/simulator/test_web_mail_safety.py": {"socket"},
@@ -113,6 +114,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/simulator/test_web_mail_safety.py",
 }
 EXACT_PROCESS_CALL_ALLOWLIST = {
+    "tests/adapters/auth/test_owner_file_custody.py": {"os.fork", "subprocess.run"},
     "tests/architecture/test_browser_containment.py": {"subprocess.run"},
     "tests/architecture/test_runner_containment.py": {"subprocess.run"},
     "tests/runner_mailbox/test_persistent.py": {"os.fork"},

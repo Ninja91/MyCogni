@@ -23,7 +23,7 @@ Documentation describing a future component is not implementation evidence for t
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; PR merge-revision gates pass 1,471 tests with one expected Darwin-only skip plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
-| Auth/key/data/durable kernel | `NOT_STARTED` | design/ADRs only | M1 packages and failure evidence |
+| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable decision state and AUTH-001B source-level host-secret custody implementation evidence; key/data packages remain unstarted | complete terminal, reconciliation/restore, exact-host and accepted-review gates plus remaining M1 packages |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
 | Release artifacts/operations | `NOT_STARTED` | deployment specification only | M5 signed artifacts and drills |
@@ -54,7 +54,7 @@ Documentation describing a future component is not implementation evidence for t
 
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
-| Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A migration, SQLite decision adapter and focused restart/replay/concurrency/crash-boundary tests; AUTH-002/003 remain unstarted | host-secret custody, real TTY, restore policy, exact-host evidence and authenticated acceptance remain open |
+| Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A durable decisions plus AUTH-001B source-level owner-file custody, strict binding/digest checks, typed reprovision disablement and fresh-exec restart evidence; AUTH-002/003 remain unstarted | real TTY, cross-store root handoff/reconciliation, restore policy, exact-host evidence and authenticated acceptance remain open |
 | Profile keys, encrypted identity and deletion | KEY-001–002, DATA-001 | `NOT_STARTED` | — | M0 key spike |
 | Events, checkpoint, jobs and catch-up | EVT-001, CHECKPOINT-001, JOB-STATE-001, OUTBOX-001, SCHED-001 | `NOT_STARTED` | — | DB/contracts/key foundation |
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
@@ -163,7 +163,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: ACTION-001 | ACTION-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ALPHA-001 | ALPHA-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ARTIFACT-VERIFY-001 | ARTIFACT-VERIFY-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: AUTH-001 | AUTH-001 | `IN_PROGRESS` | AUTH-001A durable decision-state implementation and tests | no package promotion; host-secret, real-terminal, restore and acceptance gates remain open |
+| Canonical inventory: AUTH-001 | AUTH-001 | `IN_PROGRESS` | AUTH-001A durable decision state and AUTH-001B source-level owner-file custody implementation/tests | no package promotion; real terminal, cross-store mutation/reconciliation, restore, exact-host and acceptance gates remain open |
 | Canonical inventory: AUTH-002 | AUTH-002 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTH-003 | AUTH-003 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTHORITY-001 | AUTHORITY-001 | `NOT_STARTED` | — | follow work-package dependency order |
@@ -226,7 +226,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: RESTORE-INTENT-001 | RESTORE-INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: RUN-001 | RUN-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SCHED-001 | SCHED-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `IN_PROGRESS` | `030caed`, `reviews/12-spike-auth-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 57 focused tests on both runtimes | authenticated package acceptance and durable/terminal/host-secret/multiprocess production boundaries remain open; no AUTH-001 promotion claim |
+| Canonical inventory: SPIKE-AUTH | SPIKE-AUTH | `IN_PROGRESS` | `030caed`, `reviews/12-spike-auth-adversarial-review.md`; final three-hat code-level ACCEPT with zero P0/P1/P2 and 57 focused tests on both runtimes; AUTH-001A/001B successor implementation evidence | authenticated package acceptance and terminal, exact-host, restore/reconciliation and multiprocess production boundaries remain open; no AUTH-001 promotion claim |
 | Canonical inventory: SPIKE-BACKUP | SPIKE-BACKUP | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: SPIKE-BROWSER | SPIKE-BROWSER | `IN_PROGRESS` | exact source `2d847d7`, native-arm64 image `sha256:ad889b493c08...`; ADR-0015, `spikes/SPIKE-BROWSER.md`, `SPIKE-BROWSER-OCI-EVIDENCE.md`, exact source/Compose/runtime verifiers and safe mutation tests; two exact Docker Desktop runtime-verifier passes including deliberate diagnostic-client timeout and exact owned cleanup | independent adversarial review, exact SIGTERM/reaping, shared-mount disposition, amd64/native-Linux matrix, minimal signed/SBOM artifact and gateway/connector work remain open; `BROW-001` stays `NOT_STARTED` |
 | Canonical inventory: SPIKE-EGRESS | SPIKE-EGRESS | `NOT_STARTED` | — | follow work-package dependency order |

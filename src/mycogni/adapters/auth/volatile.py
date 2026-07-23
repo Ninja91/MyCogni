@@ -11,6 +11,7 @@ from enum import StrEnum
 from threading import RLock
 
 from mycogni.application.auth import AuthStateSnapshotV1
+from mycogni.application.auth_custody import AuthCustodyBundle
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     ActorRecord,
@@ -108,6 +109,57 @@ class VolatileAuthDecisionStore:
                     replace(item) for item in self._reprovision_ceremonies.values()
                 ),
             )
+
+    def auth_state_exists(self) -> bool:
+        """Return whether an installation has been initialized."""
+        with self._lock:
+            return bool(self._installation_actors)
+
+    def verify_loaded_composition(self, bundle: AuthCustodyBundle) -> bool:
+        """Compare custody handles and digests before exposing authority."""
+        if type(bundle) is not AuthCustodyBundle:
+            return False
+        with self._lock:
+            binding = bundle.binding
+            if self._installation_actors.get(binding.installation_id) != binding.actor_id:
+                return False
+            actor = self._actors.get(binding.actor_id)
+            if actor is None or actor.represented_profile_id != binding.represented_profile_id:
+                return False
+            composition = self._composition_bindings.get(binding.installation_id)
+            if composition is None:
+                return False
+            operator = bundle.operator_authority.credential
+            service = bundle.service_identity
+            if (
+                composition.operator_handle != operator.handle
+                or not self._matches(
+                    composition.operator_digest,
+                    SecretDigest(hashlib.sha256(operator.secret.reveal()).digest()),
+                )
+                or composition.service_handle != service.handle
+                or not self._matches(
+                    composition.service_digest,
+                    SecretDigest(hashlib.sha256(service.secret.reveal()).digest()),
+                )
+            ):
+                return False
+            for root in bundle.roots:
+                record = self._roots.get(root.credential.handle)
+                if (
+                    record is None
+                    or record.installation_id != binding.installation_id
+                    or record.actor_id != binding.actor_id
+                    or record.represented_profile_id != binding.represented_profile_id
+                    or record.purpose is not root.purpose
+                    or not self._matches(
+                        record.digest,
+                        SecretDigest(hashlib.sha256(root.credential.secret.reveal()).digest()),
+                    )
+                    or (root.purpose is RootPurpose.REPROVISION and record.consumed)
+                ):
+                    return False
+            return True
 
     @classmethod
     def from_durable_state_v1(cls, snapshot: AuthStateSnapshotV1) -> VolatileAuthDecisionStore:

@@ -26,6 +26,7 @@ from sqlalchemy.engine import CursorResult
 from mycogni.adapters.auth.volatile import VolatileAuthDecisionStore
 from mycogni.adapters.persistence.durability import SQLiteRuntime
 from mycogni.application.auth import AuthDecisionStore, AuthStateSnapshotV1
+from mycogni.application.auth_custody import AuthCustodyBundle
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     ActorRecord,
@@ -494,6 +495,14 @@ class SqliteAuthDecisionStore:
         if type(point) is not DurableAuthCrashPoint:
             raise TypeError("durable auth crash point must be exact")
         self._crash_once = point
+
+    def auth_state_exists(self) -> bool:
+        return self._read(lambda store: store.auth_state_exists())
+
+    def verify_loaded_composition(self, bundle: AuthCustodyBundle) -> bool:
+        if type(bundle) is not AuthCustodyBundle:
+            return False
+        return self._read(lambda store: store.verify_loaded_composition(bundle))
 
     def _crash_if_armed(self, point: DurableAuthCrashPoint) -> None:
         if self._crash_once is point:

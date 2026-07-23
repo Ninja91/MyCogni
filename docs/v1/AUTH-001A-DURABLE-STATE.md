@@ -7,6 +7,10 @@ This slice moves the accepted SPIKE-AUTH decision semantics behind the existing
 custody, a production terminal driver, HTTP/browser authentication, a permissioned CLI channel,
 backup recovery, or any external action authority.
 
+The successor [AUTH-001B host-secret custody slice](AUTH-001B-HOST-SECRET-CUSTODY.md) now provides
+a source-level native owner-file implementation. Its host, terminal, mutation/reconciliation,
+restore, and acceptance limitations remain open and do not promote AUTH-001.
+
 ## Implemented boundary
 
 - Migration `0002_auth_decision_state` creates one versioned, singleton decision document and a
@@ -54,8 +58,8 @@ remain open.
 
 AUTH-001 cannot complete until separate reviewed slices provide:
 
-1. external host-secret storage for composition/operator authority, with no database/env/argv
-   fallback;
+1. exact-host conformance and reviewed mutation/reconciliation for the AUTH-001B owner-file
+   source, with no database/env/argv fallback;
 2. a real no-echo terminal adapter with restoration and signal evidence;
 3. an explicit backup/restore epoch and reconciliation policy;
 4. an explicit reviewed reconciliation procedure for the durable outcome-unknown latch;
