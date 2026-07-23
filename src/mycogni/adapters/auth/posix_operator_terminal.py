@@ -248,8 +248,11 @@ class PosixOperatorTerminal:
         data = bytearray()
         previous = self._install_cancel_handlers()
         try:
-            self._write_unlocked(prompt_bytes, secret=False)
             termios.tcsetattr(fd, termios.TCSAFLUSH, hidden)
+            # Emit the prompt only after the flush-and-hide transition.  If the
+            # operator responds as soon as the prompt is visible, their input
+            # cannot race ahead of TCSAFLUSH and be discarded or echoed.
+            self._write_unlocked(prompt_bytes, secret=False)
             while True:
                 chunk = os.read(fd, max_bytes + 2)
                 if chunk == b"":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -223,6 +224,29 @@ def test_secret_read_restores_exact_attributes(monkeypatch: pytest.MonkeyPatch) 
     assert applied[1] == (termios.TCSAFLUSH, original)
 
 
+def test_secret_read_hides_and_flushes_before_prompt_is_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = _fake_attrs()
+    events: list[str] = []
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
+    monkeypatch.setattr(
+        termios,
+        "tcsetattr",
+        lambda _fd, _when, _attrs: events.append("hide" if not events else "restore"),
+    )
+    monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+
+    def write(_fd: int, payload: bytes) -> int:
+        events.append("prompt" if payload == b"prompt" else "newline")
+        return len(payload)
+
+    monkeypatch.setattr(os, "write", write)
+    monkeypatch.setattr(os, "read", lambda _fd, _size: b"secret\n")
+    assert _attached().read_secret("prompt", 16) == "secret"
+    assert events == ["hide", "prompt", "restore", "newline"]
+
+
 def test_restore_failure_latches_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     original = _fake_attrs()
     calls = 0
@@ -260,8 +284,7 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
 
             with PosixOperatorTerminal() as tty:
                 before = termios.tcgetattr(tty._fd)
-                tty.write_public("READY\\n")
-                value = tty.read_secret("", 128)
+                value = tty.read_secret("READY\\n", 128)
                 after = termios.tcgetattr(tty._fd)
                 tty.write_public("RESULT:" + str(value == "hidden-value") + ":" + str(before == after) + "\\n")
             """
@@ -288,23 +311,36 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
     os.close(slave)
     transcript = bytearray()
     deadline = time.monotonic() + 5
-    try:
-        while b"READY\r\n" not in transcript and time.monotonic() < deadline:
+
+    def read_until(expected: bytes) -> None:
+        while expected not in transcript:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            readable, _writable, _exceptional = select.select([master], [], [], remaining)
+            if not readable:
+                break
             try:
                 transcript.extend(os.read(master, 1024))
             except OSError:
                 break
+
+    try:
+        read_until(b"READY\r\n")
         if b"operator_terminal:io_failed:not_started" in transcript:
             pytest.skip("host sandbox prohibits fresh-exec /dev/tty access")
         assert b"READY\r\n" in transcript, transcript.decode("utf-8", "replace")
         os.write(master, b"hidden-value\n")
-        while b"RESULT:True:True\r\n" not in transcript and time.monotonic() < deadline:
-            transcript.extend(os.read(master, 1024))
+        read_until(b"RESULT:True:True\r\n")
         assert process.wait(timeout=5) == 0
     finally:
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
-            process.wait(timeout=5)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         os.close(master)
     assert b"RESULT:True:True\r\n" in transcript
     assert b"hidden-value" not in transcript
