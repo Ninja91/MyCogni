@@ -595,6 +595,39 @@ def test_partial_handler_install_restores_handlers_and_signal_mask(
     assert any(event == ("handler", f"old-{signal.SIGINT}") for event in events)
 
 
+def test_partial_handler_install_mask_restore_failure_latches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed = 0
+    monkeypatch.setattr(signal, "getsignal", lambda _item: signal.SIG_DFL)
+
+    def set_handler(_item: signal.Signals, handler: object) -> None:
+        nonlocal installed
+        if handler == PosixOperatorTerminal._cancel_handler:
+            installed += 1
+            if installed == 2:
+                raise ValueError("synthetic install failure")
+
+    calls = 0
+
+    def mask(_how: int, _value: object) -> set[signal.Signals]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic mask restore failure")
+        return set()
+
+    monkeypatch.setattr(signal, "signal", set_handler)
+    monkeypatch.setattr(signal, "pthread_sigmask", mask)
+    terminal = _attached()
+    with pytest.raises(OperatorTerminalError) as raised:
+        terminal._begin_cancel_session()  # noqa: SLF001
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+    with pytest.raises(OperatorTerminalError) as latched:
+        terminal.write_public("must not write")
+    assert latched.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+
+
 def test_missing_signal_mask_support_fails_before_handler_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

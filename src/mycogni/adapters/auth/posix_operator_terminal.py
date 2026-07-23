@@ -229,13 +229,13 @@ class PosixOperatorTerminal:
                     raise OSError(errno.EIO, "terminal write failed")
                 written += count
             termios.tcdrain(self._checked_fd())
-        except OperatorTerminalError as exc:
+        except OperatorTerminalError:
             if secret and secret_write_attempted:
                 raise OperatorTerminalError(
                     OperatorTerminalFailure.OUTPUT_UNCERTAIN,
                     SecretDeliveryState.MAY_HAVE_DISCLOSED,
                 ) from None
-            raise exc
+            raise
         except _Cancelled:
             state = (
                 SecretDeliveryState.MAY_HAVE_DISCLOSED
@@ -313,12 +313,16 @@ class PosixOperatorTerminal:
             restored = self._restore_cancel_handlers(exc.previous)
             if not restored:
                 self._restore_failed = True
+            mask_restored = False
             if restored:
-                with suppress(BaseException):
+                try:
                     mask(signal.SIG_SETMASK, old_mask)
+                    mask_restored = True
+                except BaseException:
+                    self._restore_failed = True
             failure = (
                 OperatorTerminalFailure.IO_FAILED
-                if restored
+                if restored and mask_restored
                 else OperatorTerminalFailure.RESTORE_FAILED
             )
             raise OperatorTerminalError(failure) from None
@@ -386,7 +390,7 @@ class PosixOperatorTerminal:
                     break
                 except _Cancelled:
                     continue
-                except (OSError, ValueError):
+                except BaseException:
                     continue
             else:
                 succeeded = False
