@@ -787,7 +787,7 @@ def test_report_lists_full_registry_scope_without_promotions() -> None:
     assert "`SIM-001`" in report
     assert "`THR-GOV-001`" in report
     assert "`VFY-CATALOG-001`" in report
-    assert "Canonical package-status scope (106)" in report
+    assert "Canonical package-status scope (107)" in report
     assert "Canonical COMPLETE packages: None" in report
     assert "GOV-001 itself remains IN_PROGRESS" in report
     assert str(governance_guard.ROOT) not in report

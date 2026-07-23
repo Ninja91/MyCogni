@@ -27,6 +27,9 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
 ]
 
+[project.scripts]
+mycogni = "mycogni.bootstrap.synthetic_preview:main"
+
 [dependency-groups]
 dev = [
   "httpx>=0.28,<1",
