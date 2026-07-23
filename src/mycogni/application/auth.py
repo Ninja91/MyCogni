@@ -32,6 +32,7 @@ from mycogni.domain.auth import (
     RootCapability,
     RootCapabilityIssue,
     RootCapabilityRecord,
+    RootPurpose,
     SecretDigest,
     SessionIssue,
     SessionRecord,
@@ -96,16 +97,21 @@ class AuthStateSnapshotV1:
         roots = unique(self.roots, "handle")
         bootstraps = unique(self.bootstraps, "handle")
         sessions = unique(self.sessions, "handle")
-        recoveries = unique(self.recoveries, "handle")
+        unique(self.recoveries, "handle")
         step_ups = unique(self.step_ups, "handle")
-        ceremonies = unique(self.reprovision_ceremonies, "handle")
-        del bootstraps, sessions, recoveries, step_ups, ceremonies
+        unique(self.reprovision_ceremonies, "handle")
         installation_map = dict(self.installation_actors)
         if len(installation_map) != len(self.installation_actors):
             raise ValueError("auth snapshot contains duplicate installation bindings")
         compositions = {record.installation_id: record for record in self.composition_bindings}
         if len(compositions) != len(self.composition_bindings):
             raise ValueError("auth snapshot contains duplicate composition bindings")
+        if (
+            len(set(installation_map.values())) != len(installation_map)
+            or set(installation_map.values()) != set(actors)
+            or set(installation_map) != set(compositions)
+        ):
+            raise ValueError("auth snapshot installation, actor, and composition coverage differs")
         for installation_id, actor_id in installation_map.items():
             if actor_id not in actors or installation_id not in compositions:
                 raise ValueError("auth snapshot installation binding is incomplete")
@@ -118,6 +124,14 @@ class AuthStateSnapshotV1:
                 or actor.represented_profile_id != root.represented_profile_id
             ):
                 raise ValueError("auth snapshot root binding is inconsistent")
+        active_root_purposes: set[tuple[OpaqueId, RootPurpose]] = set()
+        for root in roots.values():
+            if root.consumed:
+                continue
+            identity = (root.installation_id, root.purpose)
+            if identity in active_root_purposes:
+                raise ValueError("auth snapshot has duplicate active root purpose")
+            active_root_purposes.add(identity)
         authority_handles = set(roots)
         for composition in self.composition_bindings:
             if (
@@ -131,12 +145,64 @@ class AuthStateSnapshotV1:
             actor = actors.get(record.actor_id)
             if actor is None or actor.represented_profile_id != record.represented_profile_id:
                 raise ValueError("auth snapshot record binding is inconsistent")
+            if isinstance(record, (SessionRecord, RecoveryRecord, StepUpRecord)) and (
+                record.epoch > actor.epoch
+            ):
+                raise ValueError("auth snapshot record epoch is from the future")
+        for bootstrap in self.bootstraps:
+            if bootstrap.root_capability_id is None:
+                continue
+            root = roots.get(bootstrap.root_capability_id)
+            if (
+                root is None
+                or bootstrap.root_purpose is not root.purpose
+                or bootstrap.actor_id != root.actor_id
+                or bootstrap.represented_profile_id != root.represented_profile_id
+            ):
+                raise ValueError("auth snapshot bootstrap root binding is inconsistent")
+        for step_up in self.step_ups:
+            session = sessions.get(step_up.session_id)
+            if session is None:
+                if not step_up.consumed:
+                    raise ValueError("active auth snapshot step-up has no session")
+                continue
+            if (
+                step_up.actor_id != session.actor_id
+                or step_up.represented_profile_id != session.represented_profile_id
+                or step_up.epoch != session.epoch
+            ):
+                raise ValueError("auth snapshot step-up session binding is inconsistent")
         provenance_ids: set[OpaqueId] = set()
         for provenance in self.grant_provenance:
-            evidence_id = provenance.grant.authority_evidence_id
+            grant = provenance.grant
+            evidence_id = grant.authority_evidence_id
             if evidence_id in provenance_ids:
                 raise ValueError("auth snapshot contains duplicate grant provenance")
             provenance_ids.add(evidence_id)
+            actor = actors.get(grant.actor_id)
+            if (
+                actor is None
+                or actor.represented_profile_id != grant.represented_profile_id
+                or grant.epoch > actor.epoch
+            ):
+                raise ValueError("auth snapshot grant binding is inconsistent")
+            session = sessions.get(grant.session_id)
+            if session is not None and (
+                session.actor_id != grant.actor_id
+                or session.represented_profile_id != grant.represented_profile_id
+                or session.epoch != grant.epoch
+            ):
+                raise ValueError("auth snapshot grant session binding is inconsistent")
+            provenance_step = cast(StepUpRecord | None, step_ups.get(evidence_id))
+            if provenance_step is not None and (
+                provenance_step.actor_id != grant.actor_id
+                or provenance_step.represented_profile_id != grant.represented_profile_id
+                or provenance_step.session_id != grant.session_id
+                or provenance_step.epoch != grant.epoch
+                or provenance_step.purpose is not grant.purpose
+                or provenance_step.scopes != grant.scopes
+            ):
+                raise ValueError("auth snapshot grant provenance is inconsistent")
         for ceremony in self.reprovision_ceremonies:
             matching_composition = compositions.get(ceremony.installation_id)
             if (
@@ -144,6 +210,27 @@ class AuthStateSnapshotV1:
                 or matching_composition.service_handle != ceremony.service_handle
             ):
                 raise ValueError("auth snapshot ceremony binding is inconsistent")
+            ceremony_bootstrap = cast(
+                BootstrapRecord | None, bootstraps.get(ceremony.bootstrap_handle)
+            )
+            if ceremony_bootstrap is None:
+                if ceremony.terminal_at_utc is None:
+                    raise ValueError("active auth snapshot ceremony has no bootstrap")
+                continue
+            root = (
+                roots.get(ceremony_bootstrap.root_capability_id)
+                if ceremony_bootstrap.root_capability_id is not None
+                else None
+            )
+            if (
+                ceremony_bootstrap.root_purpose is not RootPurpose.REPROVISION
+                or root is None
+                or root.purpose is not RootPurpose.REPROVISION
+                or root.installation_id != ceremony.installation_id
+                or root.actor_id != ceremony_bootstrap.actor_id
+                or root.represented_profile_id != ceremony_bootstrap.represented_profile_id
+            ):
+                raise ValueError("auth snapshot ceremony authority chain is inconsistent")
 
 
 @dataclass(frozen=True, slots=True, repr=False)

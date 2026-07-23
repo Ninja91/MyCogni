@@ -27,18 +27,22 @@ backup recovery, or any external action authority.
   no credential. New and restarted auth work remains prohibited pending a future reviewed
   reconciliation procedure; the one-use input must never be automatically retried.
 
-The volatile adapter remains the semantic oracle. The durable codec is allowlist-based and
+The volatile adapter remains the semantic oracle behind a public V1 snapshot contract. The
+durable codec owns explicit V1 record-field maps and never derives its wire format from current
+operational dataclass fields. It is allowlist-based and
 rejects unknown collections, collection-specific record types, enum types, fields, duplicate JSON
 or record keys, invalid UUIDs, invalid digest sizes, non-UTC timestamps, key/handle mismatches,
-authority-registry drift and cross-map binding errors. The checked-in empty V1 golden fixture
-freezes the top-level wire shape.
+authority-registry drift and cross-map binding errors. Checked-in empty and fully populated V1
+golden fixtures freeze the top-level shape and every record/tag/enum/set/nullable-terminal
+representative; the populated fixture must decode and re-encode byte-for-byte.
 
 ## Evidence in this slice
 
 Focused tests cover migration round trips, session/replay survival after clean restart, two
 concurrent clients through the single service with exactly one bootstrap winner, synthetic
 rollback before commit, real before/after-commit wrapper failures, restart recovery latching,
-CAS failure, nonmutating reads, canonical mutation rejection, database/WAL/SHM raw-secret absence,
+CAS failure, nonmutating reads, canonical and cross-map mutation rejection, unsupported-version
+read rejection without rewrite, database/WAL/SHM raw-secret absence,
 and static denial of network/browser/broker/PII dependencies. The remediation-focused auth lane
 passed 73 tests, including the complete accepted volatile auth-spike oracle.
 

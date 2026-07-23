@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+from dataclasses import fields
 from pathlib import Path
 from typing import Any, get_type_hints
 
 from mycogni.adapters.auth import SqliteAuthDecisionStore
+from mycogni.adapters.auth.sqlite import _RECORD_TYPES, _V1_RECORD_FIELDS
 from mycogni.application.auth import AuthDecisionStore
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
@@ -53,3 +55,9 @@ def test_durable_store_public_decision_api_has_no_variadic_or_any_types() -> Non
         )
         hints = get_type_hints(method)
         assert Any not in hints.values()
+
+
+def test_operational_record_evolution_cannot_silently_change_v1_wire_fields() -> None:
+    assert set(_RECORD_TYPES) == set(_V1_RECORD_FIELDS)
+    for record_name, record_type in _RECORD_TYPES.items():
+        assert tuple(field.name for field in fields(record_type)) == _V1_RECORD_FIELDS[record_name]

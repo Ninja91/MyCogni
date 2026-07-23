@@ -15,7 +15,6 @@ import base64
 import json
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import fields, is_dataclass
 from datetime import datetime
 from enum import Enum, StrEnum
 from threading import RLock
@@ -94,15 +93,114 @@ _RECORD_TYPES: dict[str, type[Any]] = {
     )
 }
 
-_ENUM_TYPES: dict[str, type[Enum]] = {}
-for record_type in _RECORD_TYPES.values():
-    for field in fields(record_type):
-        annotation = field.type
-        if isinstance(annotation, type) and issubclass(annotation, Enum):
-            _ENUM_TYPES[annotation.__name__] = annotation
+# This is the persistence-owned V1 wire contract.  Do not derive it from the
+# current operational dataclasses: changing those classes must not silently
+# redefine already-written schema-version 1 documents.
+_V1_RECORD_FIELDS: dict[str, tuple[str, ...]] = {
+    "ActorRecord": (
+        "actor_id",
+        "represented_profile_id",
+        "epoch",
+        "last_observed_utc",
+        "initialized",
+    ),
+    "AuthorityGrant": (
+        "actor_id",
+        "represented_profile_id",
+        "session_id",
+        "authority_evidence_id",
+        "purpose",
+        "scopes",
+        "not_before_utc",
+        "expires_at_utc",
+        "epoch",
+    ),
+    "BootstrapRecord": (
+        "handle",
+        "actor_id",
+        "represented_profile_id",
+        "digest",
+        "not_before_utc",
+        "expires_at_utc",
+        "attempts_remaining",
+        "root_capability_id",
+        "root_purpose",
+        "consumed",
+        "retired_at_utc",
+    ),
+    "CompositionBindingRecord": (
+        "installation_id",
+        "operator_handle",
+        "operator_digest",
+        "service_handle",
+        "service_digest",
+    ),
+    "GrantProvenanceRecord": ("grant", "used_at_utc"),
+    "RecoveryRecord": (
+        "handle",
+        "actor_id",
+        "represented_profile_id",
+        "digest",
+        "epoch",
+        "not_before_utc",
+        "expires_at_utc",
+        "attempts_remaining",
+        "consumed",
+        "retired_at_utc",
+    ),
+    "ReprovisionCeremonyRecord": (
+        "handle",
+        "digest",
+        "bootstrap_handle",
+        "installation_id",
+        "service_handle",
+        "expires_at_utc",
+        "replay_seconds",
+        "terminal_at_utc",
+        "terminal_denial",
+    ),
+    "RootCapabilityRecord": (
+        "handle",
+        "installation_id",
+        "actor_id",
+        "represented_profile_id",
+        "purpose",
+        "digest",
+        "consumed",
+        "retired_at_utc",
+    ),
+    "SessionRecord": (
+        "handle",
+        "actor_id",
+        "represented_profile_id",
+        "digest",
+        "epoch",
+        "not_before_utc",
+        "expires_at_utc",
+        "revoked",
+        "retired_at_utc",
+    ),
+    "StepUpRecord": (
+        "handle",
+        "actor_id",
+        "represented_profile_id",
+        "session_id",
+        "digest",
+        "epoch",
+        "purpose",
+        "scopes",
+        "not_before_utc",
+        "expires_at_utc",
+        "attempts_remaining",
+        "consumed",
+        "retired_at_utc",
+    ),
+}
+_V1_RECORD_NAMES_BY_TYPE = {record_type: name for name, record_type in _RECORD_TYPES.items()}
 
-for enum_type in (AuthDenial, AuthPurpose, AuthScope, RootPurpose):
-    _ENUM_TYPES[enum_type.__name__] = enum_type
+_ENUM_TYPES: dict[str, type[Enum]] = {
+    enum_type.__name__: enum_type for enum_type in (AuthDenial, AuthPurpose, AuthScope, RootPurpose)
+}
 
 
 def _encode(value: object) -> object:
@@ -121,11 +219,14 @@ def _encode(value: object) -> object:
         return {"type": "enum", "name": type(value).__name__, "value": value.value}
     if type(value) is frozenset:
         return {"type": "frozenset", "items": sorted((_encode(item) for item in value), key=str)}
-    if is_dataclass(value) and type(value).__name__ in _RECORD_TYPES:
+    record_name = _V1_RECORD_NAMES_BY_TYPE.get(type(value))
+    if record_name is not None:
         return {
             "type": "record",
-            "name": type(value).__name__,
-            "fields": {field.name: _encode(getattr(value, field.name)) for field in fields(value)},
+            "name": record_name,
+            "fields": {
+                name: _encode(getattr(value, name)) for name in _V1_RECORD_FIELDS[record_name]
+            },
         }
     raise TypeError("auth state contains a non-canonical or secret-bearing value")
 
@@ -174,7 +275,7 @@ def _decode(value: object) -> object:
         field_values = value.get("fields")
         if record_type is None or type(field_values) is not dict:
             raise ValueError("auth state contains an unknown record")
-        expected = {field.name for field in fields(record_type)}
+        expected = set(_V1_RECORD_FIELDS[record_name])
         if set(field_values) != expected:
             raise ValueError("auth state record fields are not canonical")
         return record_type(**{name: _decode(item) for name, item in field_values.items()})
@@ -368,12 +469,7 @@ class SqliteAuthDecisionStore:
         with self._client_lock:
             try:
                 with self._runtime.unit_of_work() as unit_of_work:
-                    row = self._load_row(unit_of_work.session)
-                    if row is None:
-                        store = VolatileAuthDecisionStore()
-                    else:
-                        store = _restore(cast(str, row["state_json"]))
-                        self._validate_authority_registry(unit_of_work.session, store)
+                    store, _revision, _exists = self._load_state(unit_of_work.session)
                     return operation(store)
             except AuthStateCorrupt:
                 self._latch_recovery()
@@ -396,6 +492,24 @@ class SqliteAuthDecisionStore:
             .one_or_none()
         )
 
+    @classmethod
+    def _load_state(cls, session: Any) -> tuple[VolatileAuthDecisionStore, int, bool]:
+        """Load and validate the exact supported row for both reads and decisions."""
+        row = cls._load_row(session)
+        if row is None:
+            return VolatileAuthDecisionStore(), 0, False
+        if (
+            type(row["schema_version"]) is not int
+            or row["schema_version"] != _STATE_SCHEMA_VERSION
+            or type(row["revision"]) is not int
+            or row["revision"] < 1
+            or type(row["state_json"]) is not str
+        ):
+            raise AuthStateCorrupt("persisted auth decision state is corrupt")
+        store = _restore(row["state_json"])
+        cls._validate_authority_registry(session, store)
+        return store, row["revision"], True
+
     @staticmethod
     def _validate_authority_registry(session: Any, store: VolatileAuthDecisionStore) -> None:
         expected = {
@@ -414,20 +528,11 @@ class SqliteAuthDecisionStore:
         # BEGIN IMMEDIATE. A commit exception returns no newly issued material;
         # callers must treat it as outcome-unknown and must not auto-retry.
         with self._runtime.unit_of_work() as unit_of_work:
-            row = self._load_row(unit_of_work.session)
-            if row is None:
-                store = VolatileAuthDecisionStore()
-                revision = 0
-            else:
-                if row["schema_version"] != _STATE_SCHEMA_VERSION:
-                    raise RuntimeError("unsupported auth decision state schema")
-                store = _restore(row["state_json"])
-                self._validate_authority_registry(unit_of_work.session, store)
-                revision = row["revision"]
+            store, revision, exists = self._load_state(unit_of_work.session)
             result = operation(store)
             payload = _snapshot(store)
             authorities = _authority_registry(store)
-            if row is None:
+            if not exists:
                 changed = cast(
                     CursorResult[Any],
                     unit_of_work.session.execute(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from mycogni.domain.auth import AuthDenial, AuthOutcome, OpaqueCredential
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 EMPTY_GOLDEN = Path(__file__).parent / "fixtures/auth-state-v1-empty.json"
+POPULATED_GOLDEN = Path(__file__).parent / "fixtures/auth-state-v1-populated.json"
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
 
 
@@ -312,6 +314,13 @@ def test_empty_v1_snapshot_matches_checked_in_golden_and_round_trips() -> None:
     assert _snapshot(_restore(payload)) == payload
 
 
+def test_populated_v1_golden_decodes_and_reencodes_byte_stably() -> None:
+    payload = POPULATED_GOLDEN.read_text(encoding="utf-8").rstrip("\n")
+    assert _snapshot(_restore(payload)) == payload
+    document = json.loads(payload)
+    assert all(document[name] for name in document)
+
+
 def test_observational_ceremony_counts_do_not_rewrite_state(tmp_path: Path) -> None:
     database_path = tmp_path / "auth-read-only.sqlite"
     _migrate(database_path)
@@ -345,6 +354,11 @@ def test_observational_ceremony_counts_do_not_rewrite_state(tmp_path: Path) -> N
         "non_utc_datetime",
         "key_handle_mismatch",
         "cross_map_mismatch",
+        "bootstrap_root_mismatch",
+        "future_epoch",
+        "step_up_session_mismatch",
+        "grant_session_mismatch",
+        "ceremony_chain_mismatch",
     ],
 )
 def test_v1_decoder_rejects_noncanonical_and_cross_map_mutations(
@@ -372,15 +386,57 @@ def test_v1_decoder_rejects_noncanonical_and_cross_map_mutations(
                 )
             elif mutation == "key_handle_mismatch":
                 document["actors"][0][0]["value"] = "00000000-0000-4000-8000-000000000099"
-            else:
+            elif mutation == "cross_map_mismatch":
                 document["installation_actors"][0][1]["value"] = (
                     "00000000-0000-4000-8000-000000000099"
                 )
+            else:
+                document = json.loads(POPULATED_GOLDEN.read_text(encoding="utf-8"))
+                if mutation == "bootstrap_root_mismatch":
+                    document["bootstraps"][0][1]["fields"]["actor_id"]["value"] = (
+                        "00000000-0000-4000-8000-000000000099"
+                    )
+                elif mutation == "future_epoch":
+                    document["sessions"][0][1]["fields"]["epoch"] = 3
+                elif mutation == "step_up_session_mismatch":
+                    document["step_ups"][0][1]["fields"]["session_id"]["value"] = (
+                        "00000000-0000-4000-8000-000000000099"
+                    )
+                elif mutation == "grant_session_mismatch":
+                    grant = document["grant_provenance"][0][1]["fields"]["grant"]
+                    grant["fields"]["session_id"]["value"] = "00000000-0000-4000-8000-000000000099"
+                else:
+                    document["reprovision_ceremonies"][0][1]["fields"]["bootstrap_handle"][
+                        "value"
+                    ] = "00000000-0000-4000-8000-000000000099"
             mutated = json.dumps(document, sort_keys=True, separators=(",", ":"))
         with pytest.raises(AuthStateCorrupt):
             _restore(mutated)
     finally:
         runtime.close_cleanly()
+
+
+def test_read_rejects_unsupported_schema_version_latches_and_does_not_rewrite(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "auth-version.sqlite"
+    _migrate(database_path)
+    runtime = _open(database_path)
+    service, _setup, _roots = _initialized(runtime)
+    with runtime.unit_of_work() as unit_of_work:
+        unit_of_work.session.execute(text("PRAGMA ignore_check_constraints=ON"))
+        unit_of_work.session.execute(
+            text("UPDATE auth_decision_state SET schema_version=99 WHERE singleton_id=1")
+        )
+        unit_of_work.commit()
+    with pytest.raises(AuthStateCorrupt):
+        service.reprovision_ceremony_counts()
+    with pytest.raises(RuntimeError, match="not accepting|inactive"):
+        runtime.unit_of_work()
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT schema_version, revision FROM auth_decision_state"
+        ).fetchone() == (99, 1)
 
 
 def test_revision_cas_zero_row_fails_and_rolls_back(
