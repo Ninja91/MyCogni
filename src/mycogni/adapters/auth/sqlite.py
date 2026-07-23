@@ -201,6 +201,55 @@ _V1_RECORD_NAMES_BY_TYPE = {record_type: name for name, record_type in _RECORD_T
 _ENUM_TYPES: dict[str, type[Enum]] = {
     enum_type.__name__: enum_type for enum_type in (AuthDenial, AuthPurpose, AuthScope, RootPurpose)
 }
+_V1_ENUM_VALUES: dict[str, frozenset[str]] = {
+    "AuthDenial": frozenset(
+        {
+            "non_interactive",
+            "invalid_proof",
+            "attempts_exhausted",
+            "replayed",
+            "expired",
+            "not_yet_valid",
+            "clock_rollback",
+            "session_not_found",
+            "revoked",
+            "wrong_actor",
+            "wrong_profile",
+            "wrong_installation",
+            "wrong_session",
+            "wrong_purpose",
+            "scope_widening",
+            "stale_epoch",
+            "malformed_credential",
+            "operator_declined",
+            "output_interrupted",
+            "capacity_exhausted",
+        }
+    ),
+    "AuthPurpose": frozenset(
+        {
+            "setup_authority_change",
+            "external_action_resume",
+            "exception_submission",
+            "key_recovery_change",
+            "profile_deletion",
+            "destructive_restore",
+            "all_session_revoke",
+        }
+    ),
+    "AuthScope": frozenset(
+        {
+            "change_setup_authority",
+            "resume_external_actions",
+            "submit_exception",
+            "change_key_recovery",
+            "delete_profile",
+            "restore_destructively",
+            "revoke_all_sessions",
+        }
+    ),
+    "RootPurpose": frozenset({"initial_bootstrap", "emergency_revoke", "reprovision"}),
+}
 
 
 def _encode(value: object) -> object:
@@ -216,7 +265,10 @@ def _encode(value: object) -> object:
     if type(value) is datetime:
         return {"type": "utc_datetime", "value": value.isoformat()}
     if isinstance(value, Enum) and type(value).__name__ in _ENUM_TYPES:
-        return {"type": "enum", "name": type(value).__name__, "value": value.value}
+        enum_name = type(value).__name__
+        if value.value not in _V1_ENUM_VALUES[enum_name]:
+            raise TypeError("auth state contains an enum value outside the V1 schema")
+        return {"type": "enum", "name": enum_name, "value": value.value}
     if type(value) is frozenset:
         return {"type": "frozenset", "items": sorted((_encode(item) for item in value), key=str)}
     record_name = _V1_RECORD_NAMES_BY_TYPE.get(type(value))
@@ -258,7 +310,7 @@ def _decode(value: object) -> object:
         if type(enum_name) is not str:
             raise ValueError("auth state contains an invalid enum name")
         enum_type = _ENUM_TYPES.get(enum_name)
-        if enum_type is None:
+        if enum_type is None or value["value"] not in _V1_ENUM_VALUES.get(enum_name, frozenset()):
             raise ValueError("auth state contains an unknown enum")
         return enum_type(value["value"])
     if kind == "frozenset":

@@ -319,6 +319,52 @@ def test_populated_v1_golden_decodes_and_reencodes_byte_stably() -> None:
     assert _snapshot(_restore(payload)) == payload
     document = json.loads(payload)
     assert all(document[name] for name in document)
+    tagged: list[dict[str, object]] = []
+
+    def visit(value: object) -> None:
+        if type(value) is dict:
+            if type(value.get("type")) is str:
+                tagged.append(value)
+            for item in value.values():
+                visit(item)
+        elif type(value) is list:
+            for item in value:
+                visit(item)
+
+    visit(document)
+    assert {item["type"] for item in tagged} == {
+        "enum",
+        "frozenset",
+        "opaque_id",
+        "record",
+        "secret_digest",
+        "utc_datetime",
+    }
+    assert {item["name"] for item in tagged if item["type"] == "record"} == {
+        "ActorRecord",
+        "AuthorityGrant",
+        "BootstrapRecord",
+        "CompositionBindingRecord",
+        "GrantProvenanceRecord",
+        "RecoveryRecord",
+        "ReprovisionCeremonyRecord",
+        "RootCapabilityRecord",
+        "SessionRecord",
+        "StepUpRecord",
+    }
+    assert {item["name"] for item in tagged if item["type"] == "enum"} == {
+        "AuthDenial",
+        "AuthPurpose",
+        "AuthScope",
+        "RootPurpose",
+    }
+    terminal_values = [
+        item["fields"]["terminal_at_utc"]
+        for item in tagged
+        if item.get("name") == "ReprovisionCeremonyRecord"
+    ]
+    assert any(value is None for value in terminal_values)
+    assert any(type(value) is dict for value in terminal_values)
 
 
 def test_observational_ceremony_counts_do_not_rewrite_state(tmp_path: Path) -> None:
@@ -359,6 +405,7 @@ def test_observational_ceremony_counts_do_not_rewrite_state(tmp_path: Path) -> N
         "step_up_session_mismatch",
         "grant_session_mismatch",
         "ceremony_chain_mismatch",
+        "unknown_enum_value",
     ],
 )
 def test_v1_decoder_rejects_noncanonical_and_cross_map_mutations(
@@ -405,10 +452,14 @@ def test_v1_decoder_rejects_noncanonical_and_cross_map_mutations(
                 elif mutation == "grant_session_mismatch":
                     grant = document["grant_provenance"][0][1]["fields"]["grant"]
                     grant["fields"]["session_id"]["value"] = "00000000-0000-4000-8000-000000000099"
-                else:
+                elif mutation == "ceremony_chain_mismatch":
                     document["reprovision_ceremonies"][0][1]["fields"]["bootstrap_handle"][
                         "value"
                     ] = "00000000-0000-4000-8000-000000000099"
+                else:
+                    document["grant_provenance"][0][1]["fields"]["grant"]["fields"]["purpose"][
+                        "value"
+                    ] = "future_purpose"
             mutated = json.dumps(document, sort_keys=True, separators=(",", ":"))
         with pytest.raises(AuthStateCorrupt):
             _restore(mutated)
