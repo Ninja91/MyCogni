@@ -85,12 +85,16 @@ An unsandboxed Darwin arm64 run exercised the controlling PTY successfully; Linu
 exact-host terminal-emulator conformance remain required evidence rather than claims.
 
 Source commits through `7656fb1` passed the earlier unsandboxed native terminal lane with 16 tests
-and no skip. Source commit `e9fc071df88aceb72150bed09025a762e056a4ef` passed the local guarded
-AUTH-focused lane with 269 tests and eight skips, all eight caused only by the independent direct
-`/dev/tty` host precondition in the Codex application sandbox. Ruff, mypy, all four import contracts,
-the network-source guard, claim guard, and governance guard passed on the same source tree. The
-expanded PTY matrix still requires the final unsandboxed Darwin run; Linux PTY evidence remains
-open. Full locked-runtime and distribution verification is recorded only after final review.
+and no skip. Final production target `cac6800b6dd7322af620b1e29ffc2dbe2c2569a0` plus test-isolation
+target `ca3de6c2bb5057cdce278b728dd581dcc2714b76` passed the local guarded AUTH-focused lane with
+273 tests and eight skips, all eight caused only by the independent direct `/dev/tty` host
+precondition in the Codex application sandbox. The complete adapter file then passed twice on
+unsandboxed Darwin arm64 in independent runs: 56 tests, no skips, including the full PTY exit-path
+matrix in suite order. A per-test invariant also proves that the pytest process retains its exact
+initial signal mask and all four initial handlers. Ruff, mypy, all four import contracts, the
+network-source guard, claim guard, and governance guard passed on the same source tree. Linux PTY
+evidence remains open. Full locked-runtime and distribution verification is recorded only after
+final review.
 
 This slice does not provide a production CLI command, Docker/container terminal support,
 accessibility acceptance, cross-process locking, custody mutation/reconciliation, backup/restore,
