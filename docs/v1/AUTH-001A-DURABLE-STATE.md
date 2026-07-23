@@ -28,8 +28,8 @@ backup recovery, or any external action authority.
   reconciliation procedure; the one-use input must never be automatically retried.
 
 The volatile adapter remains the semantic oracle behind a public V1 snapshot contract. The
-durable codec owns explicit V1 record-field maps and never derives its wire format from current
-operational dataclass fields. It is allowlist-based and
+durable codec owns explicit V1 record-field maps and enum-value sets and never derives its wire
+format from current operational dataclass fields or enum membership. It is allowlist-based and
 rejects unknown collections, collection-specific record types, enum types, fields, duplicate JSON
 or record keys, invalid UUIDs, invalid digest sizes, non-UTC timestamps, key/handle mismatches,
 authority-registry drift and cross-map binding errors. Checked-in empty and fully populated V1
@@ -44,7 +44,7 @@ rollback before commit, real before/after-commit wrapper failures, restart recov
 CAS failure, nonmutating reads, canonical and cross-map mutation rejection, unsupported-version
 read rejection without rewrite, database/WAL/SHM raw-secret absence,
 and static denial of network/browser/broker/PII dependencies. The remediation-focused auth lane
-passed 73 tests, including the complete accepted volatile auth-spike oracle.
+passed 92 tests, including the complete accepted volatile auth-spike oracle.
 
 This is software-level evidence only. Physical power interruption, exact-host storage behavior,
 backup/restore epoch policy, externally authenticated review, and qualified human acceptance
