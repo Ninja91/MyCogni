@@ -362,12 +362,13 @@ class PosixOperatorTerminal:
             if restored:
                 session.mask(signal.SIG_SETMASK, session.old_mask)
         except BaseException:
+            self._restore_failed = True
             succeeded = False
         if not succeeded:
             failure = (
-                OperatorTerminalFailure.IO_FAILED
-                if restored
-                else OperatorTerminalFailure.RESTORE_FAILED
+                OperatorTerminalFailure.RESTORE_FAILED
+                if self._restore_failed
+                else OperatorTerminalFailure.IO_FAILED
             )
             raise OperatorTerminalError(failure)
 

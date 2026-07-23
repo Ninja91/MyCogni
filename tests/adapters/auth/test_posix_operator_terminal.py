@@ -174,6 +174,12 @@ def test_handler_cleanup_failure_cannot_downgrade_secret_delivery(
 def test_restore_failure_outranks_not_started_disclosure_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    synthetic = _cancel_session(lambda _how, _value: set())
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_begin_cancel_session",
+        lambda _self: synthetic,
+    )
     monkeypatch.setattr(
         PosixOperatorTerminal,
         "_activate_cancel_session",
@@ -199,6 +205,11 @@ def test_restore_failure_outranks_not_started_disclosure_failure(
 def test_private_cancel_during_activation_never_crosses_disclosure_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    before_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    before_handlers = tuple(
+        signal.getsignal(item)
+        for item in PosixOperatorTerminal._cancel_signals()  # noqa: SLF001
+    )
     monkeypatch.setattr(
         PosixOperatorTerminal,
         "_activate_cancel_session",
@@ -213,6 +224,14 @@ def test_private_cancel_during_activation_never_crosses_disclosure_boundary(
         _attached().disclose((SecretField("code", "opaque-value"),))
     assert raised.value.failure is OperatorTerminalFailure.CANCELLED
     assert raised.value.delivery is SecretDeliveryState.NOT_STARTED
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == before_mask
+    assert (
+        tuple(
+            signal.getsignal(item)
+            for item in PosixOperatorTerminal._cancel_signals()  # noqa: SLF001
+        )
+        == before_handlers
+    )
 
 
 @pytest.mark.parametrize(
@@ -764,7 +783,7 @@ def test_end_cancel_session_maps_private_cancel_during_unmask(
     monkeypatch.setattr(signal, "pthread_sigmask", mask)
     with pytest.raises(OperatorTerminalError) as raised:
         _attached()._end_cancel_session(_cancel_session(mask))  # noqa: SLF001
-    assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
 
 
 def test_end_cancel_session_contains_private_cancel_during_initial_block(
@@ -808,6 +827,38 @@ def test_permanent_handler_restore_failure_latches_and_does_not_unmask(
     assert events == ["block", "restore-attempt", "restore-attempt", "restore-attempt"]
     with pytest.raises(OperatorTerminalError) as latched:
         terminal.write_public("must not write")
+    assert latched.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+
+
+@pytest.mark.parametrize("operation", ["check_ready", "write", "read", "disclose"])
+def test_final_old_mask_restore_failure_latches_every_public_operation(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    calls = 0
+
+    def mask(_how: int, _value: object) -> set[signal.Signals]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic final old-mask restore failure")
+        return set()
+
+    monkeypatch.setattr(signal, "signal", lambda _item, _handler: None)
+    terminal = _attached()
+    session = _cancel_session(mask)
+    with pytest.raises(OperatorTerminalError) as raised:
+        terminal._end_cancel_session(session)  # noqa: SLF001
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+
+    with pytest.raises(OperatorTerminalError) as latched:
+        if operation == "check_ready":
+            terminal.check_ready()
+        elif operation == "write":
+            terminal.write_public("must not write")
+        elif operation == "read":
+            terminal.read_secret("must not read", 16)
+        else:
+            terminal.disclose((SecretField("code", "must-not-disclose"),))
     assert latched.value.failure is OperatorTerminalFailure.RESTORE_FAILED
 
 
