@@ -43,7 +43,10 @@ parent, a regular single-link effective-UID-owned file with exact `0400` or `060
 revalidates named/opened/after-read file and full ancestry identities. Managed roots must also be
 canonical absolute paths with non-symlink existing ancestry; resolved containment and divergent
 paths resolving to the same filesystem identity are rejected. Content or identity change latches
-that provider object into recovery-required. A fork child denies before inherited locking or I/O.
+that provider object into recovery-required. After every read, the adapter freshly re-traverses
+the live ancestry and requires the final live name to identify the still-open file. A fork child
+denies before inherited locking or I/O. Generation is bounded to the unsigned 64-bit V1 field;
+serialization failures collapse to a finite redacted custody error before file creation.
 
 ## Platform conformance and nonclaims
 
@@ -64,7 +67,8 @@ browser, broker, mail, PII, profile encryption, Keychain, cloud, or external-act
 
 Focused tests cover the strict parser, create-new behavior, redaction, exact binding and digest
 comparison, database/WAL/SHM raw-secret absence, mode/type/symlink/hardlink/ancestor/root-overlap
-denials, rename replacement latching, fork denial, presence mismatch, and a fresh exec-based
+denials, deterministic final-name and higher-ancestor replacement-during-read races, rename
+replacement latching, fork denial, generation/serialization bounds, presence mismatch, and a fresh exec-based
 restart. That child receives only paths and non-secret binding IDs, loads the custody source itself,
 and consumes the unspent emergency root with stdin/stdout/stderr disconnected; the parent then
 observes the durable stale session epoch and bootstrap replay denial. All five raw custody secrets,
@@ -91,8 +95,9 @@ is prohibited.
 
 The implementation target descends from `e223587c8181438809b9bae72f59e9f7e37a3fbf` through
 `5473d51b0995db6fd736f50a9b3e5c54cc440bf8`, with static-custody/fresh-exec remediation
-`dce739ca4fa10f935637006b3dcbd61ea7d12b9d`. On 2026-07-22, the focused custody/auth lane passed
-80 tests. Ruff, strict mypy for all `mycogni` source, import-linter, the
+`dce739ca4fa10f935637006b3dcbd61ea7d12b9d` and namespace-race/capability remediation
+`839af0cf344367e0d06d538ea936c07a63bcb72e`. On 2026-07-22, the focused custody/auth lane passed
+84 tests. Ruff, strict mypy for all `mycogni` source, import-linter, the
 safety/claim/site guards, network source guard, and `git diff --check` passed. The executing host
 reported Darwin `25.5.0`, arm64, APFS (`local, journaled`), effective UID `501`; the administration
 test creates the final record as `0600` and the reader accepts only exact `0400` or `0600`.
