@@ -12,6 +12,7 @@ import termios
 import textwrap
 import threading
 import time
+from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,12 @@ from mycogni.application.operator_terminal import (
     SecretDeliveryState,
     SecretField,
 )
+
+_REAL_GETSIGNAL = signal.getsignal
+_REAL_PTHREAD_SIGMASK = signal.pthread_sigmask
+_CANCEL_SIGNALS = PosixOperatorTerminal._cancel_signals()  # noqa: SLF001
+_BASELINE_SIGNAL_MASK = frozenset(_REAL_PTHREAD_SIGMASK(signal.SIG_BLOCK, set()))
+_BASELINE_SIGNAL_HANDLERS = tuple(_REAL_GETSIGNAL(item) for item in _CANCEL_SIGNALS)
 
 
 def _attached(fd: int = 41) -> PosixOperatorTerminal:
@@ -59,6 +66,16 @@ def _synthetic_attached_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         os, "tcgetpgrp", lambda fd: os.getpgrp() if fd == 41 else real_tcgetpgrp(fd)
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_process_signal_state_leak() -> Iterator[None]:
+    """Compare every test with the fresh-process signal baseline using real callables."""
+    yield
+    current_mask = frozenset(_REAL_PTHREAD_SIGMASK(signal.SIG_BLOCK, set()))
+    current_handlers = tuple(_REAL_GETSIGNAL(item) for item in _CANCEL_SIGNALS)
+    assert current_mask == _BASELINE_SIGNAL_MASK
+    assert current_handlers == _BASELINE_SIGNAL_HANDLERS
 
 
 def test_darwin_no_follow_fallback_rejects_non_root_dev_tty_path(
@@ -148,6 +165,7 @@ def test_handler_cleanup_failure_cannot_downgrade_secret_delivery(
     monkeypatch: pytest.MonkeyPatch, partial_write: bool
 ) -> None:
     calls = 0
+    synthetic = _cancel_session(lambda _how, _value: set())
 
     def write(_fd: int, payload: bytes) -> int:
         nonlocal calls
@@ -158,6 +176,11 @@ def test_handler_cleanup_failure_cannot_downgrade_secret_delivery(
 
     monkeypatch.setattr(os, "write", write)
     monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_begin_cancel_session",
+        lambda _self: synthetic,
+    )
     monkeypatch.setattr(
         PosixOperatorTerminal,
         "_end_cancel_session",
@@ -544,11 +567,17 @@ def test_signal_restore_failure_outranks_earlier_read_eof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = _fake_attrs()
+    synthetic = _cancel_session(lambda _how, _value: set())
     monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
     monkeypatch.setattr(termios, "tcsetattr", lambda _fd, _when, _attrs: None)
     monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
     monkeypatch.setattr(os, "write", lambda _fd, payload: len(payload))
     monkeypatch.setattr(os, "read", lambda _fd, _size: b"")
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_begin_cancel_session",
+        lambda _self: synthetic,
+    )
     monkeypatch.setattr(
         PosixOperatorTerminal,
         "_end_cancel_session",
