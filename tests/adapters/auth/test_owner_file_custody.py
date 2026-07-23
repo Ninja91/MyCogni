@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from alembic import command
 from alembic.config import Config
 
 from mycogni.adapters.auth import OsTokenSource, SqliteAuthDecisionStore
+from mycogni.adapters.auth import owner_file_custody as custody_module
 from mycogni.adapters.auth.owner_file_custody import (
     OwnerFileAuthCustody,
     OwnerFileAuthCustodyProvisioner,
@@ -50,6 +52,15 @@ class CountingTokenSource:
     def generate(self, length: int) -> bytes:
         self.count += 1
         return os.urandom(length)
+
+
+class CountingClock:
+    def __init__(self) -> None:
+        self.count = 0
+
+    def now(self) -> datetime:
+        self.count += 1
+        return NOW
 
 
 def _layout(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
@@ -210,6 +221,65 @@ def test_pinned_replacement_latches_permanently(tmp_path: Path) -> None:
     assert provider.status(binding) is AuthCustodyStatus.RECOVERY_REQUIRED
 
 
+def test_final_name_replacement_during_read_latches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, roots = _layout(tmp_path)
+    binding = _binding()
+    _provision(path, roots, binding)
+    payload = path.read_bytes()
+    provider = OwnerFileAuthCustody(path=path, managed_roots=roots)
+    original_read = custody_module.os.read
+    replaced = False
+
+    def replace_after_read(descriptor: int, length: int) -> bytes:
+        nonlocal replaced
+        result = original_read(descriptor, length)
+        if not replaced:
+            replaced = True
+            old = path.with_suffix(".open-old")
+            path.rename(old)
+            path.write_bytes(payload)
+            path.chmod(0o600)
+        return result
+
+    monkeypatch.setattr(custody_module.os, "read", replace_after_read)
+    with pytest.raises(AuthCustodyError) as captured:
+        provider.load(binding)
+    assert captured.value.code is AuthCustodyFailureCode.CAS_MISMATCH
+    assert provider.status(binding) is AuthCustodyStatus.RECOVERY_REQUIRED
+
+
+def test_higher_ancestor_replacement_during_read_latches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, roots = _layout(tmp_path)
+    binding = _binding()
+    _provision(path, roots, binding)
+    payload = path.read_bytes()
+    provider = OwnerFileAuthCustody(path=path, managed_roots=roots)
+    original_read = custody_module.os.read
+    replaced = False
+
+    def replace_after_read(descriptor: int, length: int) -> bytes:
+        nonlocal replaced
+        result = original_read(descriptor, length)
+        if not replaced:
+            replaced = True
+            old_parent = path.parent.with_name("host-secrets-open-old")
+            path.parent.rename(old_parent)
+            path.parent.mkdir(mode=0o700)
+            path.write_bytes(payload)
+            path.chmod(0o600)
+        return result
+
+    monkeypatch.setattr(custody_module.os, "read", replace_after_read)
+    with pytest.raises(AuthCustodyError) as captured:
+        provider.load(binding)
+    assert captured.value.code is AuthCustodyFailureCode.CAS_MISMATCH
+    assert provider.status(binding) is AuthCustodyStatus.RECOVERY_REQUIRED
+
+
 def test_managed_root_overlap_is_rejected_both_directions(tmp_path: Path) -> None:
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
@@ -241,6 +311,38 @@ def test_runtime_reader_structurally_lacks_provisioning(tmp_path: Path) -> None:
     assert not path.exists()
 
 
+def test_generation_is_bounded_by_binary_v1_wire_width(tmp_path: Path) -> None:
+    path, roots = _layout(tmp_path)
+    bundle = mint_auth_custody_bundle(binding=_binding(), token_source=OsTokenSource())
+    with pytest.raises(ValueError):
+        replace(bundle, generation=2**64)
+    maximum = replace(bundle, generation=2**64 - 1)
+    OwnerFileAuthCustodyProvisioner(path=path, managed_roots=roots).provision_empty(maximum)
+    loaded = OwnerFileAuthCustody(path=path, managed_roots=roots).load(maximum.binding)
+    assert loaded.generation == maximum.generation
+    assert loaded.binding == maximum.binding
+    assert tuple(root.credential.handle for root in loaded.roots) == tuple(
+        root.credential.handle for root in maximum.roots
+    )
+
+
+def test_serializer_failure_is_finite_redacted_and_leaves_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, roots = _layout(tmp_path)
+    bundle = mint_auth_custody_bundle(binding=_binding(), token_source=OsTokenSource())
+
+    def fail_serializer(_bundle: object) -> bytes:
+        raise RuntimeError(f"backend leaked {path}")
+
+    monkeypatch.setattr(custody_module, "_serialize", fail_serializer)
+    with pytest.raises(AuthCustodyError) as captured:
+        OwnerFileAuthCustodyProvisioner(path=path, managed_roots=roots).provision_empty(bundle)
+    assert captured.value.code is AuthCustodyFailureCode.MALFORMED_RECORD
+    assert str(path) not in str(captured.value)
+    assert not path.exists()
+
+
 def test_custodied_service_blocks_reprovision_before_material_or_store_mutation(
     tmp_path: Path,
 ) -> None:
@@ -248,16 +350,20 @@ def test_custodied_service_blocks_reprovision_before_material_or_store_mutation(
     binding = _binding()
     store = VolatileAuthDecisionStore()
     tokens = CountingTokenSource()
+    clock = CountingClock()
     composition = provision_custodied_auth(
         binding=binding,
         provisioner=OwnerFileAuthCustodyProvisioner(path=path, managed_roots=roots),
-        clock=FixedClock(),
+        clock=clock,
         token_source=tokens,
         store=store,
     )
     before = store.export_durable_state_v1()
     generated = tokens.count
+    clock_reads = clock.count
 
+    with pytest.raises(AuthCapabilityDisabled):
+        composition.service.begin_bootstrap(composition.roots.reprovision)
     with pytest.raises(AuthCapabilityDisabled):
         composition.service.begin_reprovision(composition.roots.reprovision.credential)
     with pytest.raises(AuthCapabilityDisabled):
@@ -272,6 +378,7 @@ def test_custodied_service_blocks_reprovision_before_material_or_store_mutation(
         )
 
     assert tokens.count == generated
+    assert clock.count == clock_reads
     assert store.export_durable_state_v1() == before
 
 

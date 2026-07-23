@@ -516,6 +516,12 @@ class AuthService:
 
     def begin_bootstrap(self, root: RootCapability) -> AuthOutcome[OpaqueCredential]:
         """Create a bootstrap only with exact trusted composition authority."""
+        if (
+            self._mode is AuthServiceMode.CUSTODIED_STATIC_ROOTS
+            and type(root) is RootCapability
+            and root.purpose is RootPurpose.REPROVISION
+        ):
+            raise AuthCapabilityDisabled("replacement_root_reprovision")
         now = self._now()
         credential, digest = self._credential()
         not_before, expires = self._window(now, self._policy.bootstrap_ttl_seconds)

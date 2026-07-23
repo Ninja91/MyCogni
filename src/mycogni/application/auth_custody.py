@@ -74,8 +74,8 @@ class AuthCustodyBundle:
     def __post_init__(self) -> None:
         if type(self.binding) is not AuthCustodyBinding:
             raise TypeError("auth custody bundle requires an exact binding")
-        if type(self.generation) is not int or self.generation < 1:
-            raise ValueError("auth custody generation must be positive")
+        if type(self.generation) is not int or not 1 <= self.generation <= 2**64 - 1:
+            raise ValueError("auth custody generation is outside binary V1 range")
         if type(self.operator_authority) is not ReprovisionOperatorAuthority:
             raise TypeError("auth custody bundle requires operator authority")
         if type(self.service_identity) is not OpaqueCredential:

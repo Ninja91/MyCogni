@@ -323,7 +323,8 @@ class _OwnerPathBoundary:
                 parent_meta.st_dev,
                 parent_meta.st_ino,
             ) != (after_parent.st_dev, after_parent.st_ino):
-                _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+                _fail(AuthCustodyFailureCode.CAS_MISMATCH)
+            self._revalidate_live_name(expected_file=after, expected_ancestry=ancestry)
             payload = bytes(chunks)
             if len(payload) != _FILE_BYTES:
                 _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
@@ -342,6 +343,38 @@ class _OwnerPathBoundary:
             if descriptor >= 0:
                 os.close(descriptor)
             os.close(parent)
+
+    def _revalidate_live_name(
+        self,
+        *,
+        expected_file: os.stat_result,
+        expected_ancestry: tuple[tuple[int, int, int, int], ...],
+    ) -> None:
+        """Re-traverse the live namespace after read and match name plus ancestry."""
+        live_parent = -1
+        try:
+            live_parent, _live_parent_meta, live_ancestry = self._open_parent()
+            if live_ancestry != expected_ancestry:
+                _fail(AuthCustodyFailureCode.CAS_MISMATCH)
+            live_named = os.stat(
+                self._path.name,
+                dir_fd=live_parent,
+                follow_symlinks=False,
+            )
+            self._validate_file(live_named)
+            if _identity(live_named) != _identity(expected_file):
+                _fail(AuthCustodyFailureCode.CAS_MISMATCH)
+        except AuthCustodyError:
+            raise
+        except FileNotFoundError:
+            _fail(AuthCustodyFailureCode.CAS_MISMATCH)
+        except OSError as error:
+            if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+                _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+            _fail(AuthCustodyFailureCode.UNAVAILABLE)
+        finally:
+            if live_parent >= 0:
+                os.close(live_parent)
 
     def _conclusively_missing(self) -> bool:
         """Return true only for an absent final name below a validated parent."""
@@ -429,7 +462,12 @@ class OwnerFileAuthCustodyProvisioner(_OwnerPathBoundary):
             _fail(AuthCustodyFailureCode.FORKED_PROCESS)
         if type(bundle) is not AuthCustodyBundle:
             _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
-        payload = _serialize(bundle)
+        try:
+            payload = _serialize(bundle)
+        except AuthCustodyError:
+            raise
+        except Exception:
+            _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
         self._validate_managed_root_ancestors()
         parent, _metadata, _ancestry = self._open_parent()
         descriptor = -1
