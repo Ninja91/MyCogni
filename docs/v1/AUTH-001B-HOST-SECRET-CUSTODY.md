@@ -107,6 +107,7 @@ conformance: it does not exercise an operator-selected long-lived path, ACL inve
 aliases, power interruption, or an independently observed ceremony. Review verdicts and the final
 documentation commit remain separate evidence.
 
-Still deferred: production no-echo terminal behavior, custody mutation/rotation/delete,
+AUTH-001C now supplies source-level native no-echo terminal behavior and conservative partial-output
+semantics. Still deferred: exact-host terminal completion evidence, custody mutation/rotation/delete,
 replacement-root handoff, restore epochs, outcome-unknown reconciliation, exact-host conformance,
 Docker/Keychain profiles, and qualified authenticated acceptance.
