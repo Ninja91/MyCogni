@@ -24,6 +24,27 @@ The project will not optimize headline broker counts, requests sent, GitHub star
 
 ## What exists and what is planned
 
+### Synthetic-only local preview
+
+An installed `mycogni` command now exposes a deliberately narrow synthetic
+developer preview:
+
+```console
+mycogni synthetic init --state-dir /absolute/private/preview --json
+mycogni synthetic health --state-dir /absolute/private/preview --json
+mycogni synthetic demo --scenario ambiguous
+```
+
+It accepts no identity attributes or other personal data. The profile is
+`developer_preview_synthetic_only`; `synthetic_ready` means only that its small
+manifest and reviewed packaged simulator fixtures are readable. No network,
+auth, key, connector, browser, mail, or server capability is composed into
+these commands, so they cannot submit or verify a removal. The source command
+does not prove OS-level network containment; that requires a separately
+inspected sandbox or container profile. Health is read-only and does not open
+SQLite. This preview does **not** complete `OPS-001`, `AUTH-001`, or `KEY-001`,
+and is not a working remover.
+
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |
 | Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |

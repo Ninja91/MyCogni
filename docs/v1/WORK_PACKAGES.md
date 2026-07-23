@@ -24,6 +24,7 @@ Lane codes: `I` integration/product, `C` core/data/security, `B` boundary/platfo
 | DB-001 | C | Create SQLite configuration, SQLAlchemy UoW and Alembic migration harness | PF-CORE | 3 | migrate fresh/previous fixtures; transaction and rollback tests |
 | CT-001 | C | Freeze shared value types, ports, result/reason codes and connector-protocol schemas | PF-CORE, PF-BOUNDARY | 4 | contract tests and dependency graph; versioning rules documented |
 | SIM-001 | I | Build deterministic synthetic identity corpus and broker web/mail simulator | PF-001 | 5 | seeded scenarios cover happy, ambiguous, challenge, timeout and drift cases; reserved domains only |
+| LOCAL-SYNTH-001 | I | Add installed synthetic init, read-only health and deterministic demo commands | PF-001, SIM-001 | 3 | no PII or external capability; canonical fixtures; redacted finite output; explicitly not OPS-001 |
 | NET-001 | B | Deny real broker/custom network access in CI and test harnesses | CI-001, SIM-001 | 3 | attempted DNS/IP/TLS/redirect escapes fail and emit PII-safe diagnostics |
 | SPIKE-AUTH | C | Prototype bootstrap, opaque sessions, CLI step-up and lost-session/headless recovery | CT-001 | 3 | threat tests plus accepted ADR or named blocker |
 | SPIKE-KEY | C | Prototype KEK provider on macOS, Linux and rootless Docker | CT-001 | 3 | permissions/restart/recovery matrix plus accepted ADR or named blocker |
