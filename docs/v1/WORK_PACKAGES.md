@@ -43,7 +43,7 @@ M0 gate: all packages above are complete, every spike has a disposition, and no 
 
 | ID | Lane | Package | Depends on | Estimate | Acceptance evidence |
 | --- | --- | --- | --- | ---: | --- |
-| AUTH-001 | C | Implement terminal bootstrap, actor/session store, rotation, expiry and revocation. AUTH-001A is durable decision state; AUTH-001B is source-level host-secret custody. These are implementation sub-slices, not package acceptance. | SPIKE-AUTH, DB-001 | 4 | replay/theft/expiry/restart test report plus terminal, restore/reconciliation, exact-host and accepted review evidence |
+| AUTH-001 | C | Implement terminal bootstrap, actor/session store, rotation, expiry and revocation | SPIKE-AUTH, DB-001 | 4 | replay/theft/expiry/restart test report |
 | AUTH-002 | I | Enforce exact Host/Origin, CSRF, cookie, clickjacking and step-up UX | AUTH-001, UX-001 | 4 | `TEST-05` matrix and accessible ceremony recording |
 | AUTH-003 | C | Implement permissioned CLI channel, grant/revocation epochs and cross-profile denial | AUTH-001 | 4 | stale-grant and confused-deputy suite |
 | KEY-001 | C | Implement external KEK port, independent profile DEKs, catalog and versioned AAD | SPIKE-KEY, DB-001 | 5 | ciphertext substitution, plaintext scan and key-separation tests |
