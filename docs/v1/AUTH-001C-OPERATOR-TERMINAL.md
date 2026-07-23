@@ -46,8 +46,8 @@ fresh-exec PTY test uses `setsid`/`TIOCSCTTY` and proves no echo plus exact succ
 where the host permits child `/dev/tty` access. The Codex macOS sandbox currently denies that open,
 so an exact-host unsandboxed Darwin run and Linux CI remain required evidence rather than claims.
 
-Source commit `f54fddf` passed Ruff, strict mypy for the changed runtime surface, import-linter,
-safety/site/claim/threat/governance/network guards, and 170 focused guarded tests; the terminal lane
+Source commits through `e16f110` passed Ruff, strict mypy for the changed runtime surface,
+import-linter, safety/site/claim/threat/governance/network guards, and 172 focused guarded tests; the terminal lane
 reported one explicit sandbox PTY skip. The distribution build lane could not initialize `uv` under
 the sandbox (cache permission/system-configuration panic) and remains for the orchestrator's
 unsandboxed full-suite verification.
