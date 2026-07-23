@@ -209,6 +209,18 @@ def test_managed_root_overlap_is_rejected_both_directions(tmp_path: Path) -> Non
     assert first.value.code is second.value.code is AuthCustodyFailureCode.UNSAFE_STORAGE
 
 
+def test_managed_root_symlink_ancestor_is_rejected(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    real = tmp_path / "real-managed"
+    real.mkdir(mode=0o700)
+    linked = tmp_path / "linked-managed"
+    linked.symlink_to(real, target_is_directory=True)
+    with pytest.raises(AuthCustodyError) as captured:
+        OwnerFileAuthCustody(path=private / "auth", managed_roots=(linked,))
+    assert captured.value.code is AuthCustodyFailureCode.UNSAFE_STORAGE
+
+
 def test_runtime_reader_structurally_lacks_provisioning(tmp_path: Path) -> None:
     path, roots = _layout(tmp_path)
     provider = OwnerFileAuthCustody(path=path, managed_roots=roots)

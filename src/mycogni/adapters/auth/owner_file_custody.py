@@ -153,8 +153,7 @@ class _Identity:
 
 @dataclass(frozen=True, slots=True)
 class _Pin:
-    parent_device: int
-    parent_inode: int
+    ancestry: tuple[tuple[int, int, int, int], ...]
     file: _Identity
     digest: bytes
 
@@ -191,10 +190,32 @@ class _OwnerPathBoundary:
         if type(managed_roots) is not tuple or not managed_roots:
             raise TypeError("managed roots must be a non-empty tuple")
         self._path = path
-        self._roots = tuple(Path(os.path.abspath(root)) for root in managed_roots)
+        if any(
+            not isinstance(root, Path)
+            or not root.is_absolute()
+            or Path(os.path.abspath(root)) != root
+            for root in managed_roots
+        ):
+            raise TypeError("managed roots must be canonical absolute paths")
+        self._roots = managed_roots
         directory = path.parent
         if any(_within(directory, root) or _within(root, directory) for root in self._roots):
             _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+        self._validate_managed_root_ancestors()
+
+    def _validate_managed_root_ancestors(self) -> None:
+        for root in self._roots:
+            current = Path(root.anchor)
+            for part in root.parts[1:]:
+                current /= part
+                try:
+                    metadata = current.lstat()
+                except FileNotFoundError:
+                    break
+                except OSError:
+                    _fail(AuthCustodyFailureCode.UNAVAILABLE)
+                if stat.S_ISLNK(metadata.st_mode):
+                    _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
 
     @staticmethod
     def _validate_directory(meta: os.stat_result, *, final: bool) -> None:
@@ -206,20 +227,29 @@ class _OwnerPathBoundary:
         ):
             _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
 
-    def _open_parent(self) -> tuple[int, os.stat_result]:
+    def _open_parent(
+        self,
+    ) -> tuple[int, os.stat_result, tuple[tuple[int, int, int, int], ...]]:
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor = -1
+        ancestry: list[tuple[int, int, int, int]] = []
         try:
             descriptor = os.open(self._path.anchor, flags)
             parts = self._path.parent.parts[1:]
-            self._validate_directory(os.fstat(descriptor), final=not parts)
+            metadata = os.fstat(descriptor)
+            self._validate_directory(metadata, final=not parts)
+            ancestry.append((metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid))
             for index, part in enumerate(parts):
                 child = os.open(part, flags, dir_fd=descriptor)
                 os.close(descriptor)
                 descriptor = child
-                self._validate_directory(os.fstat(descriptor), final=index == len(parts) - 1)
-            return descriptor, os.fstat(descriptor)
+                metadata = os.fstat(descriptor)
+                self._validate_directory(metadata, final=index == len(parts) - 1)
+                ancestry.append(
+                    (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid)
+                )
+            return descriptor, os.fstat(descriptor), tuple(ancestry)
         except AuthCustodyError:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -244,7 +274,8 @@ class _OwnerPathBoundary:
             _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
 
     def _read(self) -> tuple[bytes, _Pin]:
-        parent, parent_meta = self._open_parent()
+        self._validate_managed_root_ancestors()
+        parent, parent_meta, ancestry = self._open_parent()
         descriptor = -1
         try:
             named = os.stat(self._path.name, dir_fd=parent, follow_symlinks=False)
@@ -273,8 +304,7 @@ class _OwnerPathBoundary:
             if len(payload) != _FILE_BYTES:
                 _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
             return payload, _Pin(
-                parent_meta.st_dev,
-                parent_meta.st_ino,
+                ancestry,
                 _identity(after),
                 hashlib.sha256(payload).digest(),
             )
@@ -291,7 +321,8 @@ class _OwnerPathBoundary:
 
     def _conclusively_missing(self) -> bool:
         """Return true only for an absent final name below a validated parent."""
-        parent, _parent_meta = self._open_parent()
+        self._validate_managed_root_ancestors()
+        parent, _parent_meta, _ancestry = self._open_parent()
         try:
             try:
                 os.stat(self._path.name, dir_fd=parent, follow_symlinks=False)
@@ -375,7 +406,8 @@ class OwnerFileAuthCustodyProvisioner(_OwnerPathBoundary):
         if type(bundle) is not AuthCustodyBundle:
             _fail(AuthCustodyFailureCode.MALFORMED_RECORD)
         payload = _serialize(bundle)
-        parent, _metadata = self._open_parent()
+        self._validate_managed_root_ancestors()
+        parent, _metadata, _ancestry = self._open_parent()
         descriptor = -1
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
