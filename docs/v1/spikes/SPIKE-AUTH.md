@@ -1,6 +1,7 @@
 # SPIKE-AUTH — volatile local root-of-trust decision
 
-Status: remediation evidence produced after security/recovery review rejection; re-review pending. This
+Status: final three-hat code-level re-review accepted with zero P0/P1/P2; authenticated package
+acceptance and successor production boundaries remain pending. This
 document does not promote `SPIKE-AUTH`, `AUTH-001`, `AUTH-002`, `AUTH-003`, `THR-AUTH-001` or
 `VFY-AUTH-001`.
 
@@ -14,7 +15,8 @@ reserve another ADR.
 
 The model is not production authentication. Its volatile adapter does not prove restart durability,
 multi-process transactions, browser controls, secure root storage, or a real terminal driver. An independent
-review rejected the previous evidence; this revision addresses those findings but remains pending re-review.
+review rejected the previous evidence; the remediated exact target later received clean code-level
+re-review. That review does not supply authenticated package acceptance or promote AUTH-001.
 
 ## Authority boundary
 

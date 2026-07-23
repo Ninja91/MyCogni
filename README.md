@@ -32,6 +32,7 @@ The project will not optimize headline broker counts, requests sent, GitHub star
 | Removal | lifecycle and authorization design | guided flows plus 2–5 trusted automatic capabilities | broader/custom automation |
 | Evidence | normative semantics and diagrams | encrypted evidence, disclosure ledger, independent rechecks | additional attestation methods |
 | Deployment | local-lite plus future cloud-small specifications | local-lite only | cloud-small after separate post-v1 conformance; no multi-tenant SaaS plan |
+| Authentication custody | source-level native owner-file baseline; no production composition claim | reviewed native local-lite custody plus terminal/restore evidence | Keychain, Docker Desktop and cloud profiles only after separate conformance |
 | Assistants | bounded integration design | no V1 integration surface | optional post-v1 metadata-only OpenClaw workflows |
 | Local AI | advisory architecture and null adapter plan | no model dependency or bundled weights | opt-in shadow-tested assist, never decision authority |
 
