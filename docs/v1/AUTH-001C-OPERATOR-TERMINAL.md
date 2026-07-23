@@ -93,8 +93,11 @@ unsandboxed Darwin arm64 in independent runs: 56 tests, no skips, including the 
 matrix in suite order. A per-test invariant also proves that the pytest process retains its exact
 initial signal mask and all four initial handlers. Ruff, mypy, all four import contracts, the
 network-source guard, claim guard, and governance guard passed on the same source tree. Linux PTY
-evidence remains open. Full locked-runtime and distribution verification is recorded only after
-final review.
+evidence remains open. After final review, the complete locked Python 3.12.12 and Python 3.13.11
+lanes each passed 1,900 tests with the same two known macOS multi-threaded-fork deprecation
+warnings. Both lanes also passed formatting/lint where applicable, import contracts, and every
+safety, site, claim, threat-catalog, governance, and network-source guard; the optional local
+network-namespace probe reported `unsupported` on this Darwin host.
 
 This slice does not provide a production CLI command, Docker/container terminal support,
 accessibility acceptance, cross-process locking, custody mutation/reconciliation, backup/restore,
