@@ -20,8 +20,10 @@ terminal, MyCogni never describes the secret as undisclosed and never retries a 
   session, concurrent method call, or same-thread reentry before terminal I/O. PID and at-fork
   poison reject inherited objects and locks.
 - Reads require the main thread and a foreground controlling terminal. They retain canonical input
-  and `ISIG`, disable `ECHO`/`ECHONL`, bound and validate UTF-8 input, drain an oversize line while
-  hidden, restore the exact saved attributes, and then emit a newline.
+  and `ISIG`, disable `ECHO`/`ECHONL` with a flush before making the prompt visible, bound and
+  validate UTF-8 input, drain an oversize line while hidden, restore the exact saved attributes,
+  and then emit a newline. This ordering prevents a prompt-triggered response from racing ahead of
+  the flush and being echoed or discarded.
 - Temporary `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT` handlers unwind through restoration and are
   restored afterward. Restore failure latches the object closed. `SIGKILL` restoration is neither
   possible nor claimed.
@@ -42,15 +44,13 @@ explicit redisplay without re-consuming the submitted credential.
 
 Deterministic tests cover zero/partial/short writes, drain failure, redacted errors, same-thread
 reentry, concurrent calls, non-main-thread input refusal, and corrected application semantics. A
-fresh-exec PTY test uses `setsid`/`TIOCSCTTY` and proves no echo plus exact successful restoration
-where the host permits child `/dev/tty` access. The Codex macOS sandbox currently denies that open,
-so an exact-host unsandboxed Darwin run and Linux CI remain required evidence rather than claims.
+fresh-exec PTY test uses `setsid`/`TIOCSCTTY` and proves no echo plus exact successful restoration.
+An unsandboxed Darwin arm64 run exercised the controlling PTY successfully; Linux CI and broader
+exact-host terminal-emulator conformance remain required evidence rather than claims.
 
-Source commits through `e16f110` passed Ruff, strict mypy for the changed runtime surface,
-import-linter, safety/site/claim/threat/governance/network guards, and 172 focused guarded tests; the terminal lane
-reported one explicit sandbox PTY skip. The distribution build lane could not initialize `uv` under
-the sandbox (cache permission/system-configuration panic) and remains for the orchestrator's
-unsandboxed full-suite verification.
+Source commits through `7656fb1` passed the unsandboxed native terminal lane with 16 tests and no
+skip. Full locked-runtime and distribution verification is recorded only after the final reviewed
+target completes; Linux PTY evidence remains open.
 
 This slice does not provide a production CLI command, Docker/container terminal support,
 accessibility acceptance, cross-process locking, custody mutation/reconciliation, backup/restore,
