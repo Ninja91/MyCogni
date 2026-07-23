@@ -289,6 +289,20 @@ class _OwnerPathBoundary:
                 os.close(descriptor)
             os.close(parent)
 
+    def _conclusively_missing(self) -> bool:
+        """Return true only for an absent final name below a validated parent."""
+        parent, _parent_meta = self._open_parent()
+        try:
+            try:
+                os.stat(self._path.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return True
+            except OSError:
+                _fail(AuthCustodyFailureCode.UNAVAILABLE)
+            return False
+        finally:
+            os.close(parent)
+
 
 class OwnerFileAuthCustody(_OwnerPathBoundary):
     """Pinned runtime reader; changes permanently latch this instance."""
@@ -315,9 +329,9 @@ class OwnerFileAuthCustody(_OwnerPathBoundary):
             self._assert_process()
             if self._latched:
                 return AuthCustodyStatus.RECOVERY_REQUIRED
-            if not self._path.exists():
-                return AuthCustodyStatus.UNPROVISIONED
             try:
+                if self._conclusively_missing():
+                    return AuthCustodyStatus.UNPROVISIONED
                 payload, pin = self._read()
                 _parse(payload, expected)
                 if self._pin is not None and pin != self._pin:

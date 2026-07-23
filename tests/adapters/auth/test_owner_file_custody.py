@@ -169,6 +169,15 @@ def test_symlink_and_hardlink_sources_are_denied(tmp_path: Path) -> None:
     )
 
 
+def test_dangling_symlink_is_not_reported_unprovisioned(tmp_path: Path) -> None:
+    path, roots = _layout(tmp_path)
+    path.symlink_to(path.with_name("absent-target"))
+    assert (
+        OwnerFileAuthCustody(path=path, managed_roots=roots).status(_binding())
+        is AuthCustodyStatus.RECOVERY_REQUIRED
+    )
+
+
 def test_pinned_replacement_latches_permanently(tmp_path: Path) -> None:
     path, roots = _layout(tmp_path)
     binding = _binding()
