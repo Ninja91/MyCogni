@@ -82,8 +82,9 @@ is prohibited.
 
 ### Native source-level evidence record
 
-The implementation target is commit `e223587c8181438809b9bae72f59e9f7e37a3fbf`.
-On 2026-07-22, the focused custody/auth lane passed 77 tests and the combined network-guard plus
+The implementation target is commits `e223587c8181438809b9bae72f59e9f7e37a3fbf` and
+`812e0ecfc742786c2e4c9630b569df29f9e1ff9e`.
+On 2026-07-22, the focused custody/auth lane passed 78 tests and the combined network-guard plus
 custody lane passed 134 tests. Ruff, strict mypy for all `mycogni` source, import-linter, the
 safety/claim/site guards, network source guard, and `git diff --check` passed. The executing host
 reported Darwin `25.5.0`, arm64, APFS (`local, journaled`), effective UID `501`; the administration
