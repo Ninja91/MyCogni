@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
+from typing import Protocol
 
-from mycogni.adapters.auth import VolatileAuthDecisionStore
 from mycogni.application.auth import (
     TOKEN_BYTES,
+    AuthDecisionStore,
     AuthService,
     ReprovisionOperatorAuthority,
     TokenSource,
@@ -26,6 +28,22 @@ from mycogni.domain.auth import (
 )
 
 
+class AuthInstallationStore(AuthDecisionStore, Protocol):
+    """Decision store plus the composition-only, create-once installation boundary."""
+
+    def initialize_installation(
+        self,
+        *,
+        installation_id: OpaqueId,
+        actor_id: OpaqueId,
+        represented_profile_id: OpaqueId,
+        records: tuple[RootCapabilityRecord, ...],
+        operator_authority: RootCapabilityIssue,
+        service_identity: RootCapabilityIssue,
+        now: datetime,
+    ) -> None: ...
+
+
 class TrustedLocalAuthSetup:
     """Composition-only issuer; ordinary application services cannot mint root power."""
 
@@ -34,7 +52,7 @@ class TrustedLocalAuthSetup:
         *,
         clock: Clock,
         token_source: TokenSource,
-        store: VolatileAuthDecisionStore,
+        store: AuthInstallationStore,
     ) -> None:
         self._clock = clock
         self._token_source = token_source

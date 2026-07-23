@@ -525,6 +525,69 @@ class RootCapabilityRecord:
         _validate_mutable_state(self.consumed, self.retired_at_utc, "root")
 
 
+@dataclass(frozen=True, slots=True)
+class CompositionBindingRecord:
+    """Digest-only installation binding for the operator and service identities."""
+
+    installation_id: OpaqueId
+    operator_handle: OpaqueId
+    operator_digest: SecretDigest
+    service_handle: OpaqueId
+    service_digest: SecretDigest
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not OpaqueId
+            for value in (self.installation_id, self.operator_handle, self.service_handle)
+        ):
+            raise TypeError("composition binding requires opaque IDs")
+        if (
+            type(self.operator_digest) is not SecretDigest
+            or type(self.service_digest) is not SecretDigest
+        ):
+            raise TypeError("composition binding requires secret digests")
+        if self.operator_handle == self.service_handle:
+            raise ValueError("composition identities must be distinct")
+
+
+@dataclass(slots=True)
+class ReprovisionCeremonyRecord:
+    """Digest-only bounded proof retained for one reprovision ceremony."""
+
+    handle: OpaqueId
+    digest: SecretDigest
+    bootstrap_handle: OpaqueId
+    installation_id: OpaqueId
+    service_handle: OpaqueId
+    expires_at_utc: datetime
+    replay_seconds: int
+    terminal_at_utc: datetime | None = None
+    terminal_denial: AuthDenial | None = None
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not OpaqueId
+            for value in (
+                self.handle,
+                self.bootstrap_handle,
+                self.installation_id,
+                self.service_handle,
+            )
+        ):
+            raise TypeError("reprovision ceremony requires opaque IDs")
+        if type(self.digest) is not SecretDigest:
+            raise TypeError("reprovision ceremony requires a secret digest")
+        require_utc(self.expires_at_utc, "reprovision ceremony expires_at_utc")
+        if type(self.replay_seconds) is not int or not 0 <= self.replay_seconds <= DAY_SECONDS:
+            raise ValueError("reprovision ceremony replay seconds are invalid")
+        if self.terminal_at_utc is not None:
+            require_utc(self.terminal_at_utc, "reprovision ceremony terminal_at_utc")
+        if (self.terminal_at_utc is None) != (self.terminal_denial is None):
+            raise ValueError("reprovision ceremony terminal fields must appear together")
+        if self.terminal_denial is not None and type(self.terminal_denial) is not AuthDenial:
+            raise TypeError("reprovision ceremony terminal denial is invalid")
+
+
 def _validate_mutable_state(flag: bool, retired_at_utc: datetime | None, record_name: str) -> None:
     if type(flag) is not bool:
         raise TypeError(f"{record_name} state flag must be boolean")

@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from threading import RLock
 
+from mycogni.application.auth import AuthStateSnapshotV1
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     ActorRecord,
@@ -21,11 +22,13 @@ from mycogni.domain.auth import (
     BootstrapDecision,
     BootstrapIssue,
     BootstrapRecord,
+    CompositionBindingRecord,
     GrantProvenanceRecord,
     OpaqueCredential,
     RecoveryIssue,
     RecoveryRecord,
     ReprovisionCeremonyIssue,
+    ReprovisionCeremonyRecord,
     RootCapability,
     RootCapabilityBinding,
     RootCapabilityIssue,
@@ -50,27 +53,6 @@ class CrashPoint(StrEnum):
 
 class SyntheticCrash(RuntimeError):
     """Non-secret fault injected after authority material becomes one-use."""
-
-
-@dataclass(frozen=True, slots=True)
-class _CompositionBinding:
-    operator_handle: OpaqueId
-    operator_digest: SecretDigest
-    service_handle: OpaqueId
-    service_digest: SecretDigest
-
-
-@dataclass(slots=True)
-class _ReprovisionCeremonyRecord:
-    handle: OpaqueId
-    digest: SecretDigest
-    bootstrap_handle: OpaqueId
-    installation_id: OpaqueId
-    service_handle: OpaqueId
-    expires_at_utc: datetime
-    replay_seconds: int
-    terminal_at_utc: datetime | None = None
-    terminal_denial: AuthDenial | None = None
 
 
 class OsTokenSource:
@@ -100,14 +82,56 @@ class VolatileAuthDecisionStore:
         self._recoveries: dict[OpaqueId, RecoveryRecord] = {}
         self._step_ups: dict[OpaqueId, StepUpRecord] = {}
         self._grant_provenance: dict[OpaqueId, GrantProvenanceRecord] = {}
-        self._composition_bindings: dict[OpaqueId, _CompositionBinding] = {}
-        self._reprovision_ceremonies: dict[OpaqueId, _ReprovisionCeremonyRecord] = {}
+        self._composition_bindings: dict[OpaqueId, CompositionBindingRecord] = {}
+        self._reprovision_ceremonies: dict[OpaqueId, ReprovisionCeremonyRecord] = {}
         self._crash_once: CrashPoint | None = None
 
     def arm_crash_once(self, point: CrashPoint) -> None:
         """Inject one reviewed synthetic failure; never a production control."""
         with self._lock:
             self._crash_once = point
+
+    def export_durable_state_v1(self) -> AuthStateSnapshotV1:
+        """Return an explicit digest-only snapshot for a trusted persistence adapter."""
+        with self._lock:
+            return AuthStateSnapshotV1(
+                actors=tuple(replace(item) for item in self._actors.values()),
+                installation_actors=tuple(self._installation_actors.items()),
+                roots=tuple(replace(item) for item in self._roots.values()),
+                bootstraps=tuple(replace(item) for item in self._bootstraps.values()),
+                sessions=tuple(replace(item) for item in self._sessions.values()),
+                recoveries=tuple(replace(item) for item in self._recoveries.values()),
+                step_ups=tuple(replace(item) for item in self._step_ups.values()),
+                grant_provenance=tuple(self._grant_provenance.values()),
+                composition_bindings=tuple(self._composition_bindings.values()),
+                reprovision_ceremonies=tuple(
+                    replace(item) for item in self._reprovision_ceremonies.values()
+                ),
+            )
+
+    @classmethod
+    def from_durable_state_v1(cls, snapshot: AuthStateSnapshotV1) -> VolatileAuthDecisionStore:
+        """Rehydrate only a fully validated public V1 snapshot."""
+        if type(snapshot) is not AuthStateSnapshotV1:
+            raise TypeError("auth snapshot must be AuthStateSnapshotV1")
+        store = cls()
+        store._actors = {item.actor_id: replace(item) for item in snapshot.actors}
+        store._installation_actors = dict(snapshot.installation_actors)
+        store._roots = {item.handle: replace(item) for item in snapshot.roots}
+        store._bootstraps = {item.handle: replace(item) for item in snapshot.bootstraps}
+        store._sessions = {item.handle: replace(item) for item in snapshot.sessions}
+        store._recoveries = {item.handle: replace(item) for item in snapshot.recoveries}
+        store._step_ups = {item.handle: replace(item) for item in snapshot.step_ups}
+        store._grant_provenance = {
+            item.grant.authority_evidence_id: item for item in snapshot.grant_provenance
+        }
+        store._composition_bindings = {
+            item.installation_id: item for item in snapshot.composition_bindings
+        }
+        store._reprovision_ceremonies = {
+            item.handle: replace(item) for item in snapshot.reprovision_ceremonies
+        }
+        return store
 
     def _crash_if_armed(self, point: CrashPoint) -> None:
         if self._crash_once is point:
@@ -217,7 +241,8 @@ class VolatileAuthDecisionStore:
                 last_observed_utc=now,
             )
             self._roots.update({record.handle: replace(record) for record in records})
-            self._composition_bindings[installation_id] = _CompositionBinding(
+            self._composition_bindings[installation_id] = CompositionBindingRecord(
+                installation_id=installation_id,
                 operator_handle=operator_authority.handle,
                 operator_digest=operator_authority.digest,
                 service_handle=service_identity.handle,
@@ -481,7 +506,7 @@ class VolatileAuthDecisionStore:
                 return AuthOutcome.denied(AuthDenial.CAPACITY_EXHAUSTED)
             if issue.handle in self._reprovision_ceremonies:
                 return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
-            self._reprovision_ceremonies[issue.handle] = _ReprovisionCeremonyRecord(
+            self._reprovision_ceremonies[issue.handle] = ReprovisionCeremonyRecord(
                 handle=issue.handle,
                 digest=issue.digest,
                 bootstrap_handle=bootstrap_handle,
