@@ -34,6 +34,7 @@ from mycogni.application.diagnostics import (
     EventId,
     FieldName,
 )
+from mycogni.application.operator_terminal import SecretDeliveryState, SecretField
 from mycogni.bootstrap.auth_setup import TrustedLocalAuthSetup
 from mycogni.domain import OpaqueId, Sensitive
 from mycogni.domain.auth import (
@@ -121,21 +122,24 @@ class PseudoTty:
     def write_public(self, value: str) -> None:
         self.transcript.write(value)
 
-    def confirm_secret_display(self, warning: str) -> bool:
+    def confirm(self, warning: str) -> bool:
         assert warning.startswith(("WARNING: SECRET DISPLAY", "DESTRUCTIVE REPROVISION"))
         self.transcript.write(
             f"secret-display-confirmation: {'accepted' if self.confirmed else 'declined'}\n"
         )
         return self.confirmed
 
-    def read_secret_no_echo(self) -> str:
-        self.transcript.write("[NO-ECHO INPUT]\n")
+    def read_secret(self, prompt: str, max_bytes: int) -> str:
+        assert prompt.endswith("(input hidden): ")
+        assert max_bytes == 128
+        self.transcript.write(prompt + "[NO-ECHO INPUT]\n")
         return self.input_value
 
-    def write_secret_block(self, values: tuple[tuple[str, str], ...]) -> None:
+    def disclose(self, fields: tuple[SecretField, ...]) -> None:
         if self.fail_secret_once:
             self.fail_secret_once = False
             raise OSError("synthetic all-or-nothing display failure")
+        values = tuple((field.label, field.value) for field in fields)
         self.secret_values.append(values)
         for label, value in values:
             self.transcript.write(f"{label}: {value}\n")
@@ -1164,6 +1168,7 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
         )
     )
     assert first_reprovision.displayed is False
+    assert first_reprovision.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
     assert first_reprovision.exchange.session.operator_code() not in interrupted_handoff.getvalue()
     assert first_reprovision.exchange.recovery.operator_code() not in interrupted_handoff.getvalue()
@@ -1476,6 +1481,7 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
         )
     )
     assert bootstrap_result.displayed is False
+    assert bootstrap_result.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
     assert "redisplay the in-process result" in interrupted_handoff.getvalue()
     handoff_tty = PseudoTty()
@@ -1485,6 +1491,7 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     recovery_tty = PseudoTty(_secret_code(handoff_tty, "new-recovery-code"), fail_secret_once=True)
     recovery_result = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
     assert recovery_result.displayed is False
+    assert recovery_result.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in recovery_tty.getvalue()
     assert recovery_result.exchange.session.operator_code() not in recovery_tty.getvalue()
     assert recovery_result.exchange.recovery.operator_code() not in recovery_tty.getvalue()

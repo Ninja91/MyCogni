@@ -8,9 +8,16 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Protocol
 
 from mycogni.application.auth import AuthService, ReprovisionOperatorAuthority
+from mycogni.application.operator_terminal import (
+    OperatorTerminal as OperatorTty,
+)
+from mycogni.application.operator_terminal import (
+    OperatorTerminalError,
+    SecretDeliveryState,
+    SecretField,
+)
 from mycogni.domain import OpaqueId
 from mycogni.domain.auth import (
     AuthDenial,
@@ -33,9 +40,9 @@ REPROVISION_WARNING = (
 )
 
 HANDOFF_INTERRUPTED = (
-    "authority-handoff-interrupted: replacement authority remains only in this process; do not "
-    "resubmit the consumed code; redisplay the in-process result now. Process loss before a "
-    "complete handoff can leave no authority route.\n"
+    "authority-handoff-interrupted: some secret output may already be visible and replacement "
+    "authority remains only in this process; do not resubmit the consumed code; redisplay the "
+    "in-process result now. Process loss before a complete handoff can leave no authority route.\n"
 )
 
 DENIAL_GUIDANCE: dict[AuthDenial, str] = {
@@ -63,35 +70,40 @@ DENIAL_GUIDANCE: dict[AuthDenial, str] = {
 }
 
 
-class OperatorTty(Protocol):
-    """Narrow no-echo/all-or-nothing secret channel supplied by composition.
-
-    ``write_secret_block`` must either display the complete block or raise
-    ``OSError`` without retaining a partial block. This spike proves the port
-    contract with a synthetic channel; it does not claim a real terminal driver.
-    """
-
-    def isatty(self) -> bool: ...
-
-    def write_public(self, value: str) -> None: ...
-
-    def confirm_secret_display(self, warning: str) -> bool: ...
-
-    def read_secret_no_echo(self) -> str: ...
-
-    def write_secret_block(self, values: tuple[tuple[str, str], ...]) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class OperatorRecoveryResult:
     exchange: BootstrapExchange
-    displayed: bool
+    delivery: SecretDeliveryState
+
+    @property
+    def displayed(self) -> bool:
+        """Compatibility projection; callers should retain the typed state."""
+        return self.delivery is SecretDeliveryState.COMPLETE
 
 
 @dataclass(frozen=True, slots=True)
 class OperatorBootstrapResult:
     exchange: BootstrapExchange
-    displayed: bool
+    delivery: SecretDeliveryState
+
+    @property
+    def displayed(self) -> bool:
+        """Compatibility projection; callers should retain the typed state."""
+        return self.delivery is SecretDeliveryState.COMPLETE
+
+
+def _secret_delivery(
+    operator_tty: OperatorTty, values: tuple[tuple[str, str], ...]
+) -> SecretDeliveryState:
+    """Translate the terminal exception contract into durable ceremony state."""
+    try:
+        operator_tty.disclose(tuple(SecretField(label, value) for label, value in values))
+    except OperatorTerminalError as exc:
+        return exc.delivery
+    except OSError:
+        # A generic byte-stream exception cannot prove that zero bytes escaped.
+        return SecretDeliveryState.MAY_HAVE_DISCLOSED
+    return SecretDeliveryState.COMPLETE
 
 
 def _deny(
@@ -125,7 +137,7 @@ def begin_bootstrap_on_tty(
         _deny(operator_tty, "bootstrap", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+    if not operator_tty.confirm(SCROLLBACK_WARNING):
         _deny(operator_tty, "bootstrap", AuthDenial.OPERATOR_DECLINED)
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
     outcome = service.begin_bootstrap(root)
@@ -134,17 +146,17 @@ def begin_bootstrap_on_tty(
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
     credential = outcome.value
-    try:
-        operator_tty.write_secret_block(
-            (("bootstrap-code (one-use, short-lived)", credential.operator_code()),)
-        )
-    except OSError:
+    delivery = _secret_delivery(
+        operator_tty,
+        (("bootstrap-code (one-use, short-lived)", credential.operator_code()),),
+    )
+    if delivery is not SecretDeliveryState.COMPLETE:
         service.cancel_bootstrap(credential.handle)
-        with suppress(OSError):
+        with suppress(OSError, OperatorTerminalError):
             _deny(operator_tty, "bootstrap", AuthDenial.OUTPUT_INTERRUPTED)
             operator_tty.write_public(
-                "bootstrap-restart: no bootstrap was disclosed or consumed; begin again with "
-                "the same unconsumed initial root.\n"
+                "bootstrap-restart: the issued bootstrap is burned and output may have disclosed; "
+                "begin again with the same unconsumed initial root.\n"
             )
         return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
     operator_tty.write_public(
@@ -175,11 +187,15 @@ def begin_reprovision_on_tty(
         _deny(operator_tty, "reprovision", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+    if not operator_tty.confirm(SCROLLBACK_WARNING):
         _deny(operator_tty, "reprovision", AuthDenial.OPERATOR_DECLINED)
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
-    operator_tty.write_public("reprovision-code (input hidden): ")
-    raw = operator_tty.read_secret_no_echo()
+    try:
+        raw = operator_tty.read_secret("reprovision-code (input hidden): ", 128)
+    except OperatorTerminalError:
+        with suppress(OperatorTerminalError):
+            _deny(operator_tty, "reprovision", AuthDenial.NON_INTERACTIVE)
+        return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     try:
         reprovision = OpaqueCredential.parse_operator_code(raw)
     except ValueError:
@@ -191,17 +207,17 @@ def begin_reprovision_on_tty(
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
     credential = outcome.value
-    try:
-        operator_tty.write_secret_block(
-            (("reprovision-bootstrap-code (one-use, short-lived)", credential.operator_code()),)
-        )
-    except OSError:
+    delivery = _secret_delivery(
+        operator_tty,
+        (("reprovision-bootstrap-code (one-use, short-lived)", credential.operator_code()),),
+    )
+    if delivery is not SecretDeliveryState.COMPLETE:
         service.cancel_bootstrap(credential.handle)
-        with suppress(OSError):
+        with suppress(OSError, OperatorTerminalError):
             _deny(operator_tty, "reprovision", AuthDenial.OUTPUT_INTERRUPTED)
             operator_tty.write_public(
-                "reprovision-restart: the offline route was not consumed; begin again with the "
-                "same current reprovision code.\n"
+                "reprovision-restart: the issued bootstrap is burned and output may have "
+                "disclosed; the offline route was not consumed, so begin again with it.\n"
             )
         return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
     operator_tty.write_public(
@@ -211,7 +227,9 @@ def begin_reprovision_on_tty(
     return AuthOutcome.allowed(credential.handle)
 
 
-def _display_bootstrap_handoff(exchange: BootstrapExchange, operator_tty: OperatorTty) -> bool:
+def _display_bootstrap_handoff(
+    exchange: BootstrapExchange, operator_tty: OperatorTty
+) -> SecretDeliveryState:
     values = [
         ("new-session-code", exchange.session.operator_code()),
         ("new-recovery-code", exchange.recovery.operator_code()),
@@ -223,16 +241,15 @@ def _display_bootstrap_handoff(exchange: BootstrapExchange, operator_tty: Operat
                 exchange.replacement_reprovision.credential.operator_code(),
             )
         )
-    try:
-        operator_tty.write_secret_block(tuple(values))
-    except OSError:
-        with suppress(OSError):
+    delivery = _secret_delivery(operator_tty, tuple(values))
+    if delivery is not SecretDeliveryState.COMPLETE:
+        with suppress(OSError, OperatorTerminalError):
             operator_tty.write_public(HANDOFF_INTERRUPTED)
-        return False
+        return delivery
     operator_tty.write_public(
         "bootstrap-exchange-succeeded: session and recovery handed off; save offline authority now\n"
     )
-    return True
+    return SecretDeliveryState.COMPLETE
 
 
 def exchange_bootstrap_on_tty(
@@ -283,7 +300,7 @@ def _exchange_bootstrap_on_tty(
     warning = REPROVISION_WARNING if reprovision else SCROLLBACK_WARNING
     if reprovision:
         operator_tty.write_public(REPROVISION_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(warning):
+    if not operator_tty.confirm(warning):
         prefix = "reprovision-exchange" if reprovision else "bootstrap-exchange"
         _deny(operator_tty, prefix, AuthDenial.OPERATOR_DECLINED)
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
@@ -325,39 +342,41 @@ def _exchange_bootstrap_on_tty(
         _deny(operator_tty, prefix, outcome.denial, guidance=guidance)
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
-    displayed = _display_bootstrap_handoff(outcome.value, operator_tty)
-    return AuthOutcome.allowed(OperatorBootstrapResult(exchange=outcome.value, displayed=displayed))
+    delivery = _display_bootstrap_handoff(outcome.value, operator_tty)
+    return AuthOutcome.allowed(OperatorBootstrapResult(exchange=outcome.value, delivery=delivery))
 
 
 def redisplay_interrupted_bootstrap(
     result: OperatorBootstrapResult, operator_tty: OperatorTty
 ) -> OperatorBootstrapResult:
     """Retry a bootstrap authority handoff without replaying the consumed bootstrap."""
-    if result.displayed or not operator_tty.isatty():
+    if result.delivery is SecretDeliveryState.COMPLETE or not operator_tty.isatty():
         return result
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+    if not operator_tty.confirm(SCROLLBACK_WARNING):
         return result
     return OperatorBootstrapResult(
         exchange=result.exchange,
-        displayed=_display_bootstrap_handoff(result.exchange, operator_tty),
+        delivery=_display_bootstrap_handoff(result.exchange, operator_tty),
     )
 
 
-def _display_recovery(exchange: BootstrapExchange, operator_tty: OperatorTty) -> bool:
-    try:
-        operator_tty.write_secret_block(
-            (
-                ("new-session-code", exchange.session.operator_code()),
-                ("new-recovery-code", exchange.recovery.operator_code()),
-            )
-        )
-    except OSError:
-        with suppress(OSError):
+def _display_recovery(
+    exchange: BootstrapExchange, operator_tty: OperatorTty
+) -> SecretDeliveryState:
+    delivery = _secret_delivery(
+        operator_tty,
+        (
+            ("new-session-code", exchange.session.operator_code()),
+            ("new-recovery-code", exchange.recovery.operator_code()),
+        ),
+    )
+    if delivery is not SecretDeliveryState.COMPLETE:
+        with suppress(OSError, OperatorTerminalError):
             operator_tty.write_public(HANDOFF_INTERRUPTED)
-        return False
+        return delivery
     operator_tty.write_public("recovery-succeeded: old sessions and old recovery codes revoked\n")
-    return True
+    return SecretDeliveryState.COMPLETE
 
 
 def recover_headless_on_tty(
@@ -370,11 +389,15 @@ def recover_headless_on_tty(
         _deny(operator_tty, "recovery", AuthDenial.NON_INTERACTIVE)
         return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+    if not operator_tty.confirm(SCROLLBACK_WARNING):
         _deny(operator_tty, "recovery", AuthDenial.OPERATOR_DECLINED)
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
-    operator_tty.write_public("recovery-code (input hidden): ")
-    raw = operator_tty.read_secret_no_echo()
+    try:
+        raw = operator_tty.read_secret("recovery-code (input hidden): ", 128)
+    except OperatorTerminalError:
+        with suppress(OperatorTerminalError):
+            _deny(operator_tty, "recovery", AuthDenial.NON_INTERACTIVE)
+        return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
     try:
         credential = OpaqueCredential.parse_operator_code(raw)
     except ValueError:
@@ -385,22 +408,22 @@ def recover_headless_on_tty(
         _deny(operator_tty, "recovery", outcome.denial)
         return AuthOutcome.denied(outcome.denial)
     assert outcome.value is not None
-    displayed = _display_recovery(outcome.value, operator_tty)
-    return AuthOutcome.allowed(OperatorRecoveryResult(exchange=outcome.value, displayed=displayed))
+    delivery = _display_recovery(outcome.value, operator_tty)
+    return AuthOutcome.allowed(OperatorRecoveryResult(exchange=outcome.value, delivery=delivery))
 
 
 def redisplay_interrupted_recovery(
     result: OperatorRecoveryResult, operator_tty: OperatorTty
 ) -> OperatorRecoveryResult:
     """Retry an all-or-nothing display without reusing consumed recovery authority."""
-    if result.displayed or not operator_tty.isatty():
+    if result.delivery is SecretDeliveryState.COMPLETE or not operator_tty.isatty():
         return result
     operator_tty.write_public(SCROLLBACK_WARNING + "\n")
-    if not operator_tty.confirm_secret_display(SCROLLBACK_WARNING):
+    if not operator_tty.confirm(SCROLLBACK_WARNING):
         return result
     return OperatorRecoveryResult(
         exchange=result.exchange,
-        displayed=_display_recovery(result.exchange, operator_tty),
+        delivery=_display_recovery(result.exchange, operator_tty),
     )
 
 
