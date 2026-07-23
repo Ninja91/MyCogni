@@ -10,6 +10,7 @@ import termios
 import textwrap
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,53 @@ def test_non_main_thread_read_is_busy_before_termios(
     assert len(failure) == 1
     assert failure[0].failure is OperatorTerminalFailure.BUSY
     assert called is False
+
+
+def _fake_attrs() -> list[object]:
+    return [1, 2, 3, termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG, 5, 6, []]
+
+
+def test_secret_read_restores_exact_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = _fake_attrs()
+    applied: list[tuple[int, list[object]]] = []
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
+    monkeypatch.setattr(
+        termios,
+        "tcsetattr",
+        lambda _fd, when, attrs: applied.append((when, deepcopy(attrs))),
+    )
+    monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+    monkeypatch.setattr(os, "write", lambda _fd, payload: len(payload))
+    monkeypatch.setattr(os, "read", lambda _fd, _size: b"secret\n")
+    assert _attached().read_secret("prompt", 16) == "secret"
+    assert len(applied) == 2
+    assert applied[0][0] == termios.TCSAFLUSH
+    assert applied[0][1][3] == (original[3] & ~(termios.ECHO | termios.ECHONL))
+    assert applied[1] == (termios.TCSAFLUSH, original)
+
+
+def test_restore_failure_latches_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = _fake_attrs()
+    calls = 0
+
+    def set_attrs(_fd: int, _when: int, _attrs: list[object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("redacted")
+
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
+    monkeypatch.setattr(termios, "tcsetattr", set_attrs)
+    monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+    monkeypatch.setattr(os, "write", lambda _fd, payload: len(payload))
+    monkeypatch.setattr(os, "read", lambda _fd, _size: b"secret\n")
+    terminal = _attached()
+    with pytest.raises(OperatorTerminalError) as raised:
+        terminal.read_secret("prompt", 16)
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+    with pytest.raises(OperatorTerminalError) as latched:
+        terminal.write_public("must not write")
+    assert latched.value.failure is OperatorTerminalFailure.RESTORE_FAILED
 
 
 @pytest.mark.skipif(not hasattr(termios, "TIOCSCTTY"), reason="requires a POSIX controlling TTY")

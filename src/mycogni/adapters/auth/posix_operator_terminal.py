@@ -71,7 +71,7 @@ class PosixOperatorTerminal:
                 fd = os.open("/dev/tty", base_flags | nofollow)
             except PermissionError:
                 # Darwin rejects no-follow flags for this special character device.
-                # /dev is root-owned; bind the fallback to the same char-device inode.
+                # /dev is root-owned; require the path and opened fd to be char devices.
                 if sys.platform != "darwin":
                     raise
                 if not stat.S_ISCHR(os.lstat("/dev/tty").st_mode):
@@ -205,15 +205,29 @@ class PosixOperatorTerminal:
 
     def _install_cancel_handlers(self) -> dict[signal.Signals, signal.Handlers]:
         previous: dict[signal.Signals, signal.Handlers] = {}
-        for item in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
-            previous[item] = signal.getsignal(item)  # type: ignore[assignment]
-            signal.signal(item, self._cancel_handler)
+        try:
+            for item in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+                previous[item] = signal.getsignal(item)  # type: ignore[assignment]
+                signal.signal(item, self._cancel_handler)
+        except BaseException:
+            self._restore_cancel_handlers(previous)
+            raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
         return previous
 
     @staticmethod
-    def _restore_cancel_handlers(previous: dict[signal.Signals, signal.Handlers]) -> None:
+    def _restore_cancel_handlers(previous: dict[signal.Signals, signal.Handlers]) -> bool:
+        succeeded = True
         for item, handler in previous.items():
-            signal.signal(item, handler)
+            while True:
+                try:
+                    signal.signal(item, handler)
+                    break
+                except _Cancelled:
+                    continue
+                except (OSError, ValueError):
+                    succeeded = False
+                    break
+        return succeeded
 
     def read_secret(self, prompt: str, max_bytes: int) -> str:
         with self._operation(main_thread=True):
@@ -224,8 +238,11 @@ class PosixOperatorTerminal:
             raise OperatorTerminalError(OperatorTerminalFailure.INPUT_TOO_LONG)
         prompt_bytes = self._public_bytes(prompt)
         fd = self._checked_fd()
-        original = termios.tcgetattr(fd)
-        hidden = termios.tcgetattr(fd)
+        try:
+            original = termios.tcgetattr(fd)
+            hidden = termios.tcgetattr(fd)
+        except OSError:
+            raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
         hidden[3] &= ~(termios.ECHO | termios.ECHONL)
         failure: OperatorTerminalError | None = None
         data = bytearray()
@@ -281,7 +298,8 @@ class PosixOperatorTerminal:
                     failure = failure or exc
                 else:
                     failure = failure or OperatorTerminalError(OperatorTerminalFailure.CANCELLED)
-            self._restore_cancel_handlers(previous)
+            if not self._restore_cancel_handlers(previous):
+                failure = failure or OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
         if failure is not None:
             raise failure
         return value
@@ -328,4 +346,8 @@ class PosixOperatorTerminal:
         try:
             self._write_unlocked(payload, secret=True)
         finally:
-            self._restore_cancel_handlers(previous)
+            if not self._restore_cancel_handlers(previous):
+                raise OperatorTerminalError(
+                    OperatorTerminalFailure.OUTPUT_UNCERTAIN,
+                    SecretDeliveryState.MAY_HAVE_DISCLOSED,
+                ) from None
