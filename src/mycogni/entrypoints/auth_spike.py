@@ -15,6 +15,7 @@ from mycogni.application.operator_terminal import (
 )
 from mycogni.application.operator_terminal import (
     OperatorTerminalError,
+    OperatorTerminalFailure,
     SecretDeliveryState,
     SecretField,
 )
@@ -57,6 +58,11 @@ DENIAL_GUIDANCE: dict[AuthDenial, str] = {
     AuthDenial.CLOCK_ROLLBACK: "correct the trusted clock; retries remain blocked",
     AuthDenial.STALE_EPOCH: "authority changed; use the newest recovery or reprovision capability",
     AuthDenial.NON_INTERACTIVE: "attach a private interactive operator terminal",
+    AuthDenial.TERMINAL_NOT_FOREGROUND: "return the private terminal to the foreground",
+    AuthDenial.TERMINAL_BUSY: "wait for the active operator terminal operation",
+    AuthDenial.TERMINAL_FORKED: "open a fresh operator terminal session in this process",
+    AuthDenial.TERMINAL_IO_FAILED: "inspect the private terminal before retrying",
+    AuthDenial.TERMINAL_RESTORE_FAILED: "restore or close the terminal before retrying",
     AuthDenial.MALFORMED_CREDENTIAL: "re-enter the complete code through no-echo input",
     AuthDenial.OPERATOR_DECLINED: "no credential was issued or consumed",
     AuthDenial.OUTPUT_INTERRUPTED: (
@@ -66,6 +72,49 @@ DENIAL_GUIDANCE: dict[AuthDenial, str] = {
     AuthDenial.CAPACITY_EXHAUSTED: (
         "no authority was consumed; wait for the finite ceremony TTL or allow trusted "
         "composition garbage collection, then retry the dedicated reprovision ceremony"
+    ),
+}
+
+TERMINAL_INPUT_GUIDANCE: dict[OperatorTerminalFailure, tuple[AuthDenial, str]] = {
+    OperatorTerminalFailure.CANCELLED: (
+        AuthDenial.OPERATOR_DECLINED,
+        "secret input was cancelled before authority was consumed",
+    ),
+    OperatorTerminalFailure.EOF: (
+        AuthDenial.MALFORMED_CREDENTIAL,
+        "private terminal input ended before a complete code was received",
+    ),
+    OperatorTerminalFailure.INPUT_TOO_LONG: (
+        AuthDenial.MALFORMED_CREDENTIAL,
+        "private terminal input exceeded the finite credential bound",
+    ),
+    OperatorTerminalFailure.NON_INTERACTIVE: (
+        AuthDenial.NON_INTERACTIVE,
+        "attach a private interactive operator terminal",
+    ),
+    OperatorTerminalFailure.NOT_FOREGROUND: (
+        AuthDenial.TERMINAL_NOT_FOREGROUND,
+        "return the private operator terminal to the foreground before retrying",
+    ),
+    OperatorTerminalFailure.IO_FAILED: (
+        AuthDenial.TERMINAL_IO_FAILED,
+        "private terminal input failed before authority was consumed; inspect the terminal",
+    ),
+    OperatorTerminalFailure.RESTORE_FAILED: (
+        AuthDenial.TERMINAL_RESTORE_FAILED,
+        "terminal restoration failed; close this terminal session and restore it before retrying",
+    ),
+    OperatorTerminalFailure.BUSY: (
+        AuthDenial.TERMINAL_BUSY,
+        "another operator terminal operation is active; wait for it to finish",
+    ),
+    OperatorTerminalFailure.FORKED: (
+        AuthDenial.TERMINAL_FORKED,
+        "open a fresh operator terminal session in this process",
+    ),
+    OperatorTerminalFailure.OUTPUT_UNCERTAIN: (
+        AuthDenial.OUTPUT_INTERRUPTED,
+        "terminal output may have started; follow the interrupted-handoff procedure",
     ),
 }
 
@@ -118,6 +167,21 @@ def _deny(
     operator_tty.write_public(f"{prefix}-denied: {denial.value}; {guidance}\n")
 
 
+def _deny_terminal_input(
+    operator_tty: OperatorTty, prefix: str, error: OperatorTerminalError
+) -> AuthDenial:
+    denial, guidance = TERMINAL_INPUT_GUIDANCE[error.failure]
+    with suppress(OSError, OperatorTerminalError):
+        _deny(operator_tty, prefix, denial, guidance=guidance)
+    return denial
+
+
+def _write_public_after_complete(operator_tty: OperatorTty, value: str) -> None:
+    """Best-effort status: never hide already completed secret publication."""
+    with suppress(OSError, OperatorTerminalError):
+        operator_tty.write_public(value)
+
+
 def begin_bootstrap_on_tty(
     service: AuthService,
     *,
@@ -159,9 +223,10 @@ def begin_bootstrap_on_tty(
                 "begin again with the same unconsumed initial root.\n"
             )
         return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
-    operator_tty.write_public(
+    _write_public_after_complete(
+        operator_tty,
         f"bootstrap-guidance: expires in {service.policy.bootstrap_ttl_seconds} seconds; "
-        f"burns after {service.policy.max_attempts} failed proofs\n"
+        f"burns after {service.policy.max_attempts} failed proofs\n",
     )
     return AuthOutcome.allowed(credential.handle)
 
@@ -192,10 +257,8 @@ def begin_reprovision_on_tty(
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
     try:
         raw = operator_tty.read_secret("reprovision-code (input hidden): ", 128)
-    except OperatorTerminalError:
-        with suppress(OperatorTerminalError):
-            _deny(operator_tty, "reprovision", AuthDenial.NON_INTERACTIVE)
-        return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
+    except OperatorTerminalError as exc:
+        return AuthOutcome.denied(_deny_terminal_input(operator_tty, "reprovision", exc))
     try:
         reprovision = OpaqueCredential.parse_operator_code(raw)
     except ValueError:
@@ -220,9 +283,10 @@ def begin_reprovision_on_tty(
                 "disclosed; the offline route was not consumed, so begin again with it.\n"
             )
         return AuthOutcome.denied(AuthDenial.OUTPUT_INTERRUPTED)
-    operator_tty.write_public(
+    _write_public_after_complete(
+        operator_tty,
         f"reprovision-guidance: bootstrap expires in {service.policy.bootstrap_ttl_seconds} "
-        "seconds; the offline route is not consumed until the separately confirmed exchange\n"
+        "seconds; the offline route is not consumed until the separately confirmed exchange\n",
     )
     return AuthOutcome.allowed(credential.handle)
 
@@ -246,8 +310,9 @@ def _display_bootstrap_handoff(
         with suppress(OSError, OperatorTerminalError):
             operator_tty.write_public(HANDOFF_INTERRUPTED)
         return delivery
-    operator_tty.write_public(
-        "bootstrap-exchange-succeeded: session and recovery handed off; save offline authority now\n"
+    _write_public_after_complete(
+        operator_tty,
+        "bootstrap-exchange-succeeded: session and recovery handed off; save offline authority now\n",
     )
     return SecretDeliveryState.COMPLETE
 
@@ -375,7 +440,9 @@ def _display_recovery(
         with suppress(OSError, OperatorTerminalError):
             operator_tty.write_public(HANDOFF_INTERRUPTED)
         return delivery
-    operator_tty.write_public("recovery-succeeded: old sessions and old recovery codes revoked\n")
+    _write_public_after_complete(
+        operator_tty, "recovery-succeeded: old sessions and old recovery codes revoked\n"
+    )
     return SecretDeliveryState.COMPLETE
 
 
@@ -394,10 +461,8 @@ def recover_headless_on_tty(
         return AuthOutcome.denied(AuthDenial.OPERATOR_DECLINED)
     try:
         raw = operator_tty.read_secret("recovery-code (input hidden): ", 128)
-    except OperatorTerminalError:
-        with suppress(OperatorTerminalError):
-            _deny(operator_tty, "recovery", AuthDenial.NON_INTERACTIVE)
-        return AuthOutcome.denied(AuthDenial.NON_INTERACTIVE)
+    except OperatorTerminalError as exc:
+        return AuthOutcome.denied(_deny_terminal_input(operator_tty, "recovery", exc))
     try:
         credential = OpaqueCredential.parse_operator_code(raw)
     except ValueError:

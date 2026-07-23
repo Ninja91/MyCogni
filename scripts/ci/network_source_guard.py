@@ -115,7 +115,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/simulator/test_web_mail_safety.py",
 }
 EXACT_PROCESS_CALL_ALLOWLIST = {
-    "tests/adapters/auth/test_posix_operator_terminal.py": {"subprocess.Popen"},
+    "tests/adapters/auth/test_posix_operator_terminal.py": {"os.fork", "subprocess.Popen"},
     "tests/adapters/auth/test_owner_file_custody.py": {"os.fork", "subprocess.run"},
     "tests/architecture/test_browser_containment.py": {"subprocess.run"},
     "tests/architecture/test_runner_containment.py": {"subprocess.run"},

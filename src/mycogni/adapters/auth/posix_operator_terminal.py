@@ -13,9 +13,10 @@ import stat
 import sys
 import termios
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from types import FrameType, TracebackType
+from typing import cast
 
 from mycogni.application.operator_terminal import (
     OperatorTerminalError,
@@ -37,6 +38,13 @@ _OWNER_PID = os.getpid()
 
 class _Cancelled(BaseException):
     """Private signal-to-unwind sentinel; never crosses the adapter boundary."""
+
+
+class _HandlerInstallFailed(BaseException):
+    """Private carrier for the exact subset of handlers already replaced."""
+
+    def __init__(self, previous: dict[signal.Signals, signal.Handlers]) -> None:
+        self.previous = previous
 
 
 def _poison_after_fork() -> None:
@@ -105,13 +113,20 @@ class PosixOperatorTerminal:
         self.close()
 
     def close(self) -> None:
-        fd, self._fd = self._fd, None
-        if fd is not None:
-            with suppress(OSError):
-                os.close(fd)
-        if self._owns_lock:
-            self._owns_lock = False
-            _PROCESS_LOCK.release()
+        if os.getpid() != _OWNER_PID or os.getpid() != self._pid:
+            raise OperatorTerminalError(OperatorTerminalFailure.FORKED)
+        if not _OPERATION_LOCK.acquire(blocking=False):
+            raise OperatorTerminalError(OperatorTerminalFailure.BUSY)
+        try:
+            fd, self._fd = self._fd, None
+            if fd is not None:
+                with suppress(OSError):
+                    os.close(fd)
+            if self._owns_lock:
+                self._owns_lock = False
+                _PROCESS_LOCK.release()
+        finally:
+            _OPERATION_LOCK.release()
 
     def _checked_fd(self) -> int:
         if os.getpid() != _OWNER_PID or os.getpid() != self._pid:
@@ -120,7 +135,22 @@ class PosixOperatorTerminal:
             raise OperatorTerminalError(OperatorTerminalFailure.RESTORE_FAILED)
         if self._fd is None:
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
-        return self._fd
+        fd = self._fd
+        try:
+            if not stat.S_ISCHR(os.fstat(fd).st_mode) or not os.isatty(fd):
+                raise OperatorTerminalError(OperatorTerminalFailure.NON_INTERACTIVE)
+            if os.tcgetpgrp(fd) != os.getpgrp():
+                raise OperatorTerminalError(OperatorTerminalFailure.NOT_FOREGROUND)
+        except OperatorTerminalError:
+            raise
+        except OSError as exc:
+            failure = (
+                OperatorTerminalFailure.NON_INTERACTIVE
+                if exc.errno in {errno.ENXIO, errno.ENODEV, errno.ENOTTY}
+                else OperatorTerminalFailure.IO_FAILED
+            )
+            raise OperatorTerminalError(failure) from None
+        return fd
 
     @contextmanager
     def _operation(self, *, main_thread: bool = False) -> Iterator[None]:
@@ -146,7 +176,10 @@ class PosixOperatorTerminal:
     def _public_bytes(value: str) -> bytes:
         if type(value) is not str or len(value) > MAX_PUBLIC_CHARS:
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
-        if any(ord(char) < 0x20 and char != "\n" for char in value) or "\x1b" in value:
+        if any(
+            (ord(char) < 0x20 and char != "\n") or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+            for char in value
+        ):
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
         try:
             return value.encode("utf-8", "strict")
@@ -154,6 +187,9 @@ class PosixOperatorTerminal:
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
 
     def _write_unlocked(self, payload: bytes, *, secret: bool) -> None:
+        # Revalidate immediately before publication, after all potentially slow
+        # validation and signal setup.  A backgrounded or replaced descriptor
+        # never receives public or secret bytes.
         fd = self._checked_fd()
         written = 0
         try:
@@ -181,7 +217,12 @@ class PosixOperatorTerminal:
                 if secret and written > 0
                 else SecretDeliveryState.NOT_STARTED
             )
-            raise OperatorTerminalError(OperatorTerminalFailure.OUTPUT_UNCERTAIN, state) from None
+            failure = (
+                OperatorTerminalFailure.OUTPUT_UNCERTAIN
+                if state is SecretDeliveryState.MAY_HAVE_DISCLOSED
+                else OperatorTerminalFailure.CANCELLED
+            )
+            raise OperatorTerminalError(failure, state) from None
         except OSError:
             state = (
                 SecretDeliveryState.MAY_HAVE_DISCLOSED
@@ -203,30 +244,117 @@ class PosixOperatorTerminal:
     def _cancel_handler(_signum: int, _frame: FrameType | None) -> None:
         raise _Cancelled
 
+    @staticmethod
+    def _cancel_signals() -> tuple[signal.Signals, ...]:
+        return (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+
     def _install_cancel_handlers(self) -> dict[signal.Signals, signal.Handlers]:
         previous: dict[signal.Signals, signal.Handlers] = {}
         try:
-            for item in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+            for item in self._cancel_signals():
                 previous[item] = signal.getsignal(item)  # type: ignore[assignment]
                 signal.signal(item, self._cancel_handler)
         except BaseException:
-            self._restore_cancel_handlers(previous)
-            raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
+            raise _HandlerInstallFailed(previous) from None
         return previous
+
+    def _begin_cancel_session(self) -> dict[signal.Signals, signal.Handlers]:
+        signals = self._cancel_signals()
+        mask = cast(
+            "Callable[[int, tuple[signal.Signals, ...] | set[signal.Signals]], set[signal.Signals]] | None",
+            getattr(signal, "pthread_sigmask", None),
+        )
+        old_mask: set[signal.Signals] | None = None
+        try:
+            if mask is not None:
+                old_mask = mask(signal.SIG_BLOCK, signals)
+            previous = self._install_cancel_handlers()
+        except _HandlerInstallFailed as exc:
+            restored = self._restore_cancel_handlers(exc.previous)
+            if not restored:
+                self._restore_failed = True
+            if old_mask is not None and restored:
+                assert mask is not None
+                with suppress(BaseException):
+                    mask(signal.SIG_SETMASK, old_mask)
+            failure = (
+                OperatorTerminalFailure.IO_FAILED
+                if restored
+                else OperatorTerminalFailure.RESTORE_FAILED
+            )
+            raise OperatorTerminalError(failure) from None
+        except BaseException:
+            if old_mask is not None:
+                assert mask is not None
+                with suppress(BaseException):
+                    mask(signal.SIG_SETMASK, old_mask)
+            raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
+        try:
+            if old_mask is not None:
+                assert mask is not None
+                mask(signal.SIG_SETMASK, old_mask)
+        except BaseException:
+            restored = self._restore_cancel_handlers(previous)
+            if not restored:
+                self._restore_failed = True
+            assert mask is not None
+            assert old_mask is not None
+            if restored:
+                with suppress(BaseException):
+                    mask(signal.SIG_SETMASK, old_mask)
+            failure = (
+                OperatorTerminalFailure.IO_FAILED
+                if restored
+                else OperatorTerminalFailure.RESTORE_FAILED
+            )
+            raise OperatorTerminalError(failure) from None
+        return previous
+
+    def _end_cancel_session(self, previous: dict[signal.Signals, signal.Handlers]) -> None:
+        signals = self._cancel_signals()
+        mask = cast(
+            "Callable[[int, tuple[signal.Signals, ...] | set[signal.Signals]], set[signal.Signals]] | None",
+            getattr(signal, "pthread_sigmask", None),
+        )
+        cleanup_mask: set[signal.Signals] | None = None
+        succeeded = True
+        try:
+            if mask is not None:
+                cleanup_mask = mask(signal.SIG_BLOCK, signals)
+        except BaseException:
+            succeeded = False
+        restored = self._restore_cancel_handlers(previous)
+        if not restored:
+            self._restore_failed = True
+            succeeded = False
+        try:
+            if cleanup_mask is not None and restored:
+                assert mask is not None
+                mask(signal.SIG_SETMASK, cleanup_mask)
+        except BaseException:
+            succeeded = False
+        if not succeeded:
+            failure = (
+                OperatorTerminalFailure.IO_FAILED
+                if restored
+                else OperatorTerminalFailure.RESTORE_FAILED
+            )
+            raise OperatorTerminalError(failure)
 
     @staticmethod
     def _restore_cancel_handlers(previous: dict[signal.Signals, signal.Handlers]) -> bool:
         succeeded = True
         for item, handler in previous.items():
-            while True:
+            for _attempt in range(3):
                 try:
                     signal.signal(item, handler)
                     break
                 except _Cancelled:
                     continue
                 except (OSError, ValueError):
-                    succeeded = False
-                    break
+                    continue
+            else:
+                succeeded = False
         return succeeded
 
     def read_secret(self, prompt: str, max_bytes: int) -> str:
@@ -246,13 +374,16 @@ class PosixOperatorTerminal:
         hidden[3] &= ~(termios.ECHO | termios.ECHONL)
         failure: OperatorTerminalError | None = None
         data = bytearray()
-        previous = self._install_cancel_handlers()
+        previous = self._begin_cancel_session()
         try:
+            # Foreground ownership may change after the first validation.
+            self._checked_fd()
             termios.tcsetattr(fd, termios.TCSAFLUSH, hidden)
             # Emit the prompt only after the flush-and-hide transition.  If the
             # operator responds as soon as the prompt is visible, their input
             # cannot race ahead of TCSAFLUSH and be discarded or echoed.
             self._write_unlocked(prompt_bytes, secret=False)
+            self._checked_fd()
             while True:
                 chunk = os.read(fd, max_bytes + 2)
                 if chunk == b"":
@@ -262,6 +393,7 @@ class PosixOperatorTerminal:
                     break
                 if len(data) > max_bytes + 1:
                     while b"\n" not in chunk:
+                        self._checked_fd()
                         chunk = os.read(fd, max_bytes + 2)
                         if chunk == b"":
                             break
@@ -272,7 +404,9 @@ class PosixOperatorTerminal:
             if len(line) > max_bytes:
                 raise OperatorTerminalError(OperatorTerminalFailure.INPUT_TOO_LONG)
             value = line.decode("utf-8", "strict")
-            if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            if any(
+                ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value
+            ):
                 raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
         except OperatorTerminalError as exc:
             failure = exc
@@ -301,11 +435,20 @@ class PosixOperatorTerminal:
                     failure = failure or exc
                 else:
                     failure = failure or OperatorTerminalError(OperatorTerminalFailure.CANCELLED)
-            if not self._restore_cancel_handlers(previous):
-                failure = failure or OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
+            try:
+                self._end_cancel_session(previous)
+            except OperatorTerminalError as exc:
+                failure = failure or exc
+            self._scrub_mutable(data)
         if failure is not None:
             raise failure
         return value
+
+    @staticmethod
+    def _scrub_mutable(data: bytearray) -> None:
+        """Best-effort overwrite; no allocator or immutable-string erasure claim."""
+        for index in range(len(data)):
+            data[index] = 0
 
     def confirm(self, prompt: str) -> bool:
         with self._operation(main_thread=True):
@@ -328,6 +471,11 @@ class PosixOperatorTerminal:
             ):
                 raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
             try:
+                if any(
+                    ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+                    for char in field.value
+                ):
+                    raise UnicodeError
                 value = field.value.encode("utf-8", "strict")
             except UnicodeError:
                 raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED) from None
@@ -341,16 +489,32 @@ class PosixOperatorTerminal:
         payload = b"".join(lines)
         if len(payload) > MAX_SECRET_BLOCK_BYTES:
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
-        previous = (
-            self._install_cancel_handlers()
-            if threading.current_thread() is threading.main_thread()
-            else {}
-        )
-        try:
-            self._write_unlocked(payload, secret=True)
-        finally:
-            if not self._restore_cancel_handlers(previous):
+        if threading.current_thread() is threading.main_thread():
+            previous = self._begin_cancel_session()
+            write_failure: OperatorTerminalError | None = None
+            cleanup_failure: OperatorTerminalError | None = None
+            try:
+                self._write_unlocked(payload, secret=True)
+            except OperatorTerminalError as exc:
+                write_failure = exc
+            finally:
+                try:
+                    self._end_cancel_session(previous)
+                except OperatorTerminalError as exc:
+                    cleanup_failure = exc
+            if write_failure is not None:
+                if write_failure.delivery is SecretDeliveryState.NOT_STARTED:
+                    raise write_failure
                 raise OperatorTerminalError(
                     OperatorTerminalFailure.OUTPUT_UNCERTAIN,
                     SecretDeliveryState.MAY_HAVE_DISCLOSED,
                 ) from None
+            if cleanup_failure is not None:
+                # The payload and drain completed, but a cancellation transition
+                # failure prevents an atomic COMPLETE assertion to the caller.
+                raise OperatorTerminalError(
+                    OperatorTerminalFailure.OUTPUT_UNCERTAIN,
+                    SecretDeliveryState.MAY_HAVE_DISCLOSED,
+                ) from None
+        else:
+            self._write_unlocked(payload, secret=True)
