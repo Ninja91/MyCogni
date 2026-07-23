@@ -113,6 +113,7 @@ PROCESS_CALL_ALLOWLIST = {
     "tests/simulator/test_web_mail_safety.py",
 }
 EXACT_PROCESS_CALL_ALLOWLIST = {
+    "tests/adapters/auth/test_owner_file_custody.py": {"os.fork"},
     "tests/architecture/test_browser_containment.py": {"subprocess.run"},
     "tests/architecture/test_runner_containment.py": {"subprocess.run"},
     "tests/runner_mailbox/test_persistent.py": {"os.fork"},

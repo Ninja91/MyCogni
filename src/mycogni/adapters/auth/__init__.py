@@ -1,5 +1,9 @@
 """Volatile oracle and restart-durable authentication decision adapters."""
 
+from mycogni.adapters.auth.owner_file_custody import (
+    OwnerFileAuthCustody,
+    OwnerFileAuthCustodyProvisioner,
+)
 from mycogni.adapters.auth.sqlite import (
     AuthCommitOutcomeUnknown,
     AuthStateCorrupt,
@@ -19,6 +23,8 @@ __all__ = (
     "CrashPoint",
     "DurableAuthCrashPoint",
     "OsTokenSource",
+    "OwnerFileAuthCustody",
+    "OwnerFileAuthCustodyProvisioner",
     "SqliteAuthDecisionStore",
     "SyntheticCrash",
     "VolatileAuthDecisionStore",

@@ -13,6 +13,7 @@ from mycogni.application.auth import (
     ReprovisionOperatorAuthority,
     TokenSource,
 )
+from mycogni.application.auth_custody import AuthCustodyBundle
 from mycogni.application.ports import Clock
 from mycogni.domain import OpaqueId, Sensitive
 from mycogni.domain.auth import (
@@ -42,6 +43,10 @@ class AuthInstallationStore(AuthDecisionStore, Protocol):
         service_identity: RootCapabilityIssue,
         now: datetime,
     ) -> None: ...
+
+    def auth_state_exists(self) -> bool: ...
+
+    def verify_loaded_composition(self, bundle: AuthCustodyBundle) -> bool: ...
 
 
 class TrustedLocalAuthSetup:

@@ -445,6 +445,7 @@ class AuthService:
         token_source: TokenSource,
         store: AuthDecisionStore,
         reprovision_operator_authority: ReprovisionOperatorAuthority,
+        service_identity: OpaqueCredential | None = None,
         policy: AuthPolicy | None = None,
     ) -> None:
         self._clock = clock
@@ -454,7 +455,13 @@ class AuthService:
         if type(reprovision_operator_authority) is not ReprovisionOperatorAuthority:
             raise TypeError("auth service requires composition-held reprovision operator authority")
         self._reprovision_operator_authority = reprovision_operator_authority
-        self._service_identity, _digest = self._credential()
+        if service_identity is None:
+            # Retained only for the explicitly synthetic SPIKE-AUTH harness.
+            self._service_identity, _digest = self._credential()
+        elif type(service_identity) is not OpaqueCredential:
+            raise TypeError("auth service identity must be an opaque credential")
+        else:
+            self._service_identity = service_identity
 
     def _composition_identity_for_setup(
         self,
