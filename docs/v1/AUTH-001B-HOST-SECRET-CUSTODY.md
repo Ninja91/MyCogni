@@ -22,10 +22,11 @@ SHA-256 digests with durable state, and only then constructs `AuthService` with 
 service identity. Missing, malformed, unsafe, changed, fork-inherited, or mismatched state exposes
 no authority.
 
-Cross-store update is deliberately absent. A reprovision exchange can create a replacement root
-inside the SQLite transaction, but AUTH-001B cannot atomically replace the host file. Durable
-replacement-root handoff therefore remains disabled/fail-closed pending a reviewed reconciliation
-or two-phase protocol; this slice does not simulate atomicity.
+Cross-store update is deliberately absent. A custody-composed `AuthService` runs in the typed
+`CUSTODIED_STATIC_ROOTS` mode: beginning reprovision, authorizing its ceremony, or exchanging it
+raises `AuthCapabilityDisabled` before token generation or any store call. Synthetic SPIKE-AUTH
+composition retains the full oracle behavior. Durable replacement-root handoff remains disabled
+pending a reviewed reconciliation or two-phase protocol; this slice does not simulate atomicity.
 
 ## Binary V1 source
 
@@ -39,7 +40,9 @@ The reader requires a canonical absolute path structurally disjoint in both dire
 configured database/data/evidence/archive root. It traverses descriptors with `O_NOFOLLOW` and
 `O_CLOEXEC`, requires non-symlink root/effective-UID-owned non-writable ancestors, a private final
 parent, a regular single-link effective-UID-owned file with exact `0400` or `0600` mode, and
-revalidates named/opened/after-read file and parent identities. Content or identity change latches
+revalidates named/opened/after-read file and full ancestry identities. Managed roots must also be
+canonical absolute paths with non-symlink existing ancestry; resolved containment and divergent
+paths resolving to the same filesystem identity are rejected. Content or identity change latches
 that provider object into recovery-required. A fork child denies before inherited locking or I/O.
 
 ## Platform conformance and nonclaims
@@ -61,9 +64,13 @@ browser, broker, mail, PII, profile encryption, Keychain, cloud, or external-act
 
 Focused tests cover the strict parser, create-new behavior, redaction, exact binding and digest
 comparison, database/WAL/SHM raw-secret absence, mode/type/symlink/hardlink/ancestor/root-overlap
-denials, rename replacement latching, fork denial, presence mismatch, and a true restart that
-disposes the first composition, reopens SQLite and custody, authenticates an existing session,
-and rejects bootstrap replay. Architecture tests keep runtime and administration surfaces
+denials, rename replacement latching, fork denial, presence mismatch, and a fresh exec-based
+restart. That child receives only paths and non-secret binding IDs, loads the custody source itself,
+and consumes the unspent emergency root with stdin/stdout/stderr disconnected; the parent then
+observes the durable stale session epoch and bootstrap replay denial. All five raw custody secrets,
+including service identity, are scanned against SQLite, WAL, and SHM. Tests also prove custody
+reprovision denial leaves token counts and the complete store snapshot unchanged. Architecture
+tests keep runtime and administration surfaces
 disjoint and deny environment, subprocess, keyring, JSON, database, browser, and network fallback.
 
 Run:
@@ -82,10 +89,10 @@ is prohibited.
 
 ### Native source-level evidence record
 
-The implementation target is commits `e223587c8181438809b9bae72f59e9f7e37a3fbf` and
-`812e0ecfc742786c2e4c9630b569df29f9e1ff9e`.
-On 2026-07-22, the focused custody/auth lane passed 78 tests and the combined network-guard plus
-custody lane passed 134 tests. Ruff, strict mypy for all `mycogni` source, import-linter, the
+The implementation target descends from `e223587c8181438809b9bae72f59e9f7e37a3fbf` through
+`5473d51b0995db6fd736f50a9b3e5c54cc440bf8`, with static-custody/fresh-exec remediation
+`dce739ca4fa10f935637006b3dcbd61ea7d12b9d`. On 2026-07-22, the focused custody/auth lane passed
+80 tests. Ruff, strict mypy for all `mycogni` source, import-linter, the
 safety/claim/site guards, network source guard, and `git diff --check` passed. The executing host
 reported Darwin `25.5.0`, arm64, APFS (`local, journaled`), effective UID `501`; the administration
 test creates the final record as `0600` and the reader accepts only exact `0400` or `0600`.

@@ -54,7 +54,7 @@ Documentation describing a future component is not implementation evidence for t
 
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
-| Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A durable decisions plus AUTH-001B source-level owner-file custody, strict binding/digest checks and true restart tests; AUTH-002/003 remain unstarted | real TTY, cross-store root handoff/reconciliation, restore policy, exact-host evidence and authenticated acceptance remain open |
+| Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A durable decisions plus AUTH-001B source-level owner-file custody, strict binding/digest checks, typed reprovision disablement and fresh-exec restart evidence; AUTH-002/003 remain unstarted | real TTY, cross-store root handoff/reconciliation, restore policy, exact-host evidence and authenticated acceptance remain open |
 | Profile keys, encrypted identity and deletion | KEY-001–002, DATA-001 | `NOT_STARTED` | — | M0 key spike |
 | Events, checkpoint, jobs and catch-up | EVT-001, CHECKPOINT-001, JOB-STATE-001, OUTBOX-001, SCHED-001 | `NOT_STARTED` | — | DB/contracts/key foundation |
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
