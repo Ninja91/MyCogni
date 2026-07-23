@@ -41,6 +41,8 @@ def test_terminal_runtime_has_no_fallback_or_external_surface() -> None:
 
 
 def test_terminal_contract_is_application_owned_and_adapter_is_distributed() -> None:
-    assert "class OperatorTerminal(Protocol)" in CONTRACT.read_text(encoding="utf-8")
+    contract = CONTRACT.read_text(encoding="utf-8")
+    assert "class OperatorTerminal(Protocol)" in contract
+    assert "def check_ready(self) -> None" in contract
     tracked = {path.relative_to(ROOT).as_posix() for path in (ROOT / "src/mycogni").rglob("*.py")}
     assert "src/mycogni/adapters/auth/posix_operator_terminal.py" in tracked

@@ -14,8 +14,10 @@ terminal, MyCogni never describes the secret as undisclosed and never retries a 
 - The adapter opens `/dev/tty` itself with read/write, no-controlling-terminal and close-on-exec
   flags. Linux uses no-follow directly. Darwin rejects no-follow on this special device, so the
   adapter permits only a root-owned `/dev/tty` character-device fallback and validates the opened
-  descriptor as a TTY character device. There is no stdio, environment, argv, browser, network,
-  subprocess, logging, keyring, or `getpass` fallback.
+  descriptor as a TTY character device. The magic `/dev/tty` device resolves to the caller's
+  controlling terminal, so its path `st_rdev` is intentionally not claimed to equal the resolved
+  descriptor's device identity. There is no stdio, environment, argv, browser, network, subprocess,
+  logging, keyring, or `getpass` fallback.
 - A process-lifetime ownership lock and a separate nonblocking operation lock reject a second
   session, concurrent method call, same-thread reentry, or close during an operation before
   terminal I/O. Close never releases session ownership or closes a descriptor while a read or
@@ -32,16 +34,22 @@ terminal, MyCogni never describes the secret as undisclosed and never retries a 
   claimed. This ordering prevents a prompt-triggered response from racing ahead of the flush and
   being echoed or discarded.
 - Temporary `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT` handlers unwind through restoration and are
-  restored afterward. Where `pthread_sigmask` exists, handler installation and restoration occur
-  with those signals blocked: terminal attributes are restored first, old handlers second, and
-  pending signals unblocked last. Partial install, mask-transition, and handler-restore failures
-  become finite redacted failures; the private unwind sentinel never crosses the adapter. Platforms
-  without `pthread_sigmask` retain best-effort handler transitions and require exact-host evidence.
-  Restore failure latches the object closed. `SIGKILL` restoration is neither possible nor claimed.
+  restored afterward. The POSIX adapter requires `pthread_sigmask`: begin blocks those signals,
+  installs every handler, and returns while they remain blocked. Only after the caller has entered
+  its protecting `try` does activation restore the old mask. Cleanup restores terminal attributes
+  first, blocks the handled signals, restores every old handler, and restores the exact old mask
+  last. Partial install, activation, mask-transition, and handler-restore failures become finite
+  redacted failures. The private unwind sentinel is contained; an unrecoverable operating-system
+  mask failure latches the adapter and is not claimed to preserve future process-wide signal
+  behavior. A platform without `pthread_sigmask` is unsupported rather than using a racy fallback.
+  `SIGKILL` restoration is neither possible nor claimed.
 - Disclosure prebuilds at most eight fields (96 printable ASCII label characters, 512 UTF-8 value
-  bytes each, 8192 total bytes), loops over short writes, and drains the TTY. A failure before the
-  first nonzero secret write is `NOT_STARTED`; any later write, newline, drain, cancellation, or I/O
-  uncertainty is `MAY_HAVE_DISCLOSED`.
+  bytes each, 8192 total bytes), loops over short writes, revalidates foreground/device identity
+  before every chunk, and drains the TTY. Delivery becomes `MAY_HAVE_DISCLOSED` immediately before
+  the first secret `write(2)` attempt because the kernel may accept bytes before Python receives a
+  return count. Only failure before any secret syscall attempt is `NOT_STARTED`; any attempted
+  write, later foreground loss, drain, cancellation, or I/O uncertainty remains
+  `MAY_HAVE_DISCLOSED`.
 
 ## Ceremony correction
 
@@ -55,17 +63,24 @@ issued handle, downgrade `COMPLETE`, or hide a successfully consumed in-process 
 input failures have a finite truthful projection: cancellation is operator decline, EOF/oversize
 is malformed input, and noninteractive, foreground, busy, fork, I/O, and restoration failures keep
 distinct public denial codes and bounded guidance.
+Those terminal transport denials are response-only entrypoint results. They are not written into
+the durable auth decision snapshot, do not consume proof-attempt counters, and are deliberately
+excluded from the frozen V1 `ReprovisionCeremonyRecord.terminal_denial` grammar; durable ceremony
+denials remain decision-engine outcomes such as `replayed` and `expired`.
 
 ## Evidence and limits
 
 Deterministic tests cover zero/partial/short writes, drain failure, redacted errors, close/read/write
 serialization, child-after-fork close, repeated foreground validation, signal install/restore/mask
-faults and cleanup ordering, control rejection, non-main-thread input refusal, post-disclosure
-public-write failure, finite input guidance, and corrected application semantics. The fresh-exec PTY
-test uses a new interpreter which establishes its own controlling terminal with
+faults and cleanup ordering, per-attempt delivery accounting, control rejection, non-main-thread
+input refusal, all-ceremony readiness/warning/confirmation failure, post-disclosure public-write
+failure, finite input guidance, and corrected application semantics. The fresh-exec PTY matrix
+uses a new interpreter which establishes its own controlling terminal with
 `setsid`/`TIOCSCTTY`; it has no threaded-runner `preexec_fn`, applies deadlines to all reads, and
-escalates terminate to kill during cleanup. Only an independent direct `/dev/tty` precondition may
-produce exit 77/skip in a host application sandbox; generic adapter `IO_FAILED` remains a failure.
+escalates terminate to kill during cleanup. It verifies exact restoration and no echo after success,
+EOF, oversize, invalid UTF-8, `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Only an independent direct
+`/dev/tty` precondition may produce exit 77/skip in a host application sandbox; generic adapter
+`IO_FAILED` remains a failure.
 An unsandboxed Darwin arm64 run exercised the controlling PTY successfully; Linux CI and broader
 exact-host terminal-emulator conformance remain required evidence rather than claims.
 

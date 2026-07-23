@@ -34,6 +34,15 @@ def _attached(fd: int = 41) -> PosixOperatorTerminal:
     return terminal
 
 
+def _cancel_session(
+    mask: object,
+    previous: dict[signal.Signals, signal.Handlers] | None = None,
+) -> object:
+    return terminal_module._CancelSession(  # noqa: SLF001 - exact lifecycle test
+        previous or {signal.SIGINT: signal.SIG_DFL}, set(), mask
+    )
+
+
 @pytest.fixture(autouse=True)
 def _synthetic_attached_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make synthetic fd 41 pass the real adapter's repeated identity checks."""
@@ -50,6 +59,27 @@ def _synthetic_attached_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         os, "tcgetpgrp", lambda fd: os.getpgrp() if fd == 41 else real_tcgetpgrp(fd)
     )
+
+
+def test_darwin_no_follow_fallback_rejects_non_root_dev_tty_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opens = 0
+
+    def denied_open(_path: str, _flags: int) -> int:
+        nonlocal opens
+        opens += 1
+        raise PermissionError("synthetic no-follow denial")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "open", denied_open)
+    monkeypatch.setattr(
+        os, "lstat", lambda _path: SimpleNamespace(st_mode=stat.S_IFCHR, st_uid=501)
+    )
+    with pytest.raises(OperatorTerminalError) as raised, PosixOperatorTerminal():
+        raise AssertionError("must not enter")
+    assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
+    assert opens == 1
 
 
 def test_secret_write_handles_short_writes_and_drains(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,7 +99,7 @@ def test_secret_write_handles_short_writes_and_drains(monkeypatch: pytest.Monkey
     assert drained == [41]
 
 
-def test_secret_write_failure_before_first_byte_is_not_started(
+def test_secret_write_syscall_failure_is_conservatively_may_have_disclosed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail(_fd: int, _payload: bytes) -> int:
@@ -78,8 +108,8 @@ def test_secret_write_failure_before_first_byte_is_not_started(
     monkeypatch.setattr(os, "write", fail)
     with pytest.raises(OperatorTerminalError) as raised:
         _attached().disclose((SecretField("code", "opaque-value"),))
-    assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
-    assert raised.value.delivery is SecretDeliveryState.NOT_STARTED
+    assert raised.value.failure is OperatorTerminalFailure.OUTPUT_UNCERTAIN
+    assert raised.value.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "opaque-value" not in repr(raised.value)
 
 
@@ -139,6 +169,50 @@ def test_handler_cleanup_failure_cannot_downgrade_secret_delivery(
         _attached().disclose((SecretField("code", "opaque-value"),))
     assert raised.value.failure is OperatorTerminalFailure.OUTPUT_UNCERTAIN
     assert raised.value.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
+
+
+def test_restore_failure_outranks_not_started_disclosure_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_activate_cancel_session",
+        staticmethod(
+            lambda _session: (_ for _ in ()).throw(
+                OperatorTerminalError(OperatorTerminalFailure.CANCELLED)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_end_cancel_session",
+        lambda _self, _session: (_ for _ in ()).throw(
+            OperatorTerminalError(OperatorTerminalFailure.RESTORE_FAILED)
+        ),
+    )
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached().disclose((SecretField("code", "opaque-value"),))
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+    assert raised.value.delivery is SecretDeliveryState.NOT_STARTED
+
+
+def test_private_cancel_during_activation_never_crosses_disclosure_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_activate_cancel_session",
+        staticmethod(
+            lambda _session: (_ for _ in ()).throw(terminal_module._Cancelled)  # noqa: SLF001
+        ),
+    )
+    monkeypatch.setattr(
+        os, "write", lambda *_args: (_ for _ in ()).throw(AssertionError("must not write"))
+    )
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached().disclose((SecretField("code", "opaque-value"),))
+    assert raised.value.failure is OperatorTerminalFailure.CANCELLED
+    assert raised.value.delivery is SecretDeliveryState.NOT_STARTED
 
 
 @pytest.mark.parametrize(
@@ -303,6 +377,31 @@ def test_each_public_write_revalidates_foreground_before_bytes(
     assert wrote is False
 
 
+def test_secret_write_preserves_may_have_disclosed_when_foreground_changes_after_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checks = 0
+    writes = 0
+
+    def pgrp(_fd: int) -> int:
+        nonlocal checks
+        checks += 1
+        return os.getpgrp() + 1 if checks >= 3 else os.getpgrp()
+
+    def one_byte(_fd: int, _payload: bytes) -> int:
+        nonlocal writes
+        writes += 1
+        return 1
+
+    monkeypatch.setattr(os, "tcgetpgrp", pgrp)
+    monkeypatch.setattr(os, "write", one_byte)
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached().disclose((SecretField("code", "opaque-value"),))
+    assert writes == 1
+    assert raised.value.failure is OperatorTerminalFailure.OUTPUT_UNCERTAIN
+    assert raised.value.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
+
+
 def test_non_main_thread_read_is_busy_before_termios(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -422,6 +521,47 @@ def test_restore_failure_latches_terminal(monkeypatch: pytest.MonkeyPatch) -> No
     assert latched.value.failure is OperatorTerminalFailure.RESTORE_FAILED
 
 
+def test_signal_restore_failure_outranks_earlier_read_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = _fake_attrs()
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
+    monkeypatch.setattr(termios, "tcsetattr", lambda _fd, _when, _attrs: None)
+    monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+    monkeypatch.setattr(os, "write", lambda _fd, payload: len(payload))
+    monkeypatch.setattr(os, "read", lambda _fd, _size: b"")
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_end_cancel_session",
+        lambda _self, _session: (_ for _ in ()).throw(
+            OperatorTerminalError(OperatorTerminalFailure.RESTORE_FAILED)
+        ),
+    )
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached().read_secret("prompt", 16)
+    assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
+
+
+def test_private_cancel_during_activation_never_crosses_read_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = _fake_attrs()
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: deepcopy(original))
+    monkeypatch.setattr(termios, "tcsetattr", lambda _fd, _when, _attrs: None)
+    monkeypatch.setattr(termios, "tcdrain", lambda _fd: None)
+    monkeypatch.setattr(os, "write", lambda _fd, payload: len(payload))
+    monkeypatch.setattr(
+        PosixOperatorTerminal,
+        "_activate_cancel_session",
+        staticmethod(
+            lambda _session: (_ for _ in ()).throw(terminal_module._Cancelled)  # noqa: SLF001
+        ),
+    )
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached().read_secret("prompt", 16)
+    assert raised.value.failure is OperatorTerminalFailure.CANCELLED
+
+
 def test_partial_handler_install_restores_handlers_and_signal_mask(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,6 +595,23 @@ def test_partial_handler_install_restores_handlers_and_signal_mask(
     assert any(event == ("handler", f"old-{signal.SIGINT}") for event in events)
 
 
+def test_missing_signal_mask_support_fails_before_handler_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed = False
+
+    def forbidden(_item: signal.Signals, _handler: object) -> None:
+        nonlocal installed
+        installed = True
+
+    monkeypatch.delattr(signal, "pthread_sigmask")
+    monkeypatch.setattr(signal, "signal", forbidden)
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached()._begin_cancel_session()  # noqa: SLF001
+    assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
+    assert installed is False
+
+
 def test_mask_restore_failure_restores_previous_handlers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -471,10 +628,35 @@ def test_mask_restore_failure_restores_previous_handlers(
         return {signal.SIGUSR1}
 
     monkeypatch.setattr(signal, "pthread_sigmask", mask)
+    terminal = _attached()
+    session = terminal._begin_cancel_session()  # noqa: SLF001
     with pytest.raises(OperatorTerminalError) as raised:
-        _attached()._begin_cancel_session()  # noqa: SLF001
+        terminal._activate_cancel_session(session)  # noqa: SLF001
     assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
+    terminal._end_cancel_session(session)  # noqa: SLF001
     assert {f"old-{item}" for item in _attached()._cancel_signals()} <= set(restored)  # noqa: SLF001
+
+
+def test_begin_returns_with_cancel_signals_blocked_until_protected_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(signal, "getsignal", lambda _item: signal.SIG_DFL)
+    monkeypatch.setattr(signal, "signal", lambda _item, _handler: events.append("handler"))
+
+    def mask(how: int, _value: object) -> set[signal.Signals]:
+        events.append("setmask" if how == signal.SIG_SETMASK else "block")
+        return set()
+
+    monkeypatch.setattr(signal, "pthread_sigmask", mask)
+    terminal = _attached()
+    session = terminal._begin_cancel_session()  # noqa: SLF001
+    assert events == ["block", "handler", "handler", "handler", "handler"]
+    try:
+        terminal._activate_cancel_session(session)  # noqa: SLF001
+        assert events[-1] == "setmask"
+    finally:
+        terminal._end_cancel_session(session)  # noqa: SLF001
 
 
 def test_termios_is_restored_before_handlers_and_pending_signals_are_unmasked(
@@ -527,7 +709,9 @@ def test_end_cancel_session_contains_private_cancel_during_handler_restore(
 
     monkeypatch.setattr(signal, "signal", set_handler)
     monkeypatch.setattr(signal, "pthread_sigmask", lambda _how, _value: set())
-    _attached()._end_cancel_session({signal.SIGINT: signal.SIG_DFL})  # noqa: SLF001
+    _attached()._end_cancel_session(  # noqa: SLF001
+        _cancel_session(signal.pthread_sigmask)
+    )
     assert calls == 2
 
 
@@ -546,7 +730,26 @@ def test_end_cancel_session_maps_private_cancel_during_unmask(
 
     monkeypatch.setattr(signal, "pthread_sigmask", mask)
     with pytest.raises(OperatorTerminalError) as raised:
-        _attached()._end_cancel_session({signal.SIGINT: signal.SIG_DFL})  # noqa: SLF001
+        _attached()._end_cancel_session(_cancel_session(mask))  # noqa: SLF001
+    assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
+
+
+def test_end_cancel_session_contains_private_cancel_during_initial_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(signal, "signal", lambda _item, _handler: None)
+    calls = 0
+
+    def mask(_how: int, _value: object) -> set[signal.Signals]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise terminal_module._Cancelled  # noqa: SLF001 - containment regression
+        return set()
+
+    monkeypatch.setattr(signal, "pthread_sigmask", mask)
+    with pytest.raises(OperatorTerminalError) as raised:
+        _attached()._end_cancel_session(_cancel_session(mask))  # noqa: SLF001
     assert raised.value.failure is OperatorTerminalFailure.IO_FAILED
 
 
@@ -567,7 +770,7 @@ def test_permanent_handler_restore_failure_latches_and_does_not_unmask(
     monkeypatch.setattr(signal, "pthread_sigmask", mask)
     terminal = _attached()
     with pytest.raises(OperatorTerminalError) as raised:
-        terminal._end_cancel_session({signal.SIGINT: signal.SIG_DFL})  # noqa: SLF001
+        terminal._end_cancel_session(_cancel_session(mask))  # noqa: SLF001
     assert raised.value.failure is OperatorTerminalFailure.RESTORE_FAILED
     assert events == ["block", "restore-attempt", "restore-attempt", "restore-attempt"]
     with pytest.raises(OperatorTerminalError) as latched:
@@ -615,8 +818,27 @@ def test_del_and_c1_controls_in_secret_input_are_rejected_and_terminal_restored(
 
 
 @pytest.mark.skipif(not hasattr(termios, "TIOCSCTTY"), reason="requires a POSIX controlling TTY")
-def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path: Path) -> None:
-    """A fresh interpreter uses one controlling PTY and restores its exact termios state."""
+@pytest.mark.parametrize(
+    ("mode", "payload", "cancel_signal", "expected_failure"),
+    [
+        ("success", b"hidden-value\n", None, "none"),
+        ("eof", b"\x04", None, "eof"),
+        ("oversize", b"OVERSIZE-SECRET-TOKEN-" * 7 + b"\n", None, "input_too_long"),
+        ("invalid-utf8", b"\xff\n", None, "io_failed"),
+        ("sigint", None, signal.SIGINT, "cancelled"),
+        ("sigterm", None, signal.SIGTERM, "cancelled"),
+        ("sighup", None, signal.SIGHUP, "cancelled"),
+        ("sigquit", None, signal.SIGQUIT, "cancelled"),
+    ],
+)
+def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
+    tmp_path: Path,
+    mode: str,
+    payload: bytes | None,
+    cancel_signal: signal.Signals | None,
+    expected_failure: str,
+) -> None:
+    """A fresh interpreter restores its controlling PTY after every finite exit path."""
     master, slave = os.openpty()
     slave_path = os.ttyname(slave)
     script = tmp_path / "pty_probe.py"
@@ -628,6 +850,7 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
             import sys
             import termios
             from mycogni.adapters.auth.posix_operator_terminal import PosixOperatorTerminal
+            from mycogni.application.operator_terminal import OperatorTerminalError
 
             os.setsid()
             slave = os.open(sys.argv[1], os.O_RDWR)
@@ -653,9 +876,15 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
 
             with PosixOperatorTerminal() as tty:
                 before = termios.tcgetattr(tty._fd)
-                value = tty.read_secret("READY\\n", 128)
+                failure = "none"
+                matched = False
+                try:
+                    value = tty.read_secret("READY\\n", 128)
+                    matched = value == "hidden-value"
+                except OperatorTerminalError as exc:
+                    failure = exc.failure.value
                 after = termios.tcgetattr(tty._fd)
-                tty.write_public("RESULT:" + str(value == "hidden-value") + ":" + str(before == after) + "\\n")
+                tty.write_public("RESULT:" + failure + ":" + str(before == after) + ":" + str(matched) + "\\n")
             """
         ),
         encoding="utf-8",
@@ -673,8 +902,8 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
     transcript = bytearray()
     deadline = time.monotonic() + 5
 
-    def read_until(expected: bytes) -> None:
-        while expected not in transcript:
+    def read_until_any(*expected: bytes) -> None:
+        while not any(item in transcript for item in expected):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -687,13 +916,18 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
                 break
 
     try:
-        read_until(b"READY\r\n")
+        read_until_any(b"READY\r\n", b"HOST_PRECONDITION_NO_DEV_TTY\r\n")
         if b"HOST_PRECONDITION_NO_DEV_TTY\r\n" in transcript:
             assert process.wait(timeout=5) == 77
             pytest.skip("external host precondition denies controlling /dev/tty access")
         assert b"READY\r\n" in transcript, transcript.decode("utf-8", "replace")
-        os.write(master, b"hidden-value\n")
-        read_until(b"RESULT:True:True\r\n")
+        if cancel_signal is not None:
+            os.kill(process.pid, cancel_signal)
+        else:
+            assert payload is not None
+            os.write(master, payload)
+        expected = f"RESULT:{expected_failure}:True:{mode == 'success'}\r\n".encode()
+        read_until_any(expected)
         assert process.wait(timeout=5) == 0
     finally:
         if process.poll() is None:
@@ -704,5 +938,7 @@ def test_fresh_exec_real_pty_hides_input_and_restores_exact_attributes(tmp_path:
                 process.kill()
                 process.wait(timeout=5)
         os.close(master)
-    assert b"RESULT:True:True\r\n" in transcript
-    assert b"hidden-value" not in transcript
+    assert expected in transcript
+    if mode in {"success", "oversize", "invalid-utf8"}:
+        assert payload is not None
+        assert payload.rstrip(b"\n") not in transcript

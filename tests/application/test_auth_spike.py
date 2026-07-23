@@ -124,6 +124,10 @@ class PseudoTty:
     def isatty(self) -> bool:
         return self.interactive
 
+    def check_ready(self) -> None:
+        if not self.interactive:
+            raise OperatorTerminalError(OperatorTerminalFailure.NON_INTERACTIVE)
+
     def write_public(self, value: str) -> None:
         self.transcript.write(value)
 
@@ -168,6 +172,30 @@ class FailPublicAfterDisclosureTty(PseudoTty):
         if self._disclosed:
             raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
         super().write_public(value)
+
+
+class PreflightFailTty(PseudoTty):
+    def __init__(self, stage: str, error: OperatorTerminalError | OSError) -> None:
+        super().__init__()
+        self.stage = stage
+        self.error = error
+
+    def isatty(self) -> bool:
+        raise AssertionError("ceremonies must use the exact readiness contract")
+
+    def check_ready(self) -> None:
+        if self.stage == "ready":
+            raise self.error
+
+    def write_public(self, value: str) -> None:
+        if self.stage == "write":
+            raise self.error
+        super().write_public(value)
+
+    def confirm(self, warning: str) -> bool:
+        if self.stage == "confirm":
+            raise self.error
+        return super().confirm(warning)
 
 
 def _service(
@@ -1571,6 +1599,76 @@ def test_secret_input_failures_have_truthful_finite_denials_and_guidance(
     assert outcome.denial is expected_denial
     assert guidance in tty.getvalue()
     assert roots.reprovision.credential.operator_code() not in tty.getvalue()
+
+
+@pytest.mark.parametrize(
+    "ceremony",
+    ["bootstrap", "reprovision", "bootstrap-exchange", "reprovision-exchange", "recovery"],
+)
+@pytest.mark.parametrize("stage", ["ready", "write", "confirm"])
+@pytest.mark.parametrize("generic_os_error", [False, True])
+def test_every_ceremony_preflight_failure_is_finite_truthful_and_non_consuming(
+    ceremony: str,
+    stage: str,
+    generic_os_error: bool,
+) -> None:
+    service, _clock, _source, store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+    before = store.record_counts()
+    error: OperatorTerminalError | OSError = (
+        OSError("synthetic redacted preflight failure")
+        if generic_os_error
+        else OperatorTerminalError(OperatorTerminalFailure.NOT_FOREGROUND)
+    )
+    tty = PreflightFailTty(stage, error)
+    if ceremony == "bootstrap":
+        outcome = begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=tty)
+    elif ceremony == "reprovision":
+        outcome = begin_reprovision_on_tty(service, operator_tty=tty)
+    elif ceremony == "bootstrap-exchange":
+        outcome = exchange_bootstrap_on_tty(service, submitted_code="not-a-code", operator_tty=tty)
+    elif ceremony == "reprovision-exchange":
+        outcome = exchange_reprovision_on_tty(
+            service,
+            submitted_code="not-a-code",
+            operator_tty=tty,
+            operator_authority=setup.reprovision_operator_authority,
+        )
+    else:
+        outcome = recover_headless_on_tty(service, operator_tty=tty)
+    expected = (
+        AuthDenial.TERMINAL_IO_FAILED if generic_os_error else AuthDenial.TERMINAL_NOT_FOREGROUND
+    )
+    assert outcome.denial is expected
+    assert store.record_counts() == before
+    assert "synthetic" not in tty.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (OperatorTerminalFailure.BUSY, AuthDenial.TERMINAL_BUSY),
+        (OperatorTerminalFailure.NON_INTERACTIVE, AuthDenial.NON_INTERACTIVE),
+        (OperatorTerminalFailure.NOT_FOREGROUND, AuthDenial.TERMINAL_NOT_FOREGROUND),
+        (OperatorTerminalFailure.FORKED, AuthDenial.TERMINAL_FORKED),
+        (OperatorTerminalFailure.CANCELLED, AuthDenial.OPERATOR_DECLINED),
+        (OperatorTerminalFailure.EOF, AuthDenial.MALFORMED_CREDENTIAL),
+        (OperatorTerminalFailure.INPUT_TOO_LONG, AuthDenial.MALFORMED_CREDENTIAL),
+        (OperatorTerminalFailure.IO_FAILED, AuthDenial.TERMINAL_IO_FAILED),
+        (OperatorTerminalFailure.RESTORE_FAILED, AuthDenial.TERMINAL_RESTORE_FAILED),
+        (OperatorTerminalFailure.OUTPUT_UNCERTAIN, AuthDenial.OUTPUT_INTERRUPTED),
+    ],
+)
+def test_readiness_preserves_every_finite_terminal_failure_projection(
+    failure: OperatorTerminalFailure, expected: AuthDenial
+) -> None:
+    service, _clock, _source, store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+    before = store.record_counts()
+    tty = PreflightFailTty("ready", OperatorTerminalError(failure))
+    outcome = begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=tty)
+    assert outcome.denial is expected
+    assert store.record_counts() == before
 
 
 def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
