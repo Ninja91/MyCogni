@@ -27,7 +27,7 @@ trusted local composition (one installation, before application startup)
         +-- emergency-revoke root: same bindings, separate one-use secret
         +-- reprovision root: same bindings, separate one-use secret
         v
-private interactive operator channel -- warning + confirmation + all-or-nothing display
+private interactive operator channel -- warning + confirmation + typed disclosure state
         |
         v
 AuthService -- Clock / TokenSource / AuthDecisionStore ports
@@ -109,7 +109,8 @@ using either sibling makes the other unusable.
 
 If recovery expires and no current session remains, the current offline reprovision root may establish fresh
 auth authority for the already-bound installation/actor/profile. The exchange rotates that root and discloses
-the replacement through the confirmed all-or-nothing operator channel. A regression proves recovery expiry,
+the replacement through the confirmed operator channel. AUTH-001C conservatively records partial terminal
+output as `MAY_HAVE_DISCLOSED`. A regression proves recovery expiry,
 reprovision, second recovery expiry, and second reprovision with three distinct one-use roots, starting both
 rotations only from copied operator strings after discarding earlier exchange/root objects. Reprovision does
 **not** recover encrypted profile data, keys, broker history, or any other lost state. Losing every session,
@@ -145,14 +146,14 @@ Recovery itself follows the stricter all-session policy: every prior session and
 
 ## Operator and headless ceremony
 
-Before any secret display or offline-route consumption, the narrow `OperatorTty` port requires an interactive
+Before any secret display or offline-route consumption, the application-owned `OperatorTerminal` port requires an interactive
 channel, prints a prominent warning to disable recording, saved scrollback, copy synchronization, and session
 logging, then requires an explicit confirmation. It reports finite expiry, attempt, retry, and denial guidance.
 Unknown and garbage-collected codes share attempt-agnostic guidance: the code may be unknown or retired,
 remaining attempts are unavailable, and the operator must verify input or use an authorized route. Attempt
-counts are shown only at issuance where the configured count is known. The port contract's
-`write_secret_block` must display the entire block or raise without retaining a partial block. This is a tested
-contract for a synthetic channel, not a claim about a production terminal implementation.
+counts are shown only at issuance where the configured count is known. AUTH-001C replaces the spike's
+impossible all-or-nothing output assumption with `NOT_STARTED`, `MAY_HAVE_DISCLOSED`, and `COMPLETE`, plus a
+source-level native terminal adapter; exact-host and acceptance evidence remain open.
 
 Before reprovision consumes the current offline route, it prints a separate purpose-specific destructive
 warning and requires an explicit confirmation. The warning states that old sessions and recovery codes will
@@ -164,23 +165,23 @@ The composition-held boundary identity is distinct from both the reprovision roo
 A wrong-purpose submission to the dedicated flow is rejected before proof registration; its operator guidance
 therefore states that no ceremony, root, session, or recovery authority was consumed.
 
-Input uses the port's `read_secret_no_echo`; there is no command-line argument, URL, query string, or ordinary
-stdout/stderr secret path. The test proves only that the injected channel does not echo. A production adapter
-must separately prove OS-specific terminal mode restoration, signal handling, accessibility, and no-echo.
+Input uses the port's bounded `read_secret`; there is no command-line argument, URL, query string, or ordinary
+stdout/stderr secret path. Deterministic tests exercise the injected channel and native failure boundaries.
+Exact-host Darwin/Linux PTY completion and accessibility evidence remain separately required.
 
-For a NAS, SSH host, or container, the operator attaches a private interactive terminal to the same MyCogni
-installation and enters the opaque recovery code. They do not look up or type actor/profile IDs: the opaque
-handle indexes the local record and all bindings come from state. Secrets must not be passed through `docker
-exec` arguments, environment variables, shell history, remote logging, or a recording session. A non-TTY is
-refused before issuance or recovery.
+NAS, SSH and container ceremony support is not established by AUTH-001C. A future supported composition must
+provide the same installation's private controlling terminal without `docker exec` arguments, environment
+variables, shell history, remote logging, or recording. Actor/profile IDs are never operator input: the opaque
+handle indexes local state and all bindings come from that state. A non-TTY is refused before issuance or
+recovery.
 
-If bootstrap-code output is interrupted, the undisclosed bootstrap is burned and the same unconsumed root can
-retry. Bootstrap exchange is a separate confirmed ceremony: it consumes the code/root, then hands off the new
-session and recovery (and a rotated reprovision root when applicable) in one all-or-nothing block. If this
+If bootstrap-code output is interrupted, the bootstrap is burned. `NOT_STARTED` permits a truthful retry from
+the same unconsumed root; `MAY_HAVE_DISCLOSED` warns that some output may be visible and the exposed bootstrap
+is unusable. Bootstrap exchange is a separate confirmed ceremony: it consumes the code/root, then hands off the new
+session and recovery (and a rotated reprovision root when applicable) in one typed disclosure attempt. If this
 handoff fails, a finite public diagnostic says not to resubmit the consumed code and directs the operator to
-redisplay the in-process result. Recovery and reprovision use the same interrupted-display pattern. Initial
-display failure instead states that no code was disclosed or consumed and directs a restart with the still-
-current root. These are process-memory-only behaviors; a crash after consume but before handoff loses
+redisplay the in-process result. Recovery and reprovision use the same interrupted-display pattern. These are
+process-memory-only behaviors; a crash after consume but before handoff loses
 replacements and fails closed. Successful recovery explicitly tells the operator that old sessions and old
 recovery codes were revoked.
 

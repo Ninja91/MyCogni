@@ -34,6 +34,12 @@ from mycogni.application.diagnostics import (
     EventId,
     FieldName,
 )
+from mycogni.application.operator_terminal import (
+    OperatorTerminalError,
+    OperatorTerminalFailure,
+    SecretDeliveryState,
+    SecretField,
+)
 from mycogni.bootstrap.auth_setup import TrustedLocalAuthSetup
 from mycogni.domain import OpaqueId, Sensitive
 from mycogni.domain.auth import (
@@ -118,30 +124,78 @@ class PseudoTty:
     def isatty(self) -> bool:
         return self.interactive
 
+    def check_ready(self) -> None:
+        if not self.interactive:
+            raise OperatorTerminalError(OperatorTerminalFailure.NON_INTERACTIVE)
+
     def write_public(self, value: str) -> None:
         self.transcript.write(value)
 
-    def confirm_secret_display(self, warning: str) -> bool:
+    def confirm(self, warning: str) -> bool:
         assert warning.startswith(("WARNING: SECRET DISPLAY", "DESTRUCTIVE REPROVISION"))
         self.transcript.write(
             f"secret-display-confirmation: {'accepted' if self.confirmed else 'declined'}\n"
         )
         return self.confirmed
 
-    def read_secret_no_echo(self) -> str:
-        self.transcript.write("[NO-ECHO INPUT]\n")
+    def read_secret(self, prompt: str, max_bytes: int) -> str:
+        assert prompt.endswith("(input hidden): ")
+        assert max_bytes == 128
+        self.transcript.write(prompt + "[NO-ECHO INPUT]\n")
         return self.input_value
 
-    def write_secret_block(self, values: tuple[tuple[str, str], ...]) -> None:
+    def disclose(self, fields: tuple[SecretField, ...]) -> None:
         if self.fail_secret_once:
             self.fail_secret_once = False
             raise OSError("synthetic all-or-nothing display failure")
+        values = tuple((field.label, field.value) for field in fields)
         self.secret_values.append(values)
         for label, value in values:
             self.transcript.write(f"{label}: {value}\n")
 
     def getvalue(self) -> str:
         return self.transcript.getvalue()
+
+
+class FailPublicAfterDisclosureTty(PseudoTty):
+    """Fail only status text after a complete atomic secret disclosure."""
+
+    def __init__(self, input_value: str = "") -> None:
+        super().__init__(input_value)
+        self._disclosed = False
+
+    def disclose(self, fields: tuple[SecretField, ...]) -> None:
+        super().disclose(fields)
+        self._disclosed = True
+
+    def write_public(self, value: str) -> None:
+        if self._disclosed:
+            raise OperatorTerminalError(OperatorTerminalFailure.IO_FAILED)
+        super().write_public(value)
+
+
+class PreflightFailTty(PseudoTty):
+    def __init__(self, stage: str, error: OperatorTerminalError | OSError) -> None:
+        super().__init__()
+        self.stage = stage
+        self.error = error
+
+    def isatty(self) -> bool:
+        raise AssertionError("ceremonies must use the exact readiness contract")
+
+    def check_ready(self) -> None:
+        if self.stage == "ready":
+            raise self.error
+
+    def write_public(self, value: str) -> None:
+        if self.stage == "write":
+            raise self.error
+        super().write_public(value)
+
+    def confirm(self, warning: str) -> bool:
+        if self.stage == "confirm":
+            raise self.error
+        return super().confirm(warning)
 
 
 def _service(
@@ -1164,6 +1218,7 @@ def test_recovery_survives_months_can_be_renewed_and_expiry_has_no_data_recovery
         )
     )
     assert first_reprovision.displayed is False
+    assert first_reprovision.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
     assert first_reprovision.exchange.session.operator_code() not in interrupted_handoff.getvalue()
     assert first_reprovision.exchange.recovery.operator_code() not in interrupted_handoff.getvalue()
@@ -1447,6 +1502,175 @@ def test_unknown_and_gc_retired_codes_share_safe_attempt_agnostic_guidance() -> 
     )
 
 
+def test_public_status_failure_after_complete_delivery_preserves_all_authority_results() -> None:
+    service, _clock, _source, _store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+
+    initial_tty = FailPublicAfterDisclosureTty()
+    initial_handle = _allowed(
+        begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=initial_tty)
+    )
+    bootstrap_code = _secret_code(initial_tty, "bootstrap-code (one-use, short-lived)")
+    assert initial_handle == OpaqueCredential.parse_operator_code(bootstrap_code).handle
+
+    exchange_tty = FailPublicAfterDisclosureTty()
+    exchange = _allowed(
+        exchange_bootstrap_on_tty(service, submitted_code=bootstrap_code, operator_tty=exchange_tty)
+    )
+    assert exchange.delivery is SecretDeliveryState.COMPLETE
+    recovery_code = _secret_code(exchange_tty, "new-recovery-code")
+
+    recovery_tty = FailPublicAfterDisclosureTty(recovery_code)
+    recovery = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
+    assert recovery.delivery is SecretDeliveryState.COMPLETE
+    assert recovery.exchange.session.operator_code() == _secret_code(
+        recovery_tty, "new-session-code"
+    )
+
+    reprovision_tty = FailPublicAfterDisclosureTty(roots.reprovision.credential.operator_code())
+    reprovision_handle = _allowed(begin_reprovision_on_tty(service, operator_tty=reprovision_tty))
+    reprovision_code = _secret_code(
+        reprovision_tty, "reprovision-bootstrap-code (one-use, short-lived)"
+    )
+    assert reprovision_handle == OpaqueCredential.parse_operator_code(reprovision_code).handle
+    reprovision_exchange_tty = FailPublicAfterDisclosureTty()
+    reprovision_exchange = _allowed(
+        exchange_reprovision_on_tty(
+            service,
+            submitted_code=reprovision_code,
+            operator_tty=reprovision_exchange_tty,
+            operator_authority=setup.reprovision_operator_authority,
+        )
+    )
+    assert reprovision_exchange.delivery is SecretDeliveryState.COMPLETE
+    assert _secret_code(reprovision_exchange_tty, "replacement-reprovision-code")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_denial", "guidance"),
+    [
+        (
+            OperatorTerminalFailure.CANCELLED,
+            AuthDenial.OPERATOR_DECLINED,
+            "secret input was cancelled",
+        ),
+        (
+            OperatorTerminalFailure.EOF,
+            AuthDenial.MALFORMED_CREDENTIAL,
+            "input ended before a complete code",
+        ),
+        (
+            OperatorTerminalFailure.INPUT_TOO_LONG,
+            AuthDenial.MALFORMED_CREDENTIAL,
+            "exceeded the finite credential bound",
+        ),
+        (
+            OperatorTerminalFailure.IO_FAILED,
+            AuthDenial.TERMINAL_IO_FAILED,
+            "terminal input failed",
+        ),
+        (
+            OperatorTerminalFailure.RESTORE_FAILED,
+            AuthDenial.TERMINAL_RESTORE_FAILED,
+            "terminal restoration failed",
+        ),
+        (
+            OperatorTerminalFailure.NON_INTERACTIVE,
+            AuthDenial.NON_INTERACTIVE,
+            "attach a private interactive operator terminal",
+        ),
+    ],
+)
+def test_secret_input_failures_have_truthful_finite_denials_and_guidance(
+    failure: OperatorTerminalFailure,
+    expected_denial: AuthDenial,
+    guidance: str,
+) -> None:
+    class FailingInputTty(PseudoTty):
+        def read_secret(self, prompt: str, max_bytes: int) -> str:
+            assert prompt.endswith("(input hidden): ")
+            assert max_bytes == 128
+            raise OperatorTerminalError(failure)
+
+    service, _clock, _source, _store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+    tty = FailingInputTty()
+    outcome = begin_reprovision_on_tty(service, operator_tty=tty)
+    assert outcome.denial is expected_denial
+    assert guidance in tty.getvalue()
+    assert roots.reprovision.credential.operator_code() not in tty.getvalue()
+
+
+@pytest.mark.parametrize(
+    "ceremony",
+    ["bootstrap", "reprovision", "bootstrap-exchange", "reprovision-exchange", "recovery"],
+)
+@pytest.mark.parametrize("stage", ["ready", "write", "confirm"])
+@pytest.mark.parametrize("generic_os_error", [False, True])
+def test_every_ceremony_preflight_failure_is_finite_truthful_and_non_consuming(
+    ceremony: str,
+    stage: str,
+    generic_os_error: bool,
+) -> None:
+    service, _clock, _source, store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+    before = store.record_counts()
+    error: OperatorTerminalError | OSError = (
+        OSError("synthetic redacted preflight failure")
+        if generic_os_error
+        else OperatorTerminalError(OperatorTerminalFailure.NOT_FOREGROUND)
+    )
+    tty = PreflightFailTty(stage, error)
+    if ceremony == "bootstrap":
+        outcome = begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=tty)
+    elif ceremony == "reprovision":
+        outcome = begin_reprovision_on_tty(service, operator_tty=tty)
+    elif ceremony == "bootstrap-exchange":
+        outcome = exchange_bootstrap_on_tty(service, submitted_code="not-a-code", operator_tty=tty)
+    elif ceremony == "reprovision-exchange":
+        outcome = exchange_reprovision_on_tty(
+            service,
+            submitted_code="not-a-code",
+            operator_tty=tty,
+            operator_authority=setup.reprovision_operator_authority,
+        )
+    else:
+        outcome = recover_headless_on_tty(service, operator_tty=tty)
+    expected = (
+        AuthDenial.TERMINAL_IO_FAILED if generic_os_error else AuthDenial.TERMINAL_NOT_FOREGROUND
+    )
+    assert outcome.denial is expected
+    assert store.record_counts() == before
+    assert "synthetic" not in tty.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (OperatorTerminalFailure.BUSY, AuthDenial.TERMINAL_BUSY),
+        (OperatorTerminalFailure.NON_INTERACTIVE, AuthDenial.NON_INTERACTIVE),
+        (OperatorTerminalFailure.NOT_FOREGROUND, AuthDenial.TERMINAL_NOT_FOREGROUND),
+        (OperatorTerminalFailure.FORKED, AuthDenial.TERMINAL_FORKED),
+        (OperatorTerminalFailure.CANCELLED, AuthDenial.OPERATOR_DECLINED),
+        (OperatorTerminalFailure.EOF, AuthDenial.MALFORMED_CREDENTIAL),
+        (OperatorTerminalFailure.INPUT_TOO_LONG, AuthDenial.MALFORMED_CREDENTIAL),
+        (OperatorTerminalFailure.IO_FAILED, AuthDenial.TERMINAL_IO_FAILED),
+        (OperatorTerminalFailure.RESTORE_FAILED, AuthDenial.TERMINAL_RESTORE_FAILED),
+        (OperatorTerminalFailure.OUTPUT_UNCERTAIN, AuthDenial.OUTPUT_INTERRUPTED),
+    ],
+)
+def test_readiness_preserves_every_finite_terminal_failure_projection(
+    failure: OperatorTerminalFailure, expected: AuthDenial
+) -> None:
+    service, _clock, _source, store, setup = _service()
+    _actor, _profile, roots = _provision(setup)
+    before = store.record_counts()
+    tty = PreflightFailTty("ready", OperatorTerminalError(failure))
+    outcome = begin_bootstrap_on_tty(service, root=roots.initial_bootstrap, operator_tty=tty)
+    assert outcome.denial is expected
+    assert store.record_counts() == before
+
+
 def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     service, _clock, _source, _store, setup = _service()
     _actor, _profile, roots = _provision(setup)
@@ -1476,6 +1700,7 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
         )
     )
     assert bootstrap_result.displayed is False
+    assert bootstrap_result.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in interrupted_handoff.getvalue()
     assert "redisplay the in-process result" in interrupted_handoff.getvalue()
     handoff_tty = PseudoTty()
@@ -1485,6 +1710,7 @@ def test_operator_interruption_confirmation_and_redisplay_are_safe() -> None:
     recovery_tty = PseudoTty(_secret_code(handoff_tty, "new-recovery-code"), fail_secret_once=True)
     recovery_result = _allowed(recover_headless_on_tty(service, operator_tty=recovery_tty))
     assert recovery_result.displayed is False
+    assert recovery_result.delivery is SecretDeliveryState.MAY_HAVE_DISCLOSED
     assert "do not resubmit the consumed code" in recovery_tty.getvalue()
     assert recovery_result.exchange.session.operator_code() not in recovery_tty.getvalue()
     assert recovery_result.exchange.recovery.operator_code() not in recovery_tty.getvalue()

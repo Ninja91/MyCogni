@@ -16,6 +16,8 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 | [Adversarial review disposition](reviews/02-adversarial-review.md) | independent product, security/platform, and backend/OSS findings plus applied corrections |
 | [SPIKE-KEY exact-target review](reviews/17-spike-key-exact-target-adversarial-review.md) | initial rejection, required remediation and repeat-review gate |
 | [AUTH-001A durable state](AUTH-001A-DURABLE-STATE.md) | digest-only SQLite decision state, atomic one-use boundaries and explicit remaining blockers |
+| [AUTH-001B host-secret custody](AUTH-001B-HOST-SECRET-CUSTODY.md) | owner-file custody for composition-held authentication authority |
+| [AUTH-001C operator terminal](AUTH-001C-OPERATOR-TERMINAL.md) | native `/dev/tty`, no-echo restoration and partial-disclosure semantics |
 
 ## Current program state
 
