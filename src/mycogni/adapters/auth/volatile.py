@@ -156,10 +156,7 @@ class VolatileAuthDecisionStore:
                         record.digest,
                         SecretDigest(hashlib.sha256(root.credential.secret.reveal()).digest()),
                     )
-                    or (
-                        root.purpose in {RootPurpose.EMERGENCY_REVOKE, RootPurpose.REPROVISION}
-                        and record.consumed
-                    )
+                    or (root.purpose is RootPurpose.REPROVISION and record.consumed)
                 ):
                     return False
             return True

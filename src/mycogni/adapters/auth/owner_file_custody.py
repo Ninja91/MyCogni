@@ -198,24 +198,48 @@ class _OwnerPathBoundary:
         ):
             raise TypeError("managed roots must be canonical absolute paths")
         self._roots = managed_roots
-        directory = path.parent
-        if any(_within(directory, root) or _within(root, directory) for root in self._roots):
-            _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
-        self._validate_managed_root_ancestors()
+        self._assert_structural_separation()
+
+    @staticmethod
+    def _existing_ancestry(path: Path) -> tuple[tuple[Path, tuple[int, int]], ...]:
+        entries: list[tuple[Path, tuple[int, int]]] = []
+        current = Path(path.anchor)
+        parts = path.parts[1:]
+        candidates = (
+            current,
+            *(current.joinpath(*parts[:index]) for index in range(1, len(parts) + 1)),
+        )
+        for candidate in candidates:
+            try:
+                metadata = candidate.lstat()
+            except FileNotFoundError:
+                break
+            except OSError:
+                _fail(AuthCustodyFailureCode.UNAVAILABLE)
+            if stat.S_ISLNK(metadata.st_mode):
+                _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+            entries.append((candidate, (metadata.st_dev, metadata.st_ino)))
+        return tuple(entries)
+
+    def _assert_structural_separation(self) -> None:
+        directory = self._path.parent
+        custody_ancestry = self._existing_ancestry(directory)
+        custody_identities = {identity: path for path, identity in custody_ancestry}
+        resolved_directory = directory.resolve(strict=False)
+        for root in self._roots:
+            root_ancestry = self._existing_ancestry(root)
+            resolved_root = root.resolve(strict=False)
+            if _within(resolved_directory, resolved_root) or _within(
+                resolved_root, resolved_directory
+            ):
+                _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+            for root_path, identity in root_ancestry:
+                custody_path = custody_identities.get(identity)
+                if custody_path is not None and custody_path != root_path:
+                    _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
 
     def _validate_managed_root_ancestors(self) -> None:
-        for root in self._roots:
-            current = Path(root.anchor)
-            for part in root.parts[1:]:
-                current /= part
-                try:
-                    metadata = current.lstat()
-                except FileNotFoundError:
-                    break
-                except OSError:
-                    _fail(AuthCustodyFailureCode.UNAVAILABLE)
-                if stat.S_ISLNK(metadata.st_mode):
-                    _fail(AuthCustodyFailureCode.UNSAFE_STORAGE)
+        self._assert_structural_separation()
 
     @staticmethod
     def _validate_directory(meta: os.stat_result, *, final: bool) -> None:

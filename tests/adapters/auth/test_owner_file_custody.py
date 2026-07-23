@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,7 +17,9 @@ from mycogni.adapters.auth.owner_file_custody import (
     OwnerFileAuthCustody,
     OwnerFileAuthCustodyProvisioner,
 )
+from mycogni.adapters.auth.volatile import VolatileAuthDecisionStore
 from mycogni.adapters.persistence import FixedFilesystemProbe, SQLiteRuntime, SQLiteSettings
+from mycogni.application.auth import AuthCapabilityDisabled
 from mycogni.application.auth_custody import (
     AuthCustodyBinding,
     AuthCustodyError,
@@ -37,6 +41,15 @@ NOW = datetime(2030, 1, 1, tzinfo=UTC)
 class FixedClock:
     def now(self) -> datetime:
         return NOW
+
+
+class CountingTokenSource:
+    def __init__(self) -> None:
+        self.count = 0
+
+    def generate(self, length: int) -> bytes:
+        self.count += 1
+        return os.urandom(length)
 
 
 def _layout(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
@@ -217,7 +230,7 @@ def test_managed_root_symlink_ancestor_is_rejected(tmp_path: Path) -> None:
     linked = tmp_path / "linked-managed"
     linked.symlink_to(real, target_is_directory=True)
     with pytest.raises(AuthCustodyError) as captured:
-        OwnerFileAuthCustody(path=private / "auth", managed_roots=(linked,))
+        OwnerFileAuthCustody(path=private / "auth", managed_roots=(linked / "nested",))
     assert captured.value.code is AuthCustodyFailureCode.UNSAFE_STORAGE
 
 
@@ -226,6 +239,40 @@ def test_runtime_reader_structurally_lacks_provisioning(tmp_path: Path) -> None:
     provider = OwnerFileAuthCustody(path=path, managed_roots=roots)
     assert not hasattr(provider, "provision_empty")
     assert not path.exists()
+
+
+def test_custodied_service_blocks_reprovision_before_material_or_store_mutation(
+    tmp_path: Path,
+) -> None:
+    path, roots = _layout(tmp_path)
+    binding = _binding()
+    store = VolatileAuthDecisionStore()
+    tokens = CountingTokenSource()
+    composition = provision_custodied_auth(
+        binding=binding,
+        provisioner=OwnerFileAuthCustodyProvisioner(path=path, managed_roots=roots),
+        clock=FixedClock(),
+        token_source=tokens,
+        store=store,
+    )
+    before = store.export_durable_state_v1()
+    generated = tokens.count
+
+    with pytest.raises(AuthCapabilityDisabled):
+        composition.service.begin_reprovision(composition.roots.reprovision.credential)
+    with pytest.raises(AuthCapabilityDisabled):
+        composition.service.authorize_reprovision_ceremony(
+            composition.roots.reprovision.credential,
+            composition.operator_authority,
+        )
+    with pytest.raises(AuthCapabilityDisabled):
+        composition.service.exchange_confirmed_reprovision(
+            composition.roots.reprovision.credential,
+            None,
+        )
+
+    assert tokens.count == generated
+    assert store.export_durable_state_v1() == before
 
 
 def test_true_restart_reopens_custody_and_injects_service_identity(tmp_path: Path) -> None:
@@ -246,18 +293,15 @@ def test_true_restart_reopens_custody_and_injects_service_identity(tmp_path: Pat
             token_source=OsTokenSource(),
             store=store,
         )
+        controlled_bundle = OwnerFileAuthCustody(
+            path=custody_path, managed_roots=managed_roots
+        ).load(binding)
         raw_authorities = tuple(
             credential.secret.reveal()
             for credential in (
-                composition.operator_authority.credential,
-                *(
-                    root.credential
-                    for root in (
-                        composition.roots.initial_bootstrap,
-                        composition.roots.emergency_revoke,
-                        composition.roots.reprovision,
-                    )
-                ),
+                controlled_bundle.operator_authority.credential,
+                controlled_bundle.service_identity,
+                *(root.credential for root in controlled_bundle.roots),
             )
         )
         issued = composition.service.begin_bootstrap(composition.roots.initial_bootstrap)
@@ -276,7 +320,28 @@ def test_true_restart_reopens_custody_and_injects_service_identity(tmp_path: Pat
                 assert all(secret not in persisted for secret in raw_authorities)
     finally:
         runtime.close_cleanly()
-    del composition, provisioner, store, runtime
+    del controlled_bundle, composition, provisioner, store, runtime
+
+    probe = REPOSITORY_ROOT / "scripts/tests/auth_custody_restart_probe.py"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(probe),
+            str(database_path),
+            str(custody_path),
+            str(managed_roots[0]),
+            str(binding.installation_id),
+            str(binding.actor_id),
+            str(binding.represented_profile_id),
+        ],
+        cwd=REPOSITORY_ROOT,
+        env={"PYTHONHASHSEED": "0"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    assert completed.returncode == 0
 
     restarted = _open(database_path)
     try:
@@ -287,7 +352,7 @@ def test_true_restart_reopens_custody_and_injects_service_identity(tmp_path: Pat
             token_source=OsTokenSource(),
             store=SqliteAuthDecisionStore(restarted),
         )
-        assert reopened.service.authenticate_session(session).denial is None
+        assert reopened.service.authenticate_session(session).denial is AuthDenial.STALE_EPOCH
         assert reopened.service.exchange_bootstrap(replay).denial is AuthDenial.REPLAYED
     finally:
         restarted.close_cleanly()

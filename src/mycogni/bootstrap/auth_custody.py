@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from mycogni.application.auth import (
     TOKEN_BYTES,
     AuthService,
+    AuthServiceMode,
     ReprovisionOperatorAuthority,
     TokenSource,
 )
@@ -103,6 +104,7 @@ def _compose(
         store=store,
         reprovision_operator_authority=bundle.operator_authority,
         service_identity=bundle.service_identity,
+        mode=AuthServiceMode.CUSTODIED_STATIC_ROOTS,
     )
     return CustodiedAuthComposition(
         service=service,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any, Protocol, cast, runtime_checkable
 
 from mycogni.application.ports import Clock
@@ -41,6 +42,23 @@ from mycogni.domain.auth import (
 )
 
 TOKEN_BYTES = 32
+
+
+class AuthServiceMode(StrEnum):
+    """Composition-selected capability set; never caller-controlled."""
+
+    SYNTHETIC_FULL = "synthetic_full"
+    CUSTODIED_STATIC_ROOTS = "custodied_static_roots"
+
+
+class AuthCapabilityDisabled(RuntimeError):
+    """A typed, non-secret denial raised before a disabled store operation."""
+
+    def __init__(self, capability: str) -> None:
+        if capability != "replacement_root_reprovision":
+            raise ValueError("unknown disabled auth capability")
+        self.capability = capability
+        super().__init__(capability)
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,12 +464,16 @@ class AuthService:
         store: AuthDecisionStore,
         reprovision_operator_authority: ReprovisionOperatorAuthority,
         service_identity: OpaqueCredential | None = None,
+        mode: AuthServiceMode = AuthServiceMode.SYNTHETIC_FULL,
         policy: AuthPolicy | None = None,
     ) -> None:
         self._clock = clock
         self._token_source = token_source
         self._store = store
         self._policy = policy if policy is not None else AuthPolicy()
+        if type(mode) is not AuthServiceMode:
+            raise TypeError("auth service mode must be exact")
+        self._mode = mode
         if type(reprovision_operator_authority) is not ReprovisionOperatorAuthority:
             raise TypeError("auth service requires composition-held reprovision operator authority")
         self._reprovision_operator_authority = reprovision_operator_authority
@@ -543,6 +565,7 @@ class AuthService:
 
     def begin_reprovision(self, reprovision: OpaqueCredential) -> AuthOutcome[OpaqueCredential]:
         """Resolve a purpose-fixed reprovision code without caller authority bindings."""
+        self._require_reprovision_enabled()
         if type(reprovision) is not OpaqueCredential:
             return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
         now = self._now()
@@ -578,6 +601,7 @@ class AuthService:
         operator_authority: object,
     ) -> AuthOutcome[ReprovisionCeremonyAuthorization]:
         """Mint a finite permit only for the composition-owned operator boundary."""
+        self._require_reprovision_enabled()
         if type(bootstrap) is not OpaqueCredential:
             return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
         if type(operator_authority) is not ReprovisionOperatorAuthority:
@@ -615,6 +639,7 @@ class AuthService:
         authorization: object,
     ) -> AuthOutcome[BootstrapExchange]:
         """Consume reprovision only with a registered, bound, one-use ceremony proof."""
+        self._require_reprovision_enabled()
         if type(bootstrap) is not OpaqueCredential:
             return AuthOutcome.denied(AuthDenial.MALFORMED_CREDENTIAL)
         if type(authorization) is not ReprovisionCeremonyAuthorization:
@@ -622,6 +647,10 @@ class AuthService:
         if authorization.bootstrap_handle != bootstrap.handle:
             return AuthOutcome.denied(AuthDenial.INVALID_PROOF)
         return self._exchange_bootstrap(bootstrap, authorization=authorization)
+
+    def _require_reprovision_enabled(self) -> None:
+        if self._mode is AuthServiceMode.CUSTODIED_STATIC_ROOTS:
+            raise AuthCapabilityDisabled("replacement_root_reprovision")
 
     def reprovision_ceremony_counts(self) -> dict[str, int]:
         """Expose finite non-secret retention counts for operations and tests."""
