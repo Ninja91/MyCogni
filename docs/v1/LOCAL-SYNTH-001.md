@@ -1,6 +1,7 @@
 # LOCAL-SYNTH-001 — synthetic local preview
 
-Status: implemented on a development branch; acceptance and release packaging remain open.
+Status: implemented on `main`; cross-architecture release evidence and formal
+package promotion remain open.
 
 ## Purpose
 
@@ -19,6 +20,11 @@ network, mail, browser, connector, authentication, key, scheduler, server, or
 external-action capability. It does not scan a broker or submit, verify, or
 claim a real removal. Source execution does not prove OS-level network
 containment.
+
+The separate hardened Docker profile at
+`deploy/compose.synthetic-preview.yml` provides runtime evidence only for the
+exact inspected image, revision, Docker engine, architecture, and host. It does
+not turn the preview into a production runtime or a remover.
 
 ## Architecture
 
@@ -110,14 +116,33 @@ unknown outcome prohibits retry; rate limiting is respected; resurfacing is
 reported as recurrence. A fixture result is always prefixed `simulated_` and
 is never product removal evidence.
 
+## Integrated evidence
+
+- PR #10 passed the locked Python 3.12 and 3.13 Linux jobs at the final stacked
+  head; PR #11 repeated those gates while integrating the preview into `main`.
+- The installed wheel console script and packaged resources passed a local
+  exact-artifact smoke.
+- Fault, recovery, unsafe-path and concurrent-initializer behavior is covered
+  by the synthetic CLI suite.
+- Agent-assisted backend/security review accepted the exact CLI source with
+  zero P0/P1/P2; this is implementation review evidence, not an authenticated
+  package attestation or qualified human cryptographic review.
+- PR #12 added the closed-world, mutation-tested Docker profile and passed
+  1,939 tests on each locked local Python runtime plus both Linux CI jobs.
+- Agent-assisted container-security and OSS/product reviews accepted the final
+  Docker diff with zero P0/P1/P2. The durable review record is
+  `reviews/18-local-synthetic-preview-adversarial-review.md`.
+- The revision-bound runtime proof passed on a macOS arm64 host using Docker
+  Desktop 4.82.0 with a Linux/arm64 Engine 29.6.2 container for revision
+  `e9969bd16957fb44a955a921d608b49fe71bd1d8`
+  and image ID
+  `sha256:a666404f204fb8742c20262b94576415a78da14f6b66ffb14beb21b6e3864d6d`.
+
 ## Acceptance evidence still required
 
-- full locked Python 3.12 and 3.13 gates on the exact commit;
-- installed wheel resource and console-script smoke;
-- fault injection at each write/fsync/rename boundary;
-- concurrent initializer evidence;
-- exact native macOS arm64 and Linux amd64 portability evidence;
-- a separate hardened, inspected Docker one-shot profile before any
-  network-contained container claim;
-- independent backend/security and OSS review with no P0/P1;
-- documentation/claim guard and final prerelease version alignment.
+- native Linux/amd64 host/engine Docker build and runtime reproduction for the
+  exact released revision;
+- prerelease artifact, installation and clean-machine evidence;
+- authenticated package attestation when that trust infrastructure is
+  available;
+- final prerelease version, documentation and claim alignment.

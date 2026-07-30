@@ -2,7 +2,7 @@
 
 MyCogni is a planned local-first, open-source system for recurring U.S. personal-data removal with auditable evidence and minimum necessary disclosure. It is for technically comfortable people who would rather self-host than give another SaaS a complete identity dossier.
 
-> **Status — architecture and synthetic fixtures only.** This repository does not yet contain a runnable remover, accepted Docker image, or live broker connector. Its deterministic local simulator cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
+> **Status — developer preview, synthetic only.** This repository contains an installed synthetic CLI and a locally tested, hardened networkless Docker profile. It does not contain a runnable remover, signed release image, or live broker connector. The deterministic preview cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
 
 MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 

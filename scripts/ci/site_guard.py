@@ -72,6 +72,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     deployment_path = root / "docs/07-deployment-architecture.md"
     provenance_path = site / "ASSET_PROVENANCE.md"
     site_readme_path = site / "README.md"
+    contributing_path = root / "CONTRIBUTING.md"
     image_path = site / "og.png"
 
     required_files = (
@@ -82,6 +83,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         deployment_path,
         provenance_path,
         site_readme_path,
+        contributing_path,
         image_path,
     )
     for path in required_files:
@@ -93,6 +95,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     html = html_path.read_text(encoding="utf-8")
     css = css_path.read_text(encoding="utf-8")
     script = script_path.read_text(encoding="utf-8")
+    contributing = contributing_path.read_text(encoding="utf-8")
     matrix = matrix_path.read_text(encoding="utf-8")
     deployment = deployment_path.read_text(encoding="utf-8")
     provenance = provenance_path.read_text(encoding="utf-8")
@@ -138,7 +141,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     required_status = (
         "M0 implementation is in progress",
         "no runnable remover",
-        "no accepted deployable image yet",
+        "no release image",
         "docs/v1/COMPLETION_MATRIX.md",
         "docs/07-deployment-architecture.md",
         'data-project-status="M0_IN_PROGRESS"',
@@ -146,6 +149,8 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     for phrase in required_status:
         if phrase.lower() not in html.lower():
             errors.append(f"missing current project-status evidence: {phrase}")
+    if 'preview_dir="$(cd "$(mktemp -d)" && pwd -P)"' not in contributing:
+        errors.append("contributor synthetic quickstart must resolve a physical state path")
     if "| M0 milestone | all M0 | `IN_PROGRESS` |" not in matrix:
         errors.append("completion matrix no longer reports the M0 milestone IN_PROGRESS")
 

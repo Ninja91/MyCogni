@@ -2,7 +2,12 @@
 
 MyCogni welcomes product, legal-research, connector, security, testing, documentation, and accessibility contributions.
 
-The repository is an architecture/specification pack with M0 implementation in progress. The locked Python toolchain, deterministic synthetic broker/mail simulator, network-deny harness, and several reviewed foundation slices exist. No remover runtime, accepted deployable image, or live connector exists. The most valuable early work follows the dependency-gated packages in `docs/v1/WORK_PACKAGES.md`.
+The repository is a synthetic-only developer preview with M0 implementation in
+progress. The locked Python toolchain, installed synthetic CLI, deterministic
+broker/mail simulator, hardened networkless Docker profile, network-deny
+harness, and several reviewed foundation slices exist. No remover runtime,
+signed release image, or live connector exists. The most valuable early work
+follows the dependency-gated packages in `docs/v1/WORK_PACKAGES.md`.
 
 ## Local development
 
@@ -10,10 +15,20 @@ Install exact `uv 0.9.26`, then use the committed environment exactly:
 
 ```bash
 make bootstrap
-make check
+preview_dir="$(cd "$(mktemp -d)" && pwd -P)"
+.venv/bin/mycogni synthetic init --state-dir "$preview_dir" --json
+.venv/bin/mycogni synthetic health --state-dir "$preview_dir" --json
+.venv/bin/mycogni synthetic demo --scenario resurfacing --json
 ```
 
 `make bootstrap` is frozen to `uv.lock`, the reference interpreter is pinned to CPython 3.12.12, and isolated builds are constrained by `build-constraints.txt`. Dependency changes require the explicit `make lock-update` target and review. Python 3.13 remains a separately tested compatibility target; it is not the reference lock-update environment. Do not use real PII or contact a real broker while developing or testing.
+
+The commands above are the under-ten-minute contributor smoke. They create only
+synthetic owner-private state. Run the full gate before submitting a change:
+
+```bash
+make check
+```
 
 ## Ground rules
 

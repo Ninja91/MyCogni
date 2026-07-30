@@ -21,6 +21,22 @@ def test_guard_rejects_accidental_status_promotion() -> None:
     ]
 
 
+def test_guard_rejects_synthetic_preview_promotion_beyond_reviewed_baseline() -> None:
+    matrix = """## Program summary
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Synthetic developer preview | `COMPLETE` | unsafe promotion |
+"""
+    claims = read_claims(matrix)
+    assert validate_claims(
+        claims,
+        {"Program summary/Synthetic developer preview": "IN_PROGRESS"},
+    ) == [
+        "unreviewed claim promotion: Program summary/Synthetic developer preview "
+        "IN_PROGRESS -> COMPLETE"
+    ]
+
+
 def test_guard_rejects_removed_claim() -> None:
     assert validate_claims({}, {"Program summary/Runtime/project skeleton": "IN_PROGRESS"}) == [
         "missing guarded claim: Program summary/Runtime/project skeleton"

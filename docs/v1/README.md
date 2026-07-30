@@ -18,12 +18,17 @@ This directory is the execution source of truth for MyCogni stable V1. It turns 
 | [AUTH-001A durable state](AUTH-001A-DURABLE-STATE.md) | digest-only SQLite decision state, atomic one-use boundaries and explicit remaining blockers |
 | [AUTH-001B host-secret custody](AUTH-001B-HOST-SECRET-CUSTODY.md) | owner-file custody for composition-held authentication authority |
 | [AUTH-001C operator terminal](AUTH-001C-OPERATOR-TERMINAL.md) | native `/dev/tty`, no-echo restoration and partial-disclosure semantics |
+| [LOCAL-SYNTH-001 developer preview](LOCAL-SYNTH-001.md) | installed synthetic CLI, owner-private state, hardened one-shot container and remaining release evidence |
+| [LOCAL-SYNTH adversarial review](reviews/18-local-synthetic-preview-adversarial-review.md) | exact reviewed targets, remediation cycles, verdicts and explicit limits |
 
 ## Current program state
 
 - **Program state:** M0 implementation is active; executable foundations and a deterministic reserved-domain simulator exist, but there is no working remover.
 - **Current milestone:** M0 — executable foundation; accepted-source foundations are integrated. After six rejected targets, SPIKE-KEY exact target `35eda23` has three clean code-level ACCEPT verdicts and 106 focused tests. Host/provider conformance, durable accounting/recovery and authenticated external attestations are still required, so formal package promotion remains fail-closed.
-- **Current public claim:** architecture plus synthetic developer-foundation evidence only; no accepted Docker image, live connector, real-broker submission, verified removal, or supported deployment.
+- **Current public claim:** a synthetic developer preview exists as an installed
+  CLI and locally inspected hardened Docker profile; there is no signed release
+  image, working remover, live connector, real-broker submission, verified
+  removal, or supported deployment.
 - **Planning envelope for a release candidate:** week 32 with three experienced implementation lanes, subject to M0 velocity and reviewer/canary latency.
 - **Earliest stable V1 eligibility:** week 40 or later, after at least twelve weeks and a mature day-90 denominator for the automatic cohort.
 - **Supported V1 deployment:** local-lite, one consenting U.S. adult, one core worker/scheduler, 2–5 separately reviewed automatic connector capabilities.

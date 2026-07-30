@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-20. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, and a networkless synthetic Chromium decision artifact. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
+Snapshot date: 2026-07-29. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, an installed synthetic local preview, a revision-bound hardened synthetic Docker profile, and a networkless synthetic Chromium decision artifact. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
 
 ## Status vocabulary
 
@@ -24,7 +24,8 @@ Documentation describing a future component is not implementation evidence for t
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; PR merge-revision gates pass 1,471 tests with one expected Darwin-only skip plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
 | Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure implementation evidence; key/data packages remain unstarted | exact-host terminal evidence, reconciliation/restore and accepted-review gates plus remaining M1 packages |
-| Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
+| Synthetic developer preview | `IN_PROGRESS` | installed synthetic init/health/demo CLI and hardened networkless Docker one-shot; no real PII, broker traffic or removal | authenticated shell, native Linux/amd64 reproduction and prerelease packaging |
+| Preview/guided product | `NOT_STARTED` | UX specification only; the synthetic developer preview is not M2/M3 product evidence | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
 | Release artifacts/operations | `NOT_STARTED` | deployment specification only | M5 signed artifacts and drills |
 | Recurring evidence/stable claim | `NOT_STARTED` | experiment design only | M6 twelve-week evidence hold and all gates |
@@ -60,7 +61,7 @@ Documentation describing a future component is not implementation evidence for t
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
 | Consent and generic outbound-action safety | CONSENT-001, ACTION-001, GATEWAY-BASE-001, RESTORE-INTENT-001 | `NOT_STARTED` | — | required before any real observation network action |
 | Independent reviewer recruitment | REVIEWER-RECRUIT-001 | `NOT_STARTED` | — | reviewer availability remains an external lead-time risk |
-| Synthetic setup/health precursor | LOCAL-SYNTH-001 | `IN_PROGRESS` | installed synthetic init/health/demo CLI, owner-private canonical manifest, packaged fixture digests, typed redacted reports | exact-source acceptance, wheel/Docker portability and release evidence; does not promote OPS-001 or UX-002 |
+| Synthetic setup/health precursor | LOCAL-SYNTH-001 | `IN_PROGRESS` | merged installed synthetic init/health/demo CLI, owner-private canonical manifest, packaged fixture digests, typed redacted reports, wheel smoke, agent-assisted exact-source review, and revision-bound Docker proof on a macOS arm64 host with Docker Desktop 4.82.0 and Linux/arm64 Engine 29.6.2 (`e9969bd`, PRs #10–#12, `reviews/18-local-synthetic-preview-adversarial-review.md`) | native Linux/amd64 host/engine reproduction, prerelease packaging and authenticated package attestation remain open; does not promote OPS-001 or UX-002 |
 | Production setup/health experience | OPS-001, UX-002 | `NOT_STARTED` | — | secure kernel APIs |
 | M1 milestone | all M1 | `NOT_STARTED` | — | M0 must be `VERIFIED` |
 
@@ -134,25 +135,29 @@ These do not block M0 foundation work, but they block their named milestones:
 | First 2–5 broker capabilities | M3 selection/M4 beta | maintainer + product/policy team | must be sourced; no invented list |
 | Qualified crypto/connector/U.S. policy reviewers | M4/M5 | maintainer/orchestrator | availability not yet confirmed |
 | External review access | v0.x to v1 | maintainer/orchestrator | no model-provider trusted-access enrollment required; pre-review public artifacts remain synthetic-only and qualified human gates still precede live canary/v1 |
+| Next V0.x vertical slice: authenticated synthetic walkthrough vs durable wrapped-key catalog | M0/M1 sequencing | maintainer | principal product review favors UX-001 for user learning; principal architecture review favors KEY-001A for dependency leverage |
 | MyCogni name/trademark/confusion disposition | stable V1 | maintainer + qualified counsel if needed | unresolved |
 
 ## Next executable slice
 
-Current next slice after the implemented toolchain, boundary, CI, database, shared-contract,
-simulator and network-deny foundations:
+The toolchain, boundary, CI, database, shared contracts, simulator,
+network-deny foundations, native terminal boundary, installed synthetic CLI,
+and hardened synthetic Docker profile are implemented. The next functional
+slice requires a maintainer sequencing choice:
 
-1. preserve the final SPIKE-AUTH three-hat code acceptance while implementing its
-   durable storage, real-terminal and host-secret boundaries in successor packages;
-2. preserve the final SPIKE-RUNNER three-hat code acceptance and ADR-0014's
-   implemented persistent adapter and separate synthetic mailbox OCI evidence
-   while keeping untrusted connector acceptance open;
-3. obtain the externally rooted authenticated PF-002 semantic-review
-   attestation now that amd64/arm64 build and hardened runtime evidence exists;
-4. preserve SQLITE-DUR-001's implemented software contract while obtaining
-   independent review/host conformance, and implement SPIKE-KEY under ADR-0013's no-fallback,
-   strict-wrap and owner-only-provider charter;
-5. retain SPIKE-EGRESS and SPIKE-BROWSER behind the accepted NET boundary, and add
-   connector SDK minimum/latest Pydantic coverage before any public SDK release.
+1. `UX-001` authenticated synthetic walkthrough: maximize immediate user and
+   contributor learning, while treating Host/Origin/CSRF/cookie/clickjacking
+   controls as fail-closed precursor evidence and making no `AUTH-002`,
+   `CASE-001`, key, PII, broker, or removal claim; or
+2. `KEY-001A` durable wrapped-key catalog and restart readiness: maximize secure
+   kernel dependency leverage while making no `KEY-001`, rotation, deletion,
+   backup, real-PII encryption, or provider-conformance claim.
+
+Implement the unselected slice immediately after the selected one. Formal
+authenticated package promotion may remain deferred from V0.x to V1 without
+blocking synthetic implementation work. Preserve the accepted runner, SQLite,
+and key-spike source boundaries. Keep the incomplete egress design and browser
+spike at their current unpromoted states while their named gaps remain open.
 
 ## Canonical work-package inventory
 
