@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "registry_version": "2.0.4",
+  "registry_version": "2.0.5",
   "milestone_definitions": [
     {
       "id": "MDEF-M0",
@@ -285,6 +285,11 @@
     {
       "id": "KEY-002",
       "status": "NOT_STARTED",
+      "evidence_ids": []
+    },
+    {
+      "id": "LOCAL-SYNTH-001",
+      "status": "IN_PROGRESS",
       "evidence_ids": []
     },
     {
