@@ -23,7 +23,7 @@ Documentation describing a future component is not implementation evidence for t
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; PR merge-revision gates pass 1,471 tests with one expected Darwin-only skip plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
-| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable decision state and AUTH-001B source-level host-secret custody implementation evidence; key/data packages remain unstarted | complete terminal, reconciliation/restore, exact-host and accepted-review gates plus remaining M1 packages |
+| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure implementation evidence; key/data packages remain unstarted | exact-host terminal evidence, reconciliation/restore and accepted-review gates plus remaining M1 packages |
 | Preview/guided product | `NOT_STARTED` | UX specification only | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
 | Release artifacts/operations | `NOT_STARTED` | deployment specification only | M5 signed artifacts and drills |
@@ -163,7 +163,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: ACTION-001 | ACTION-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ALPHA-001 | ALPHA-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: ARTIFACT-VERIFY-001 | ARTIFACT-VERIFY-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: AUTH-001 | AUTH-001 | `IN_PROGRESS` | AUTH-001A durable decision state and AUTH-001B source-level owner-file custody implementation/tests | no package promotion; real terminal, cross-store mutation/reconciliation, restore, exact-host and acceptance gates remain open |
+| Canonical inventory: AUTH-001 | AUTH-001 | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B owner-file custody and AUTH-001C source-level native terminal/typed partial-disclosure implementation/tests | no package promotion; cross-store mutation/reconciliation, restore, exact-host terminal and acceptance gates remain open |
 | Canonical inventory: AUTH-002 | AUTH-002 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTH-003 | AUTH-003 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: AUTHORITY-001 | AUTHORITY-001 | `NOT_STARTED` | — | follow work-package dependency order |

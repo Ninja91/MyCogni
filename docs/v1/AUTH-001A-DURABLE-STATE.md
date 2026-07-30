@@ -60,7 +60,7 @@ AUTH-001 cannot complete until separate reviewed slices provide:
 
 1. exact-host conformance and reviewed mutation/reconciliation for the AUTH-001B owner-file
    source, with no database/env/argv fallback;
-2. a real no-echo terminal adapter with restoration and signal evidence;
+2. exact-host Darwin/Linux completion evidence for the AUTH-001C no-echo terminal adapter;
 3. an explicit backup/restore epoch and reconciliation policy;
 4. an explicit reviewed reconciliation procedure for the durable outcome-unknown latch;
 5. native restart/power-loss evidence and authenticated package acceptance.

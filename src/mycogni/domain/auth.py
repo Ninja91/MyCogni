@@ -74,6 +74,11 @@ class AuthDenial(StrEnum):
     """Finite, non-secret denial vocabulary for the spike decision surface."""
 
     NON_INTERACTIVE = "non_interactive"
+    TERMINAL_NOT_FOREGROUND = "terminal_not_foreground"
+    TERMINAL_BUSY = "terminal_busy"
+    TERMINAL_FORKED = "terminal_forked"
+    TERMINAL_IO_FAILED = "terminal_io_failed"
+    TERMINAL_RESTORE_FAILED = "terminal_restore_failed"
     INVALID_PROOF = "invalid_proof"
     ATTEMPTS_EXHAUSTED = "attempts_exhausted"
     REPLAYED = "replayed"
