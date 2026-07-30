@@ -973,6 +973,11 @@ def test_unreviewed_process_and_dynamic_call_mutations_fail_static_guard(
             {"subprocess.Popen"},
         ),
         (
+            "tests/architecture/test_synthetic_container.py",
+            "import subprocess\nsubprocess.run(['ok'])\nsubprocess.Popen(['denied'])\n",
+            {"subprocess.Popen"},
+        ),
+        (
             "tests/runner_mailbox/test_persistent.py",
             "from os import fork, system\nfork()\nsystem('denied')\n",
             {"os.system"},

@@ -3,7 +3,7 @@ PYTHON_VERSION := 3.12.12
 PYTHON_COMPAT_VERSION := 3.13.11
 export UV_BUILD_CONSTRAINT := build-constraints.txt
 
-.PHONY: bootstrap check check-python-313 format lock lock-update network-namespace-probe test verify-toolchain
+.PHONY: bootstrap check check-python-313 format lock lock-update network-namespace-probe test verify-synthetic-container verify-toolchain
 
 verify-toolchain:
 	@test "$$(uv --version | awk '{print $$2}')" = "$(UV_VERSION)" || { \
@@ -56,6 +56,9 @@ check-python-313: verify-toolchain
 
 network-namespace-probe: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/network_namespace.py
+
+verify-synthetic-container:
+	python3 scripts/verify_synthetic_container.py
 
 test: verify-toolchain
 	uv run --all-packages --frozen --python $(PYTHON_VERSION) python scripts/ci/guarded_pytest.py tests packages/mycogni-connector-sdk/tests

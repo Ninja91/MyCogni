@@ -1,0 +1,33 @@
+# One-shot synthetic developer preview. This exact profile has no network,
+# host bind mount, Docker socket, broker, PII, or external-action capability.
+services:
+  mycogni-synthetic:
+    image: mycogni/core:0.0.0
+    pull_policy: never
+    user: "65532:65532"
+    read_only: true
+    network_mode: none
+    cgroup: private
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    tmpfs:
+      - /tmp/mycogni:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
+    volumes:
+      - synthetic-state:/var/lib/mycogni
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+    command:
+      - |
+        mycogni synthetic init --state-dir /var/lib/mycogni/preview --json
+        mycogni synthetic health --state-dir /var/lib/mycogni/preview --json
+        exec mycogni synthetic demo --scenario resurfacing --json
+
+volumes:
+  synthetic-state: {}
