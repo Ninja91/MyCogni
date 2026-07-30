@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import select
 import signal
@@ -962,6 +963,7 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
             import os
             import sys
             import termios
+            from contextlib import suppress
             from mycogni.adapters.auth.posix_operator_terminal import PosixOperatorTerminal
             from mycogni.application.operator_terminal import OperatorTerminalError
 
@@ -973,7 +975,8 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
             except OSError:
                 # Report an external PTY-host precondition through the slave;
                 # process stderr is deliberately disconnected below.
-                os.write(slave, b"HOST_PRECONDITION_NO_DEV_TTY\\n")
+                with suppress(OSError):
+                    os.write(slave, b"HOST_PRECONDITION_NO_DEV_TTY\\n")
                 raise SystemExit(77)
             for target in (0, 1, 2):
                 os.dup2(slave, target)
@@ -990,7 +993,8 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
                 termios.tcgetattr(check)
                 os.close(check)
             except (OSError, AssertionError):
-                os.write(1, b"HOST_PRECONDITION_NO_DEV_TTY\\n")
+                with suppress(OSError):
+                    os.write(1, b"HOST_PRECONDITION_NO_DEV_TTY\\n")
                 raise SystemExit(77)
 
             with PosixOperatorTerminal() as tty:
@@ -1031,12 +1035,24 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
                 break
             try:
                 transcript.extend(os.read(master, 1024))
-            except OSError:
+            except OSError as exc:
+                # Linux may report a transient EIO while the child is between
+                # Popen and opening the PTY slave. Keep the bounded wait; EIO
+                # after the child exits remains terminal.
+                if exc.errno == errno.EIO and process.poll() is None:
+                    time.sleep(0.01)
+                    continue
                 break
 
     try:
         read_until_any(b"READY\r\n", b"HOST_PRECONDITION_NO_DEV_TTY\r\n")
-        if b"HOST_PRECONDITION_NO_DEV_TTY\r\n" in transcript:
+        setup_exit = process.poll()
+        if not transcript and setup_exit is None:
+            try:
+                setup_exit = process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                setup_exit = None
+        if b"HOST_PRECONDITION_NO_DEV_TTY\r\n" in transcript or setup_exit == 77:
             assert process.wait(timeout=5) == 77
             pytest.skip("external host precondition denies controlling /dev/tty access")
         assert b"READY\r\n" in transcript, transcript.decode("utf-8", "replace")
