@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import select
 import signal
@@ -1034,7 +1035,13 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
                 break
             try:
                 transcript.extend(os.read(master, 1024))
-            except OSError:
+            except OSError as exc:
+                # Linux may report a transient EIO while the child is between
+                # Popen and opening the PTY slave. Keep the bounded wait; EIO
+                # after the child exits remains terminal.
+                if exc.errno == errno.EIO and process.poll() is None:
+                    time.sleep(0.01)
+                    continue
                 break
 
     try:
