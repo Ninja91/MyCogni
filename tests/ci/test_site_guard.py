@@ -15,6 +15,7 @@ def _site_fixture(tmp_path: Path) -> Path:
         "site",
         "docs/v1/COMPLETION_MATRIX.md",
         "docs/07-deployment-architecture.md",
+        "CONTRIBUTING.md",
     ):
         source = ROOT / relative
         target = tmp_path / relative
@@ -28,6 +29,23 @@ def _site_fixture(tmp_path: Path) -> Path:
 
 def test_repository_site_passes_offline_guard() -> None:
     assert validate_repository() == []
+
+
+def test_contributor_quickstart_requires_physical_state_path(tmp_path: Path) -> None:
+    root = _site_fixture(tmp_path)
+    contributing = root / "CONTRIBUTING.md"
+    contributing.write_text(
+        contributing.read_text(encoding="utf-8").replace(
+            'preview_dir="$(cd "$(mktemp -d)" && pwd -P)"',
+            'preview_dir="$(mktemp -d)"',
+        ),
+        encoding="utf-8",
+    )
+
+    assert any(
+        "quickstart must resolve a physical state path" in error
+        for error in validate_repository(root)
+    )
 
 
 def test_stale_status_and_missing_asset_fail_closed(tmp_path: Path) -> None:
@@ -118,7 +136,7 @@ def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
     index = root / "site/index.html"
     index.write_text(
         index.read_text(encoding="utf-8").replace(
-            "STATUS · 2026-07-20",
+            "STATUS · 2026-07-29",
             "STATUS · 2026-07-19",
         ),
         encoding="utf-8",
@@ -133,9 +151,9 @@ def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("current", "replacement", "label"),
     [
-        ('data-status-date="2026-07-20"', 'data-status-date="2026-07-19"', "data-status-date"),
+        ('data-status-date="2026-07-29"', 'data-status-date="2026-07-19"', "data-status-date"),
         (
-            "<strong>2026-07-20:</strong> architecture is specified",
+            "<strong>2026-07-29:</strong> architecture is specified",
             "<strong>2026-07-19:</strong> architecture is specified",
             "current narrative date",
         ),
@@ -164,12 +182,12 @@ def test_invalid_calendar_status_date_fails_closed(tmp_path: Path) -> None:
     root = _site_fixture(tmp_path)
     matrix = root / "docs/v1/COMPLETION_MATRIX.md"
     matrix.write_text(
-        matrix.read_text(encoding="utf-8").replace("2026-07-20", "2026-99-99"),
+        matrix.read_text(encoding="utf-8").replace("2026-07-29", "2026-99-99"),
         encoding="utf-8",
     )
     index = root / "site/index.html"
     index.write_text(
-        index.read_text(encoding="utf-8").replace("2026-07-20", "2026-99-99"),
+        index.read_text(encoding="utf-8").replace("2026-07-29", "2026-99-99"),
         encoding="utf-8",
     )
 

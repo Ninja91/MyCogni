@@ -151,7 +151,8 @@ Deliver:
 Exit:
 
 - clean clone builds and tests from the committed lockfile;
-- development `serve`, worker/scheduler components, CLI, migrations, and simulator boot locally;
+- installed synthetic CLI, authenticated preview shell, migrations, and
+  simulator boot locally; worker and scheduler components remain M1 packages;
 - live mail, browser, submit, custom network, and remote telemetry paths are absent or deny-by-default;
 - every P0 spike has an accepted ADR or a named blocker; no placeholder is described as a security boundary;
 - public/UI status remains “developer preview — synthetic only.”
