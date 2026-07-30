@@ -59,6 +59,34 @@ host mount, Docker socket, added capability or privileged mode. The future
 supported deployment profiles will separately declare only the volumes and
 network paths required by their role and must keep connectors isolated.
 
+### One-shot synthetic preview
+
+The separate `deploy/compose.synthetic-preview.yml` profile runs the installed
+`mycogni synthetic init`, `health`, and `demo` commands as UID/GID 65532. It
+uses a read-only root filesystem, bounded tmpfs, drop-all capabilities,
+no-new-privileges, private cgroup namespace, `network_mode: none`, and one named
+volume for synthetic state. It has no host bind mount or Docker socket, and its
+`pull_policy: never` prevents an absent local image from being replaced by a
+registry pull.
+
+```console
+python3 scripts/verify_synthetic_container.py
+docker buildx build --load --tag mycogni/core:0.0.0 \
+  --build-arg VCS_REF="$(git rev-parse HEAD)" --file docker/Dockerfile .
+python3 scripts/verify_synthetic_container_runtime.py
+docker compose --file deploy/compose.synthetic-preview.yml down --volumes
+```
+
+This is a synthetic developer preview only: it accepts no real PII and has no
+broker, connector, submission, verification, or real-removal capability.
+Source-level CLI composition does not prove containment. Static validation
+proves only the checked files; Docker runtime containment evidence is limited
+to the exact inspected image, Compose profile, engine, and host on which that
+inspection ran.
+The named volume preserves only synthetic preview state across repeated runs.
+The final command above removes the profile's containers, network metadata, and
+volume for a clean reset.
+
 ## Current proof boundary
 
 PF-002 may claim a pinned two-architecture build skeleton only after static

@@ -45,6 +45,26 @@ inspected sandbox or container profile. Health is read-only and does not open
 SQLite. This preview does **not** complete `OPS-001`, `AUTH-001`, or `KEY-001`,
 and is not a working remover.
 
+An exact hardened one-shot Docker profile is available for the same three
+commands:
+
+```console
+python3 scripts/verify_synthetic_container.py
+docker buildx build --load --tag mycogni/core:0.0.0 \
+  --build-arg VCS_REF="$(git rev-parse HEAD)" --file docker/Dockerfile .
+docker compose --file deploy/compose.synthetic-preview.yml run --rm mycogni-synthetic
+docker compose --file deploy/compose.synthetic-preview.yml down --volumes
+```
+
+It remains a synthetic developer preview: no real PII, broker traffic, or
+removal occurs. The source CLI does not itself prove containment. Static checks
+prove only the reviewed files, while any Docker runtime proof is limited to the
+exact tested image, profile, engine, and host.
+The image is local-only (`pull_policy: never`) and the runtime verifier requires
+its OCI revision label to match a clean Git checkout. The named volume
+intentionally preserves synthetic state between runs; the
+final command removes that state and is the clean reset for this profile.
+
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |
 | Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |
