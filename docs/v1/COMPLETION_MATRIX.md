@@ -60,7 +60,8 @@ Documentation describing a future component is not implementation evidence for t
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
 | Consent and generic outbound-action safety | CONSENT-001, ACTION-001, GATEWAY-BASE-001, RESTORE-INTENT-001 | `NOT_STARTED` | — | required before any real observation network action |
 | Independent reviewer recruitment | REVIEWER-RECRUIT-001 | `NOT_STARTED` | — | reviewer availability remains an external lead-time risk |
-| Setup/health experience | OPS-001, UX-002 | `NOT_STARTED` | — | secure kernel APIs |
+| Synthetic setup/health precursor | LOCAL-SYNTH-001 | `IN_PROGRESS` | installed synthetic init/health/demo CLI, owner-private canonical manifest, packaged fixture digests, typed redacted reports | exact-source acceptance, wheel/Docker portability and release evidence; does not promote OPS-001 or UX-002 |
+| Production setup/health experience | OPS-001, UX-002 | `NOT_STARTED` | — | secure kernel APIs |
 | M1 milestone | all M1 | `NOT_STARTED` | — | M0 must be `VERIFIED` |
 
 ## M2 — zero-removal-request preview alpha
