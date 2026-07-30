@@ -1036,7 +1036,13 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
 
     try:
         read_until_any(b"READY\r\n", b"HOST_PRECONDITION_NO_DEV_TTY\r\n")
-        if b"HOST_PRECONDITION_NO_DEV_TTY\r\n" in transcript:
+        setup_exit = process.poll()
+        if not transcript and setup_exit is None:
+            try:
+                setup_exit = process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                setup_exit = None
+        if b"HOST_PRECONDITION_NO_DEV_TTY\r\n" in transcript or setup_exit == 77:
             assert process.wait(timeout=5) == 77
             pytest.skip("external host precondition denies controlling /dev/tty access")
         assert b"READY\r\n" in transcript, transcript.decode("utf-8", "replace")
