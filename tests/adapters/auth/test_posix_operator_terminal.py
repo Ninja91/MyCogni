@@ -965,10 +965,16 @@ def test_fresh_exec_real_pty_restores_exact_attributes_for_all_exit_paths(
             from mycogni.adapters.auth.posix_operator_terminal import PosixOperatorTerminal
             from mycogni.application.operator_terminal import OperatorTerminalError
 
-            os.setsid()
             slave = os.open(sys.argv[1], os.O_RDWR)
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-            os.tcsetpgrp(slave, os.getpgrp())
+            try:
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+                os.tcsetpgrp(slave, os.getpgrp())
+            except OSError:
+                # Report an external PTY-host precondition through the slave;
+                # process stderr is deliberately disconnected below.
+                os.write(slave, b"HOST_PRECONDITION_NO_DEV_TTY\\n")
+                raise SystemExit(77)
             for target in (0, 1, 2):
                 os.dup2(slave, target)
             if slave > 2:

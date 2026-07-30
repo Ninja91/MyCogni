@@ -74,6 +74,11 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_poison_after_fork)
 
 
+def _darwin_special_device_fallback_allowed() -> bool:
+    """Keep platform policy runtime-visible to both host-specific type checks."""
+    return sys.platform == "darwin"
+
+
 class PosixOperatorTerminal:
     """Exclusive, foreground, one-descriptor ``/dev/tty`` session."""
 
@@ -98,7 +103,7 @@ class PosixOperatorTerminal:
             except PermissionError:
                 # Darwin rejects no-follow flags for this special character device.
                 # /dev is root-owned; require the path and opened fd to be char devices.
-                if sys.platform != "darwin":
+                if not _darwin_special_device_fallback_allowed():
                     raise
                 path_stat = os.lstat("/dev/tty")
                 if path_stat.st_uid != 0 or not stat.S_ISCHR(path_stat.st_mode):
