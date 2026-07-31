@@ -154,18 +154,18 @@ The exact-target evidence table remains provisional until all rows name one immu
 
 | Gate | Required evidence | Current evidence |
 | --- | --- | --- |
-| application contracts | preparation ordering, one-use/failure/concurrency/PID behavior, finite errors | `PLACEHOLDER — record exact test count and target` |
-| provider | no DEK before reservation point; vector unchanged; nonce/domain/source latches | `PLACEHOLDER — focused owner-file lane` |
-| migration/schema | fresh/upgrade/downgrade/idempotence/constraint and key-source canary tests | `PLACEHOLDER — migration lane` |
-| catalog adapter | two commits, burned reservations, duplicate/collision/cap/CAS/corruption/ambiguity | `PLACEHOLDER — adapter lane` |
-| restart | fresh interpreter initializes, creates two distinct synthetic keys, restarts and unwraps both | `PLACEHOLDER — subprocess evidence` |
-| concurrency | duplicate creators, second process/writer, nonce collision and usage cap across restart | `PLACEHOLDER — contention evidence` |
-| fault injection | every matrix edge, including both commit-unknown paths and sentinel initialization | `PLACEHOLDER — deterministic fault lane` |
-| leakage | DB, WAL, SHM, logs, stdout/stderr, exceptions and diagnostics contain no KEK/plain DEK | `PLACEHOLDER — canary scan` |
-| architecture | no persistence in key adapter; no provisioning on runtime port; exact public surfaces | `PLACEHOLDER — architecture tests` |
-| quality | Ruff, strict source mypy, locked Python 3.12/3.13 full suites | `PLACEHOLDER — final gate output` |
+| application contracts | preparation ordering, one-use/failure/concurrency/PID behavior, finite errors | exact target `3c43ba7`; application and provider suites in the 174-test integration lane |
+| provider | no DEK before reservation point; vector unchanged; nonce/domain/source latches | exact target `3c43ba7`; owner-file runtime/admin suites and crypto review |
+| migration/schema | fresh/upgrade/downgrade/idempotence/constraint and key-source canary tests | exact target `3c43ba7`; migration suite and backend review |
+| catalog adapter | two commits, burned reservations, duplicate/collision/cap/CAS/corruption/ambiguity | exact target `3c43ba7`; SQLite catalog suite and backend review |
+| restart | fresh interpreter initializes, creates two distinct synthetic keys, restarts and unwraps both | exact target `3c43ba7`; fresh-exec and initialization SIGKILL tests |
+| concurrency | duplicate creators, second process/writer, nonce collision and usage cap across restart | exact target `3c43ba7`; concurrent-client and durability suites |
+| fault injection | every matrix edge, including both commit-unknown paths and sentinel initialization | exact target `3c43ba7`; deterministic ambiguity tests; real profile Tx A/B SIGKILL remains P2 |
+| leakage | DB, WAL, SHM, logs, stdout/stderr, exceptions and diagnostics contain no KEK/plain DEK | exact target `3c43ba7`; canary scans and subprocess stream assertions |
+| architecture | no persistence in key adapter; no provisioning on runtime port; exact public surfaces | exact target `3c43ba7`; architecture reviewer ACCEPT with zero P0/P1/P2 |
+| quality | Ruff, strict source mypy, locked Python 3.12/3.13 full suites | source gates pass; 3.12 focused/broad evidence recorded; dual-runtime Linux CI pending |
 | host | named macOS native owner-file restart drill with OS/arch/runtime/filesystem/effective UID | `PLACEHOLDER — exact host evidence` |
-| independent review | exact-target security/crypto, backend/infra, edge and OSS verdicts | `PLACEHOLDER — zero unresolved P0/P1 required` |
+| independent review | exact-target security/crypto, backend/infra, edge and OSS verdicts | [review 19](reviews/19-key001a-exact-target-adversarial-review.md): exact `3c43ba7`, all ACCEPT, zero unresolved P0/P1 |
 
 No placeholder is a pass. A code-level accept does not imply host, container, backup, rotation or
 stable-product conformance.
