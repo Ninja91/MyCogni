@@ -28,7 +28,10 @@ from sqlalchemy.engine import ExceptionContext
 
 if TYPE_CHECKING:
     from mycogni.adapters.persistence.database import SQLiteSettings
-    from mycogni.adapters.persistence.unit_of_work import SqlAlchemyUnitOfWork
+    from mycogni.adapters.persistence.unit_of_work import (
+        SqlAlchemyReconciliationReader,
+        SqlAlchemyUnitOfWork,
+    )
 
 _ALLOWED_FILESYSTEMS = frozenset({"apfs", "btrfs", "ext4", "xfs"})
 _DIRTY_MARKER = b'{"schema":1,"state":"open"}\n'
@@ -896,6 +899,37 @@ class SQLiteRuntime:
             _create_session_factory(self.engine),
             readiness_guard=self.assert_accepting_new_work,
             work_admission=self._admit_application_work,
+            work_release=self._release_application_work,
+            cleanup_failure_handler=self._handle_uow_cleanup_failure,
+        )
+
+    def _assert_reconciliation_work(self) -> None:
+        with self._readiness_lock:
+            self.lease.assert_active(self.lease.database_path)
+            if (
+                self._closed
+                or not self.startup.requires_reconciliation
+                or self.readiness.accepting_new_work
+                or self.readiness.operator_state is not SQLiteOperatorState.RECOVERY_REQUIRED
+            ):
+                raise SQLiteReadinessError("SQLite reconciliation inspection is unavailable")
+
+    def _admit_reconciliation_work(self) -> None:
+        self._assert_reconciliation_work()
+        if not self._application_work_lock.acquire(blocking=False):
+            raise SQLiteReadinessError("SQLite runtime already has active reconciliation work")
+
+    def reconciliation_reader(self) -> SqlAlchemyReconciliationReader:
+        """Return the enforced SELECT-only recovery inspection boundary."""
+        from mycogni.adapters.persistence.unit_of_work import (
+            SqlAlchemyReconciliationReader,
+        )
+
+        self._assert_reconciliation_work()
+        return SqlAlchemyReconciliationReader(
+            self.engine,
+            readiness_guard=self._assert_reconciliation_work,
+            work_admission=self._admit_reconciliation_work,
             work_release=self._release_application_work,
             cleanup_failure_handler=self._handle_uow_cleanup_failure,
         )

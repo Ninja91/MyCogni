@@ -6,8 +6,10 @@ from collections.abc import Callable
 from contextlib import suppress
 from types import TracebackType
 
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.elements import TextClause
 
 
 def _create_session_factory(engine: Engine) -> sessionmaker[Session]:
@@ -160,3 +162,90 @@ class SqlAlchemyUnitOfWork:
     def rollback(self) -> None:
         """Roll back and terminally close the active transaction."""
         self._finish(commit=False)
+
+
+class SqlAlchemyReconciliationReader:
+    """Recovery-only SELECT boundary with SQLite query-only enforcement.
+
+    It exposes neither the Connection nor a commit operation. Only a single
+    fixed SELECT statement may be executed per call; PRAGMA, DDL and all data
+    mutation are rejected before reaching SQLite, while ``query_only`` remains
+    a second enforcement layer for the entire checkout.
+    """
+
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        readiness_guard: Callable[[], None],
+        work_admission: Callable[[], None],
+        work_release: Callable[[], None],
+        cleanup_failure_handler: Callable[[], None],
+    ) -> None:
+        self._engine = engine
+        self._readiness_guard = readiness_guard
+        self._work_admission = work_admission
+        self._work_release = work_release
+        self._cleanup_failure_handler = cleanup_failure_handler
+        self._connection: Connection | None = None
+        self._work_reserved = False
+        self._terminal = False
+
+    def __enter__(self) -> SqlAlchemyReconciliationReader:
+        if self._connection is not None or self._terminal:
+            raise RuntimeError("reconciliation reader is terminal")
+        self._work_admission()
+        self._work_reserved = True
+        try:
+            self._connection = self._engine.connect()
+            self._connection.exec_driver_sql("PRAGMA query_only=ON")
+            self._connection.exec_driver_sql("BEGIN")
+            return self
+        except BaseException:
+            self._cleanup()
+            raise
+
+    def execute(
+        self,
+        statement: TextClause,
+        parameters: dict[str, object] | None = None,
+    ) -> CursorResult[object]:
+        self._readiness_guard()
+        if self._connection is None or self._terminal:
+            raise RuntimeError("reconciliation reader is not active")
+        if type(statement) is not TextClause:
+            raise TypeError("reconciliation accepts exact SQL text statements")
+        sql = str(statement).strip()
+        if not sql or ";" in sql or sql.split(None, 1)[0].upper() != "SELECT":
+            raise RuntimeError("reconciliation permits SELECT statements only")
+        return self._connection.execute(statement, parameters or {})
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_value: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        connection = self._connection
+        self._connection = None
+        self._terminal = True
+        if connection is not None:
+            try:
+                connection.rollback()
+                connection.exec_driver_sql("PRAGMA query_only=OFF")
+                connection.close()
+            except BaseException:
+                with suppress(BaseException):
+                    self._cleanup_failure_handler()
+                with suppress(BaseException):
+                    connection.close()
+        if self._work_reserved:
+            self._work_reserved = False
+            try:
+                self._work_release()
+            except BaseException:
+                with suppress(BaseException):
+                    self._cleanup_failure_handler()

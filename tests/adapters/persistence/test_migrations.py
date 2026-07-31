@@ -23,7 +23,7 @@ from mycogni.adapters.persistence import (
 )
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
-HEAD_REVISION = "0002_auth_decision_state"
+HEAD_REVISION = "0003_key_catalog"
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +61,7 @@ def _current_revision(database_path: Path) -> str | None:
         engine.dispose()
 
 
-def test_fresh_database_upgrades_to_digest_only_auth_state_schema(tmp_path: Path) -> None:
+def test_fresh_database_upgrades_to_auth_and_key_catalog_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "fresh.sqlite"
     command.upgrade(_config(database_path), "head")
 
@@ -71,12 +71,41 @@ def test_fresh_database_upgrades_to_digest_only_auth_state_schema(tmp_path: Path
             "alembic_version",
             "auth_authority_handles",
             "auth_decision_state",
+            "key_catalog",
+            "key_nonce_reservations",
+            "key_readiness_sentinel",
+            "wrapped_profile_keys",
         ]
         columns = {column["name"] for column in inspect(engine).get_columns("auth_decision_state")}
         assert columns == {"singleton_id", "schema_version", "revision", "state_json"}
+        key_catalog_columns = {
+            column["name"] for column in inspect(engine).get_columns("key_catalog")
+        }
+        assert "source_commitment" in key_catalog_columns
+        reservation_uniques = {
+            constraint["name"]
+            for constraint in inspect(engine).get_unique_constraints("key_nonce_reservations")
+        }
+        assert "uq_key_nonce_profile_binding" in reservation_uniques
     finally:
         engine.dispose()
     assert _current_revision(database_path) == HEAD_REVISION
+
+
+def test_key_catalog_downgrade_never_touches_external_key_source(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite"
+    key_path = tmp_path / "operator-owned.kek"
+    key_material = b"MYCOGNI-OWNER-KEK\x00\x01" + b"k" * 32
+    key_path.write_bytes(key_material)
+    key_path.chmod(0o400)
+    config = _config(database_path)
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "0002_auth_decision_state")
+
+    assert key_path.read_bytes() == key_material
+    assert key_path.stat().st_mode & 0o777 == 0o400
+    assert _current_revision(database_path) == "0002_auth_decision_state"
 
 
 def test_online_migration_connection_uses_required_policy(tmp_path: Path) -> None:

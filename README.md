@@ -65,6 +65,22 @@ its OCI revision label to match a clean Git checkout. The named volume
 intentionally preserves synthetic state between runs; the
 final command removes that state and is the clean reset for this profile.
 
+### Durable synthetic key catalog in progress
+
+The selected next slice is `KEY-001A`: a normalized SQLite catalog for synthetic
+wrapped profile keys, durable reserve-before-encryption nonce accounting, an
+external owner-file key source, and source-bound fresh-process restart. Its
+explicit recovery path fails closed after uncertain commits or source failure;
+routine startup never provisions or repairs the external key file. Independent
+code-level reviewers currently report zero unresolved P0/P1 findings.
+
+This remains an `IN_PROGRESS` precursor, not a user-facing vault or completed
+`KEY-001`. It stores no real PII and provides no rotation, cryptographic deletion,
+backup/restore conformance, supported provider profile, broker traffic, or removal
+capability. See [ADR-0016](docs/adr/0016-durable-wrapped-key-catalog.md), the
+[KEY-001A execution and evidence plan](docs/v1/KEY-001A-DURABLE-CATALOG.md), and the
+[completion matrix](docs/v1/COMPLETION_MATRIX.md).
+
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |
 | Product | research, requirements, threat model, PMF experiments | single-adult U.S. proof-first workflow | household/guardian and non-U.S. policy |

@@ -103,6 +103,7 @@ TEST_IMPORT_ALLOWLIST = {
     "tests/architecture/test_browser_containment.py": {"importlib", "subprocess"},
     "tests/architecture/test_synthetic_container.py": {"importlib", "subprocess"},
     "tests/adapters/persistence/test_durability.py": {"subprocess"},
+    "tests/bootstrap/test_native_key_catalog.py": {"subprocess"},
 }
 PROCESS_CALL_ALLOWLIST = {
     "tests/ci/test_network_guard.py",
@@ -122,6 +123,7 @@ EXACT_PROCESS_CALL_ALLOWLIST = {
     "tests/architecture/test_runner_containment.py": {"subprocess.run"},
     "tests/architecture/test_synthetic_container.py": {"subprocess.run"},
     "tests/runner_mailbox/test_persistent.py": {"os.fork"},
+    "tests/bootstrap/test_native_key_catalog.py": {"subprocess.run"},
 }
 
 

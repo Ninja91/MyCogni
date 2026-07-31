@@ -19,5 +19,6 @@ ADRs capture decisions that constrain implementation or materially affect privac
 | [0013](0013-local-kek-provider-and-wrap-format.md) | Accepted for initial build | explicit provider, strict profile-key wrap/AAD, no fallback, and owner-only native baseline; conformance pending |
 | [0014](0014-runner-mailbox-persistent-state.md) | Accepted for initial build | bounded encrypted SQLite mailbox frame and isolated synthetic runner artifact; connector acceptance remains open |
 | [0015](0015-networkless-browser-sandbox-spike.md) | Accepted for initial build | networkless synthetic Chromium artifact with exact host/renderer proof; live browser acceptance remains open |
+| [0016](0016-durable-wrapped-key-catalog.md) | Accepted for initial build | durable synthetic wrapped-key catalog, reserve-before-AEAD ordering, restart readiness and recovery-only reconciliation; KEY-001 remains incomplete |
 
 New ADRs use: context, decision, consequences, alternatives, security/privacy impact, and review trigger.
