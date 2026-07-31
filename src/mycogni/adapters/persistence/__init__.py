@@ -30,6 +30,7 @@ from mycogni.adapters.persistence.durability import (
     SystemFilesystemProbe,
     assess_sqlite_storage,
 )
+from mycogni.adapters.persistence.key_catalog import SqliteKeyCatalog
 from mycogni.adapters.persistence.unit_of_work import (
     SqlAlchemyUnitOfWork,
 )
@@ -53,6 +54,7 @@ __all__ = (
     "SQLiteStorageAssessment",
     "SQLiteStorageUnsupported",
     "SQLiteWriterLease",
+    "SqliteKeyCatalog",
     "SqlAlchemyUnitOfWork",
     "SystemFilesystemProbe",
     "assess_sqlite_storage",

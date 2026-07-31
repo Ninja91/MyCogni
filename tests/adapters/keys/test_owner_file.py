@@ -24,9 +24,11 @@ from mycogni.application.keys import (
     KeyReadinessState,
     ProfileDekHandle,
     ProfileKeyBinding,
+    ProfileKeyPreparation,
     SecretFailureCode,
     SecretProviderError,
     SourceStatus,
+    WrappedProfileKey,
     WrappedReadinessSentinel,
 )
 from mycogni.application.ports import SecretPort
@@ -176,6 +178,14 @@ def _ready(provider: OwnerFileSecretProvider) -> None:
     assert result.source_status is SourceStatus.READABLE
 
 
+def _create(
+    provider: OwnerFileSecretProvider,
+    binding: ProfileKeyBinding,
+) -> WrappedProfileKey:
+    preparation = provider.prepare_profile_key(binding)
+    return provider.complete_profile_key(preparation)
+
+
 def _extract(handle: object) -> bytes:
     with handle as active:  # type: ignore[attr-defined]
         return active.use(bytes)
@@ -190,13 +200,60 @@ def test_source_observation_never_authorizes_profile_key_work(
     assert provider.active_kek() == ACTIVE_KEK
     assert provider.source_status() is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert caught.value.code is SecretFailureCode.READINESS_REQUIRED
 
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
     assert len(wrapped.ciphertext) == 48
     assert _extract(provider.unwrap_profile_key(wrapped, BINDING)) != b"k" * 32
+
+
+def test_prepare_reserves_nonce_before_profile_material_or_aead(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    provider = _provider(provider_paths)
+    _ready(provider)
+    generated = False
+
+    def profile_material(length: int) -> bytes:
+        nonlocal generated
+        generated = True
+        return b"p" * length
+
+    monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda length: b"n" * length)
+    monkeypatch.setattr(owner_file, "_os_profile_key_bytes", profile_material)
+
+    preparation = provider.prepare_profile_key(BINDING)
+
+    assert isinstance(preparation, ProfileKeyPreparation)
+    assert preparation.nonce == b"n" * 12
+    assert not generated
+    wrapped = provider.complete_profile_key(preparation)
+    assert generated
+    assert wrapped.nonce == preparation.nonce
+
+
+def test_completion_failure_consumes_preparation(
+    provider_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mycogni.adapters.keys import owner_file
+
+    provider = _provider(provider_paths)
+    _ready(provider)
+    preparation = provider.prepare_profile_key(BINDING)
+
+    monkeypatch.setattr(owner_file, "_os_profile_key_bytes", lambda _length: object())
+    with pytest.raises(SecretProviderError) as first:
+        provider.complete_profile_key(preparation)
+    assert first.value.code is SecretFailureCode.UNAVAILABLE
+    with pytest.raises(SecretProviderError) as second:
+        provider.complete_profile_key(preparation)
+    assert second.value.code is SecretFailureCode.MALFORMED_RECORD
 
 
 def test_exact_sentinel_record_recomposition_starts_not_ready_then_succeeds(
@@ -209,7 +266,7 @@ def test_exact_sentinel_record_recomposition_starts_not_ready_then_succeeds(
 
     restarted = _provider(provider_paths)
     with pytest.raises(SecretProviderError) as caught:
-        restarted.create_profile_key(BINDING)
+        _create(restarted, BINDING)
     assert caught.value.code is SecretFailureCode.READINESS_REQUIRED
     _ready(restarted)
 
@@ -251,7 +308,7 @@ def test_deterministic_aes_gcm_wrap_vector_covers_every_aad_field(
         lambda length: profile_dek[:length],
     )
 
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     assert wrapped.binding == BINDING
     assert wrapped.nonce == nonce
@@ -264,7 +321,7 @@ def test_randomized_round_trips_use_distinct_records(
 ) -> None:
     provider = _provider(provider_paths)
     _ready(provider)
-    records = [provider.create_profile_key(BINDING) for _ in range(32)]
+    records = [_create(provider, BINDING) for _ in range(32)]
 
     assert len({record.nonce for record in records}) == len(records)
     assert len({record.ciphertext for record in records}) == len(records)
@@ -288,7 +345,7 @@ def test_every_persisted_binding_substitution_fails_before_plaintext(
 ) -> None:
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     with pytest.raises(SecretProviderError) as caught:
         provider.unwrap_profile_key(wrapped, binding)
@@ -313,7 +370,7 @@ def test_every_provider_binding_substitution_fails_before_plaintext(
 ) -> None:
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     with pytest.raises(SecretProviderError) as caught:
         provider.unwrap_profile_key(replace(wrapped, kek_ref=kek_ref), BINDING)
@@ -323,7 +380,7 @@ def test_every_provider_binding_substitution_fails_before_plaintext(
 def test_tampered_profile_record_latches_recovery(provider_paths: tuple[Path, Path]) -> None:
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
     mutated = replace(
         wrapped,
         ciphertext=bytes([wrapped.ciphertext[0] ^ 1]) + wrapped.ciphertext[1:],
@@ -399,7 +456,7 @@ def test_unwrap_backend_failure_is_redacted_unavailable(
     key_path, _managed_root = provider_paths
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     class FailingCipher:
         def __init__(self, _key: object) -> None:
@@ -429,7 +486,7 @@ def test_unwrap_invalid_backend_result_is_unavailable(
 
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     class InvalidCipher:
         def __init__(self, _key: object) -> None:
@@ -473,7 +530,7 @@ def test_wrap_invalid_backend_result_is_unavailable(
 
     monkeypatch.setattr(owner_file, "AESGCM", InvalidCipher)
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
 
     assert caught.value.code is SecretFailureCode.UNAVAILABLE
 
@@ -489,7 +546,7 @@ def test_invalid_tag_does_not_overwrite_post_use_source_latch(
     key_path, _managed_root = provider_paths
     provider = _provider(provider_paths)
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     class RemovingCipher:
         def __init__(self, _key: object) -> None:
@@ -604,7 +661,7 @@ def test_failed_initial_sentinel_authentication_is_permanently_latched(
     _provision(key_path, original_material)
     assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
@@ -715,11 +772,11 @@ def test_valid_key_replacement_after_ready_latches_even_after_restore(
     _provision(key_path, b"w" * 32)
 
     with pytest.raises(SecretProviderError) as changed:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     key_path.write_bytes(original)
     key_path.chmod(0o600)
     with pytest.raises(SecretProviderError) as restored:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
 
     assert changed.value.code is SecretFailureCode.RECOVERY_REQUIRED
     assert restored.value.code is SecretFailureCode.RECOVERY_REQUIRED
@@ -800,12 +857,12 @@ def test_same_aes_key_domain_rejects_concurrent_cross_installation_provider(
     assert other_readiness.state is KeyReadinessState.RECOVERY_REQUIRED
     assert other_readiness.source_status is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as caught:
-        other.create_profile_key(replace(BINDING, installation_id=other_installation))
+        _create(other, replace(BINDING, installation_id=other_installation))
     assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"t" * 12)
     with pytest.raises(SecretProviderError) as collision:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
 
 
@@ -890,7 +947,7 @@ def test_same_key_provider_activation_contention_is_bounded_and_accounts_loser(
 
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: rejected_nonce)
     with pytest.raises(SecretProviderError) as collision:
-        winner.create_profile_key(winner_binding)
+        _create(winner, winner_binding)
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
 
 
@@ -972,7 +1029,7 @@ def test_later_domain_nonce_latch_invalidates_active_provider_unwrap(
     from mycogni.adapters.keys import owner_file
 
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"e" * 12)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
     issued_handle = provider.unwrap_profile_key(wrapped, BINDING)
 
     other_key_directory = key_path.parent.parent / "latched-other-keys"
@@ -1066,7 +1123,7 @@ def test_inflight_wrap_is_not_published_after_domain_latch(
 
     def wrap() -> None:
         try:
-            provider.create_profile_key(BINDING)
+            _create(provider, BINDING)
             outcomes.append("returned")
         except SecretProviderError as error:
             outcomes.append(error.code.value)
@@ -1097,7 +1154,7 @@ def test_inflight_unwrap_is_not_published_after_domain_latch(
     )
     _ready(provider)
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"j" * 12)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
 
     other_key_directory = key_path.parent.parent / "inflight-unwrap-other-keys"
     other_key_directory.mkdir(mode=0o700)
@@ -1227,7 +1284,7 @@ def test_concurrent_wrap_attempts_cannot_exceed_process_cap(
     def wrap() -> None:
         barrier.wait()
         try:
-            provider.create_profile_key(BINDING)
+            _create(provider, BINDING)
             outcome = "created"
         except SecretProviderError as error:
             outcome = error.code.value
@@ -1271,7 +1328,7 @@ def test_distinct_authenticated_sentinel_record_reusing_nonce_latches_domain(
     assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
     assert readiness.source_status is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as caught:
-        replacement.create_profile_key(BINDING)
+        _create(replacement, BINDING)
     assert caught.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
@@ -1285,7 +1342,7 @@ def test_nonce_accounting_survives_cross_installation_recomposition(
     provider = _provider(provider_paths)
     _ready(provider)
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"z" * 12)
-    provider.create_profile_key(BINDING)
+    _create(provider, BINDING)
     del provider
     gc.collect()
 
@@ -1316,7 +1373,7 @@ def test_nonce_accounting_survives_cross_installation_recomposition(
     _ready(other)
 
     with pytest.raises(SecretProviderError) as caught:
-        other.create_profile_key(replace(BINDING, installation_id=other_installation))
+        _create(other, replace(BINDING, installation_id=other_installation))
     assert caught.value.code is SecretFailureCode.NONCE_REUSE
 
 
@@ -1331,10 +1388,10 @@ def test_process_usage_cap_survives_provider_recomposition(
     _ready(provider)
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: next(nonces))
 
-    assert provider.create_profile_key(BINDING).nonce == b"a" * 12
-    assert provider.create_profile_key(BINDING).nonce == b"b" * 12
+    assert _create(provider, BINDING).nonce == b"a" * 12
+    assert _create(provider, BINDING).nonce == b"b" * 12
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert caught.value.code is SecretFailureCode.USAGE_LIMIT
 
     del caught
@@ -1343,7 +1400,7 @@ def test_process_usage_cap_survives_provider_recomposition(
     provider = _provider(provider_paths, process_wrap_limit=2)
     _ready(provider)
     with pytest.raises(SecretProviderError) as exhausted:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert exhausted.value.code is SecretFailureCode.USAGE_LIMIT
 
 
@@ -1357,9 +1414,9 @@ def test_duplicate_nonce_latch_survives_provider_recomposition(
     provider = _provider(provider_paths)
     _ready(provider)
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: next(repeated))
-    provider.create_profile_key(BINDING)
+    _create(provider, BINDING)
     with pytest.raises(SecretProviderError) as collision:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
     del collision
     del provider
@@ -1370,7 +1427,7 @@ def test_duplicate_nonce_latch_survives_provider_recomposition(
     assert readiness.state is KeyReadinessState.RECOVERY_REQUIRED
     assert readiness.source_status is SourceStatus.READABLE
     with pytest.raises(SecretProviderError) as latched:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
 
@@ -1385,9 +1442,9 @@ def test_sentinel_nonce_is_reserved_from_profile_wraps(
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: b"s" * 12)
 
     with pytest.raises(SecretProviderError) as collision:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     with pytest.raises(SecretProviderError) as latched:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert collision.value.code is SecretFailureCode.NONCE_REUSE
     assert latched.value.code is SecretFailureCode.RECOVERY_REQUIRED
 
@@ -1404,7 +1461,7 @@ def test_profile_nonce_is_reserved_from_later_sentinel_record(
     provider = _provider(provider_paths)
     _ready(provider)
     monkeypatch.setattr(owner_file, "_os_nonce_bytes", lambda _length: nonce)
-    provider.create_profile_key(BINDING)
+    _create(provider, BINDING)
     del provider
     gc.collect()
 
@@ -1436,7 +1493,7 @@ def test_private_profile_entropy_wrapper_rejects_bad_results(
     monkeypatch.setattr(owner_file, "_os_profile_key_bytes", lambda _length: generated)
 
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert caught.value.code is SecretFailureCode.UNAVAILABLE
     assert "787878" not in repr(caught.value)
 
@@ -1454,7 +1511,7 @@ def test_forked_child_fails_before_inherited_held_lock(
     if child == 0:
         os.close(read_fd)
         try:
-            provider.create_profile_key(BINDING)
+            _create(provider, BINDING)
         except SecretProviderError as error:
             os.write(write_fd, error.code.value.encode("ascii"))
         finally:
@@ -1655,7 +1712,7 @@ def test_directory_rename_and_replacement_during_aead_returns_no_ciphertext(
 
     monkeypatch.setattr(owner_file, "AESGCM", MutatingCipher)
     with pytest.raises(SecretProviderError) as caught:
-        provider.create_profile_key(BINDING)
+        _create(provider, BINDING)
     assert caught.value.code is SecretFailureCode.UNSAFE_STORAGE
     assert provider.readiness().state is KeyReadinessState.RECOVERY_REQUIRED
 
@@ -1668,7 +1725,7 @@ def test_routine_operations_do_not_mutate_key_source(
     before = key_path.read_bytes()
     before_stat = key_path.stat()
     _ready(provider)
-    wrapped = provider.create_profile_key(BINDING)
+    wrapped = _create(provider, BINDING)
     _extract(provider.unwrap_profile_key(wrapped, BINDING))
     after_stat = key_path.stat()
 

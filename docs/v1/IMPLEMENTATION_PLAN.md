@@ -161,6 +161,11 @@ Exit:
 
 User-visible result: authenticated setup for one adult, encrypted aliases, key/backup health, durable jobs/events, and a restart-safe local-lite shell.
 
+Current delivery note (2026-07-31): the maintainer selected `KEY-001A` first. The
+synthetic-only durable wrapped-key catalog and restart-readiness precursor is
+`IN_PROGRESS` under ADR-0016; it does not yet complete `KEY-001`, encrypt real PII,
+or provide rotation, deletion, backup/restore, or provider-conformance evidence.
+
 Deliver:
 
 - one-time bootstrap, opaque server session, Host/Origin/CSRF/cookie controls;

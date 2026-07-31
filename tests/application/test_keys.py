@@ -15,6 +15,7 @@ from mycogni.application.keys import (
     KeyReadinessState,
     ProfileDekHandle,
     ProfileKeyBinding,
+    ProfileKeyPreparation,
     SecretFailureCode,
     SecretProviderError,
     SourceStatus,
@@ -268,13 +269,56 @@ def test_secret_provider_errors_are_finite_and_redacted() -> None:
     assert "material" not in repr(error).lower()
 
 
+def test_profile_key_preparation_is_redacted_single_use_and_nonserializable() -> None:
+    from mycogni.application import keys
+
+    issuer = object()
+    preparation = ProfileKeyPreparation(
+        BINDING,
+        b"n" * 12,
+        _issuer_token=issuer,
+        _issuer_check=lambda token, _pid: token is issuer,
+    )
+
+    assert preparation.binding == BINDING
+    assert preparation.nonce == b"n" * 12
+    assert "nnnn" not in repr(preparation)
+    assert str(preparation) == "[REDACTED:profile-key-preparation]"
+    with pytest.raises(TypeError, match="cannot be copied"):
+        copy.copy(preparation)
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(preparation)
+    assert preparation._consume(_issuer_token=issuer, _pid=keys.os.getpid()) == (
+        BINDING,
+        b"n" * 12,
+    )
+    with pytest.raises(RuntimeError, match="not available"):
+        preparation._consume(_issuer_token=issuer, _pid=keys.os.getpid())
+
+
+def test_profile_key_preparation_rejects_foreign_token_even_if_callback_is_permissive() -> None:
+    from mycogni.application import keys
+
+    issuer = object()
+    preparation = ProfileKeyPreparation(
+        BINDING,
+        b"n" * 12,
+        _issuer_token=issuer,
+        _issuer_check=lambda _token, _pid: True,
+    )
+
+    with pytest.raises(RuntimeError, match="not available"):
+        preparation._consume(_issuer_token=object(), _pid=keys.os.getpid())
+
+
 def test_secret_port_has_only_readiness_gated_provider_neutral_operations() -> None:
     public = {name for name in SecretPort.__dict__ if not name.startswith("_")}
     assert public >= {
         "active_kek",
         "source_status",
         "readiness",
-        "create_profile_key",
+        "prepare_profile_key",
+        "complete_profile_key",
         "unwrap_profile_key",
     }
     assert not any("read_kek" in name or "export" in name for name in public)

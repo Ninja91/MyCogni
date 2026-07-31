@@ -136,7 +136,7 @@ def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
     index = root / "site/index.html"
     index.write_text(
         index.read_text(encoding="utf-8").replace(
-            "STATUS · 2026-07-29",
+            "STATUS · 2026-07-31",
             "STATUS · 2026-07-19",
         ),
         encoding="utf-8",
@@ -151,9 +151,9 @@ def test_visible_status_date_drift_fails_closed(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("current", "replacement", "label"),
     [
-        ('data-status-date="2026-07-29"', 'data-status-date="2026-07-19"', "data-status-date"),
+        ('data-status-date="2026-07-31"', 'data-status-date="2026-07-19"', "data-status-date"),
         (
-            "<strong>2026-07-29:</strong> architecture is specified",
+            "<strong>2026-07-31:</strong> architecture is specified",
             "<strong>2026-07-19:</strong> architecture is specified",
             "current narrative date",
         ),
@@ -182,12 +182,12 @@ def test_invalid_calendar_status_date_fails_closed(tmp_path: Path) -> None:
     root = _site_fixture(tmp_path)
     matrix = root / "docs/v1/COMPLETION_MATRIX.md"
     matrix.write_text(
-        matrix.read_text(encoding="utf-8").replace("2026-07-29", "2026-99-99"),
+        matrix.read_text(encoding="utf-8").replace("2026-07-31", "2026-99-99"),
         encoding="utf-8",
     )
     index = root / "site/index.html"
     index.write_text(
-        index.read_text(encoding="utf-8").replace("2026-07-29", "2026-99-99"),
+        index.read_text(encoding="utf-8").replace("2026-07-31", "2026-99-99"),
         encoding="utf-8",
     )
 

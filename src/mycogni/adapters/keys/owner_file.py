@@ -32,6 +32,7 @@ from mycogni.application.keys import (
     KeyReadinessState,
     ProfileDekHandle,
     ProfileKeyBinding,
+    ProfileKeyPreparation,
     SecretFailureCode,
     SecretProviderError,
     SourceStatus,
@@ -275,8 +276,8 @@ class OwnerFileSecretProvider:
                 )
             return KeyReadiness(KeyReadinessState.READY, SourceStatus.READABLE)
 
-    def create_profile_key(self, binding: ProfileKeyBinding) -> WrappedProfileKey:
-        """Generate and wrap a profile DEK only after sentinel-authenticated readiness."""
+    def prepare_profile_key(self, binding: ProfileKeyBinding) -> ProfileKeyPreparation:
+        """Reserve a nonce before the catalog durably records it."""
         self._assert_process()
         if type(binding) is not ProfileKeyBinding:
             _fail(SecretFailureCode.MALFORMED_RECORD)
@@ -285,24 +286,54 @@ class OwnerFileSecretProvider:
         with self._state_lock:
             self._assert_process()
             pin = self._require_ready()
-            with self._material_session(required_pin=pin) as (key_material, _snapshot):
-                profile_material = self._new_profile_material()
-                nonce = b""
-                try:
-                    nonce = self._reserve_nonce()
-                    ciphertext = AESGCM(key_material).encrypt(
-                        nonce,
-                        profile_material,
-                        self._profile_aad(binding),
-                    )
-                    if type(ciphertext) is not bytes or len(ciphertext) != PROFILE_DEK_BYTES + 16:
+            with self._material_session(required_pin=pin):
+                nonce = self._reserve_nonce()
+            state = self._require_ready_state()
+            with state.lock:
+                self._assert_domain_unlatched_locked(state)
+                return ProfileKeyPreparation(
+                    binding,
+                    nonce,
+                    _issuer_token=self._handle_issuer,
+                    _issuer_check=self._preparation_is_current,
+                    _pid=self._pid,
+                )
+
+    def complete_profile_key(self, preparation: ProfileKeyPreparation) -> WrappedProfileKey:
+        """Consume a persisted nonce reservation before generating or encrypting a DEK."""
+        self._assert_process()
+        if type(preparation) is not ProfileKeyPreparation:
+            _fail(SecretFailureCode.MALFORMED_RECORD)
+        try:
+            binding, nonce = preparation._consume(
+                _issuer_token=self._handle_issuer,
+                _pid=self._pid,
+            )
+        except RuntimeError:
+            _fail(SecretFailureCode.MALFORMED_RECORD)
+        with self._state_lock:
+            self._assert_process()
+            pin = self._require_ready()
+            profile_material = self._new_profile_material()
+            try:
+                with self._material_session(required_pin=pin) as (key_material, _snapshot):
+                    try:
+                        ciphertext = AESGCM(key_material).encrypt(
+                            nonce,
+                            profile_material,
+                            self._profile_aad(binding),
+                        )
+                        if (
+                            type(ciphertext) is not bytes
+                            or len(ciphertext) != PROFILE_DEK_BYTES + 16
+                        ):
+                            _fail(SecretFailureCode.UNAVAILABLE)
+                    except SecretProviderError:
+                        raise
+                    except Exception:
                         _fail(SecretFailureCode.UNAVAILABLE)
-                except SecretProviderError:
-                    raise
-                except Exception:
-                    _fail(SecretFailureCode.UNAVAILABLE)
-                finally:
-                    profile_material[:] = b"\x00" * len(profile_material)
+            finally:
+                profile_material[:] = b"\x00" * len(profile_material)
             state = self._require_ready_state()
             with state.lock:
                 self._assert_domain_unlatched_locked(state)
@@ -376,6 +407,9 @@ class OwnerFileSecretProvider:
                 return False
             with state.lock:
                 return not state.nonce_reuse_latched
+
+    def _preparation_is_current(self, token: object, pid: int) -> bool:
+        return self._handle_is_current(token, pid)
 
     def _require_ready_state(self) -> _ProcessWrapState:
         state = self._wrap_state

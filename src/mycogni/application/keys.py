@@ -377,3 +377,89 @@ class ProfileDekHandle:
         if hasattr(self, "_ProfileDekHandle__closed"):
             with suppress(Exception):
                 self.close()
+
+
+class ProfileKeyPreparation:
+    """Single-use, non-secret authorization to complete one prepared wrap.
+
+    The nonce may be persisted before completion.  The preparation is bound to
+    its issuing provider and process and is consumed before completion begins,
+    including when completion subsequently fails.
+    """
+
+    __slots__ = (
+        "__binding",
+        "__consumed",
+        "__issuer_check",
+        "__issuer_token",
+        "__nonce",
+        "__pid",
+        "__state_lock",
+    )
+
+    def __init__(
+        self,
+        binding: ProfileKeyBinding,
+        nonce: bytes,
+        *,
+        _issuer_token: object,
+        _issuer_check: Callable[[object, int], bool],
+        _pid: int | None = None,
+    ) -> None:
+        if type(binding) is not ProfileKeyBinding:
+            raise TypeError("profile-key preparation requires a binding")
+        if type(nonce) is not bytes:
+            raise TypeError("profile-key preparation nonce must be bytes")
+        if len(nonce) != WRAP_NONCE_BYTES:
+            raise ValueError("profile-key preparation nonce must be exactly 12 bytes")
+        if not callable(_issuer_check):
+            raise TypeError("profile-key preparation issuer check must be callable")
+        self.__binding = binding
+        self.__nonce = nonce
+        self.__issuer_token = _issuer_token
+        self.__issuer_check = _issuer_check
+        self.__pid = os.getpid() if _pid is None else _pid
+        self.__state_lock = threading.Lock()
+        self.__consumed = False
+
+    @property
+    def binding(self) -> ProfileKeyBinding:
+        """Return the non-secret canonical binding to persist with the reservation."""
+        return self.__binding
+
+    @property
+    def nonce(self) -> bytes:
+        """Return the prepared non-secret nonce for durable reservation."""
+        return self.__nonce
+
+    def _consume(self, *, _issuer_token: object, _pid: int) -> tuple[ProfileKeyBinding, bytes]:
+        if os.getpid() != self.__pid or _pid != self.__pid:
+            raise RuntimeError("profile-key preparation is not available")
+        with self.__state_lock:
+            if self.__consumed:
+                raise RuntimeError("profile-key preparation is not available")
+            self.__consumed = True
+            try:
+                accepted = _issuer_token is self.__issuer_token and self.__issuer_check(
+                    self.__issuer_token, _pid
+                )
+            except Exception:
+                accepted = False
+            if type(accepted) is not bool or not accepted:
+                raise RuntimeError("profile-key preparation is not available")
+            return self.__binding, self.__nonce
+
+    def __repr__(self) -> str:
+        return "ProfileKeyPreparation(binding=[REDACTED], nonce=[REDACTED])"
+
+    def __str__(self) -> str:
+        return "[REDACTED:profile-key-preparation]"
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> NoReturn:
+        raise TypeError("profile-key preparations cannot be serialized")
+
+    def __copy__(self) -> NoReturn:
+        raise TypeError("profile-key preparations cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> NoReturn:
+        raise TypeError("profile-key preparations cannot be copied")

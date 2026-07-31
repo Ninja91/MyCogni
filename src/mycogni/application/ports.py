@@ -11,6 +11,7 @@ from mycogni.application.keys import (
     KeyReadiness,
     ProfileDekHandle,
     ProfileKeyBinding,
+    ProfileKeyPreparation,
     SourceStatus,
     WrappedProfileKey,
 )
@@ -75,8 +76,12 @@ class SecretPort(Protocol):
         """Authenticate the dedicated existing-install sentinel and pin the source."""
         ...
 
-    def create_profile_key(self, binding: ProfileKeyBinding) -> WrappedProfileKey:
-        """Generate and wrap one independent random profile DEK."""
+    def prepare_profile_key(self, binding: ProfileKeyBinding) -> ProfileKeyPreparation:
+        """Reserve a nonce for durable persistence before encryption."""
+        ...
+
+    def complete_profile_key(self, preparation: ProfileKeyPreparation) -> WrappedProfileKey:
+        """Consume one durably reserved preparation and wrap a fresh random DEK."""
         ...
 
     def unwrap_profile_key(

@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-29. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, an installed synthetic local preview, a revision-bound hardened synthetic Docker profile, and a networkless synthetic Chromium decision artifact. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, and PF-002 has accepted-source multi-architecture build/runtime evidence. It does not yet contain a production remover runtime, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
+Snapshot date: 2026-07-31. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, an installed synthetic local preview, a revision-bound hardened synthetic Docker profile, and a networkless synthetic Chromium decision artifact. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, PF-002 has accepted-source multi-architecture build/runtime evidence, and KEY-001A durable synthetic wrapped-key catalog implementation is under exact-target review. It does not yet contain a production remover runtime, real-PII vault, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
 
 ## Status vocabulary
 
@@ -23,7 +23,7 @@ Documentation describing a future component is not implementation evidence for t
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; PR merge-revision gates pass 1,471 tests with one expected Darwin-only skip plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
-| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure implementation evidence; key/data packages remain unstarted | exact-host terminal evidence, reconciliation/restore and accepted-review gates plus remaining M1 packages |
+| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure evidence; KEY-001A adds an in-review durable synthetic wrapped-key catalog, source-bound restart readiness, nonce accounting and dirty-restart reconciliation | exact-target KEY-001A review/gates, real-PII encryption, rotation/deletion, exact-host conformance, reconciliation/restore and remaining M1 packages |
 | Synthetic developer preview | `IN_PROGRESS` | installed synthetic init/health/demo CLI and hardened networkless Docker one-shot; no real PII, broker traffic or removal | authenticated shell, native Linux/amd64 reproduction and prerelease packaging |
 | Preview/guided product | `NOT_STARTED` | UX specification only; the synthetic developer preview is not M2/M3 product evidence | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
@@ -56,7 +56,7 @@ Documentation describing a future component is not implementation evidence for t
 | Deliverable | Packages | Status | Evidence link | Blocker/next action |
 | --- | --- | --- | --- | --- |
 | Local authentication and authority | AUTH-001–003 | `IN_PROGRESS` | AUTH-001A durable decisions plus AUTH-001B source-level owner-file custody, strict binding/digest checks, typed reprovision disablement and fresh-exec restart evidence; AUTH-002/003 remain unstarted | real TTY, cross-store root handoff/reconciliation, restore policy, exact-host evidence and authenticated acceptance remain open |
-| Profile keys, encrypted identity and deletion | KEY-001–002, DATA-001 | `NOT_STARTED` | — | M0 key spike |
+| Profile keys, encrypted identity and deletion | KEY-001–002, DATA-001 | `IN_PROGRESS` | `docs/adr/0016-durable-wrapped-key-catalog.md`, `docs/v1/KEY-001A-DURABLE-CATALOG.md`; KEY-001A implementation provides synthetic-only durable nonce reservation, wrapped profile-key persistence, source-bound fresh-process restart and fail-closed reconciliation | exact-target review and dual-runtime gates for KEY-001A; real-PII field encryption, rotation, deletion, archive/restore and remaining KEY-001/002 plus DATA-001 scope |
 | Events, checkpoint, jobs and catch-up | EVT-001, CHECKPOINT-001, JOB-STATE-001, OUTBOX-001, SCHED-001 | `NOT_STARTED` | — | DB/contracts/key foundation |
 | Evidence, migration and backup/restore verification | EVD-001, MIG-001, BAK-001, BAK-RESTORE-001 | `NOT_STARTED` | — | backup-format and checkpoint decisions |
 | Consent and generic outbound-action safety | CONSENT-001, ACTION-001, GATEWAY-BASE-001, RESTORE-INTENT-001 | `NOT_STARTED` | — | required before any real observation network action |
@@ -135,25 +135,21 @@ These do not block M0 foundation work, but they block their named milestones:
 | First 2–5 broker capabilities | M3 selection/M4 beta | maintainer + product/policy team | must be sourced; no invented list |
 | Qualified crypto/connector/U.S. policy reviewers | M4/M5 | maintainer/orchestrator | availability not yet confirmed |
 | External review access | v0.x to v1 | maintainer/orchestrator | no model-provider trusted-access enrollment required; pre-review public artifacts remain synthetic-only and qualified human gates still precede live canary/v1 |
-| Next V0.x vertical slice: authenticated synthetic walkthrough vs durable wrapped-key catalog | M0/M1 sequencing | maintainer | principal product review favors UX-001 for user learning; principal architecture review favors KEY-001A for dependency leverage |
+| Next V0.x vertical slice sequencing | M0/M1 sequencing | maintainer | maintainer selected KEY-001A; implementation and exact-target review are in progress, with UX-001 queued immediately afterward |
 | MyCogni name/trademark/confusion disposition | stable V1 | maintainer + qualified counsel if needed | unresolved |
 
 ## Next executable slice
 
-The toolchain, boundary, CI, database, shared contracts, simulator,
-network-deny foundations, native terminal boundary, installed synthetic CLI,
-and hardened synthetic Docker profile are implemented. The next functional
-slice requires a maintainer sequencing choice:
+The maintainer selected `KEY-001A` durable wrapped-key catalog and restart
+readiness. Its synthetic-only implementation, migration, source-bound restart,
+crash reconciliation and focused tests are in progress; exact-target independent
+review, dual-runtime full gates and immutable evidence remain before this slice
+can close. It makes no complete `KEY-001`, rotation, deletion, backup, real-PII
+encryption or provider-conformance claim.
 
-1. `UX-001` authenticated synthetic walkthrough: maximize immediate user and
-   contributor learning, while treating Host/Origin/CSRF/cookie/clickjacking
-   controls as fail-closed precursor evidence and making no `AUTH-002`,
-   `CASE-001`, key, PII, broker, or removal claim; or
-2. `KEY-001A` durable wrapped-key catalog and restart readiness: maximize secure
-   kernel dependency leverage while making no `KEY-001`, rotation, deletion,
-   backup, real-PII encryption, or provider-conformance claim.
-
-Implement the unselected slice immediately after the selected one. Formal
+Implement `UX-001` authenticated synthetic walkthrough immediately after this
+slice to maximize user and contributor learning while retaining fail-closed
+Host/Origin/CSRF/cookie/clickjacking precursors. Formal
 authenticated package promotion may remain deferred from V0.x to V1 without
 blocking synthetic implementation work. Preserve the accepted runner, SQLite,
 and key-spike source boundaries. Keep the incomplete egress design and browser
@@ -200,7 +196,7 @@ Every work package has a machine-equal status row; detailed evidence remains in 
 | Canonical inventory: HUMAN-001 | HUMAN-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: INTENT-001 | INTENT-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: JOB-STATE-001 | JOB-STATE-001 | `NOT_STARTED` | — | follow work-package dependency order |
-| Canonical inventory: KEY-001 | KEY-001 | `NOT_STARTED` | — | follow work-package dependency order |
+| Canonical inventory: KEY-001 | KEY-001 | `IN_PROGRESS` | KEY-001A durable synthetic wrapped-key catalog implementation and ADR-0016 under exact-target review | no package promotion; close KEY-001A evidence, then real-PII encryption, rotation/deletion, backup/restore and conformance scope |
 | Canonical inventory: KEY-002 | KEY-002 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: MAIL-001 | MAIL-001 | `NOT_STARTED` | — | follow work-package dependency order |
 | Canonical inventory: MATCH-001 | MATCH-001 | `NOT_STARTED` | — | follow work-package dependency order |
