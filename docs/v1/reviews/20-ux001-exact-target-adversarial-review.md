@@ -12,6 +12,7 @@ evidence of a broker/removal capability.
 | Revision | Scope | Final verdict |
 | --- | --- | --- |
 | `afc901841f6085e83e91a78a1a041fb9b1d36ebd` | UX-001 application state, HTTP adapter, private-terminal launcher, tests, ADR, plan, README, site and governance truth | ACCEPT; zero unresolved P0/P1/P2 across all three reviewers |
+| `af473fd5ff9e143e0f481c8fa956389a378d10b6` | CI-only test-fixture follow-up: reserve the `.test` host suffix so the repository safety guard recognizes the in-process ASGI host as synthetic | ACCEPT; no production behavior changed; dual-runtime GitHub checks pass |
 
 ## Independent final verdicts
 
@@ -66,6 +67,10 @@ findings and exact dispositions were:
   configuration restrictions, not project assertions.
 - Full source mypy, Ruff, import-linter, governance, site, claim, safety,
   threat-catalog and network-source guards passed.
+- The initial implementation target used `testserver` only as an in-process
+  ASGI host. The follow-up `af473fd` changes that fixture to `shell.test`, a
+  reserved synthetic suffix, so the same safety guard passes in CI as well as
+  locally; it does not change the application or runtime surface.
 - HTTP evidence remains in-process ASGI evidence; it does not grant live
   loopback authority or imply a deployed server certification.
 
