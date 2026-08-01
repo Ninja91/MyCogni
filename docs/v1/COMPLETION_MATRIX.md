@@ -1,6 +1,6 @@
 # Stable V1 completion matrix
 
-Snapshot date: 2026-07-31. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, an installed synthetic local preview, a revision-bound hardened synthetic Docker profile, and a networkless synthetic Chromium decision artifact. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, PF-002 has accepted-source multi-architecture build/runtime evidence, and KEY-001A durable synthetic wrapped-key catalog implementation is under exact-target review. It does not yet contain a production remover runtime, real-PII vault, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
+Snapshot date: 2026-07-31. This is a living evidence index, not a forecast. The current repository contains an architecture pack, interactive walkthrough, executable project skeleton, SQLite baseline, versioned connector contracts, typed local-diagnostics boundary, selected machine-checked threat catalog, a deterministic synthetic-only simulator, a network-deny harness with code-level acceptance, an installed synthetic local preview, a revision-bound hardened synthetic Docker profile, a networkless synthetic Chromium decision artifact, and an in-progress synthetic authenticated web shell. The auth and pure runner/mailbox spikes have final three-hat code-level acceptance, PF-002 has accepted-source multi-architecture build/runtime evidence, and KEY-001A has an exact-target code-level review with zero unresolved P0/P1 findings. It does not yet contain a production remover runtime, real-PII vault, authenticated package acceptance, formally promoted network-deny package, live connector, or live browser workflow.
 
 ## Status vocabulary
 
@@ -23,8 +23,8 @@ Documentation describing a future component is not implementation evidence for t
 | Detailed V1 delivery plan | `VERIFIED` | integrated commit `115e367`; 106-package acyclic DAG; three independent re-reviews report zero P0/P1 plan blockers; links, Mermaid, JS, static HTTP and diff checks pass on 2026-07-15 | keep synchronized with implementation evidence |
 | Runtime/project skeleton | `IN_PROGRESS` | implementation evidence and selected review records exist; PF-002 has a successful two-architecture OCI build and hardened runtime smokes; frozen lock and dual-Python checks remain active | authenticated structured acceptance, prerequisite chains and remaining M0 packages are open |
 | Synthetic simulator/network-deny harness | `IN_PROGRESS` | SIM-001 and NET-001 have final code-level ACCEPT with zero P0/P1/P2; NET supplies exact authority provenance, revocable leases and a pre-import guarded launcher; PR merge-revision gates pass 1,471 tests with one expected Darwin-only skip plus all guards on Python 3.12.12 and 3.13.11 | optional Linux namespace reproduction and authenticated attestations remain open |
-| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure evidence; KEY-001A adds an in-review durable synthetic wrapped-key catalog, source-bound restart readiness, nonce accounting and dirty-restart reconciliation | exact-target KEY-001A review/gates, real-PII encryption, rotation/deletion, exact-host conformance, reconciliation/restore and remaining M1 packages |
-| Synthetic developer preview | `IN_PROGRESS` | installed synthetic init/health/demo CLI and hardened networkless Docker one-shot; no real PII, broker traffic or removal | authenticated shell, native Linux/amd64 reproduction and prerelease packaging |
+| Auth/key/data/durable kernel | `IN_PROGRESS` | AUTH-001A durable state, AUTH-001B host-secret custody and AUTH-001C native terminal/partial-disclosure evidence; KEY-001A adds a code-reviewed durable synthetic wrapped-key catalog, source-bound restart readiness, nonce accounting and dirty-restart reconciliation | authenticated package acceptance, real-PII encryption, rotation/deletion, exact-host conformance, reconciliation/restore and remaining M1 packages |
+| Synthetic developer preview | `IN_PROGRESS` | installed synthetic init/health/demo CLI, hardened networkless Docker one-shot, and UX-001 synthetic authenticated shell; no real PII, broker traffic or removal | durable authenticated composition, native Linux/amd64 reproduction and prerelease packaging |
 | Preview/guided product | `NOT_STARTED` | UX specification only; the synthetic developer preview is not M2/M3 product evidence | M2/M3 implementation and learning gates |
 | Automatic connectors/egress | `NOT_STARTED` | protocols/threat model only | M4 plus qualified human reviews and canaries |
 | Release artifacts/operations | `NOT_STARTED` | deployment specification only | M5 signed artifacts and drills |
@@ -48,7 +48,7 @@ Documentation describing a future component is not implementation evidence for t
 | Network-deny proof | NET-001 | `IN_PROGRESS` | `362795e`, `docs/v1/NET-001-NETWORK-DENY.md`, `reviews/09-net001-adversarial-review.md`; final code-level ACCEPT, 133 focused/87 simulator/935 dual-runtime lane tests and 240-test review evidence | authenticated attestation and optional Linux namespace reproduction remain open; OS-level hostile-code containment remains a nonclaim |
 | Auth/key/egress/runner/browser/backup spikes | SPIKE-* | `IN_PROGRESS` | auth `030caed`; runner `b2bfa15` plus accepted successor ADR-0014 and `RUNNER-PERSISTENCE-OCI-EVIDENCE.md`; browser exact source `2d847d7`, native-arm64 image `sha256:ad889b493c08...`, ADR-0015, `spikes/SPIKE-BROWSER.md`, and `SPIKE-BROWSER-OCI-EVIDENCE.md`; auth and runner review records; ADR-0013, `spikes/SPIKE-KEY.md`, `reviews/16-spike-key-design-adversarial-review.md`, `reviews/17-spike-key-exact-target-adversarial-review.md`; auth/runner have final code-level ACCEPT; key exact target `35eda23` has three clean code-level ACCEPT verdicts and 106 focused tests after six rejected targets | authenticated package acceptance, untrusted connector artifact/egress topology and recovery/backup conformance remain open; browser has only a networkless native-arm64 synthetic decision probe with shared-mount and SIGTERM/reaping P1 residuals; runner has synthetic durable state plus separate mailbox-artifact containment evidence only; key needs host/provider conformance and durable accounting/recovery; egress/backup remain open |
 | SQLite/process durability contract | SQLITE-DUR-001 | `IN_PROGRESS` | integrated `1d67f87`, `b0c4b38`, `103c977`, `1dfd256`, `7cb58fa`, `02f91ce`, `f01b3c5`; ADR-0012, `docs/v1/SQLITE-DUR-001.md`, `reviews/15-sqlite-dur-adversarial-review.md`; 80 focused tests; three exact-target code-level ACCEPT verdicts with zero P0/P1/P2; PR run `29672858907` passed 1,471 tests plus all guards on both locked runtimes | authenticated attestation remains unavailable; exact-host filesystem, Docker restart, bounded device-full and independently reviewed power-interruption conformance remain open |
-| Synthetic-only authenticated shell | UX-001 | `NOT_STARTED` | — | depends on auth/contracts |
+| Synthetic-only authenticated shell | UX-001 | `IN_PROGRESS` | `docs/adr/0017-synthetic-authenticated-shell.md`, `docs/v1/UX-001-SYNTHETIC-AUTH-SHELL.md`, `docs/v1/reviews/20-ux001-exact-target-adversarial-review.md`, `src/mycogni/application/web_shell.py`, `src/mycogni/adapters/web_shell.py`, and 14 focused tests | synthetic volatile state only; durable custody, exact-host/TLS conformance and authenticated package acceptance remain open |
 | M0 milestone | all M0 | `IN_PROGRESS` | plan and first three foundation packages integrated | complete remaining M0 packages and independently reproduce evidence |
 
 ## M1 — secure local kernel
@@ -135,25 +135,24 @@ These do not block M0 foundation work, but they block their named milestones:
 | First 2–5 broker capabilities | M3 selection/M4 beta | maintainer + product/policy team | must be sourced; no invented list |
 | Qualified crypto/connector/U.S. policy reviewers | M4/M5 | maintainer/orchestrator | availability not yet confirmed |
 | External review access | v0.x to v1 | maintainer/orchestrator | no model-provider trusted-access enrollment required; pre-review public artifacts remain synthetic-only and qualified human gates still precede live canary/v1 |
-| Next V0.x vertical slice sequencing | M0/M1 sequencing | maintainer | maintainer selected KEY-001A; implementation and exact-target review are in progress, with UX-001 queued immediately afterward |
+| Next V0.x vertical slice sequencing | M0/M1 sequencing | maintainer | KEY-001A exact code-level review is complete; UX-001 is the active synthetic browser slice |
 | MyCogni name/trademark/confusion disposition | stable V1 | maintainer + qualified counsel if needed | unresolved |
 
 ## Next executable slice
 
-The maintainer selected `KEY-001A` durable wrapped-key catalog and restart
-readiness. Its synthetic-only implementation, migration, source-bound restart,
-crash reconciliation and focused tests are in progress; exact-target independent
-review, dual-runtime full gates and immutable evidence remain before this slice
-can close. It makes no complete `KEY-001`, rotation, deletion, backup, real-PII
-encryption or provider-conformance claim.
+`KEY-001A` durable wrapped-key catalog and restart readiness now has an exact
+code-level review with zero unresolved P0/P1 findings. It remains an `IN_PROGRESS`
+precursor because host/provider conformance, authenticated acceptance, real-PII
+encryption, rotation, deletion, backup and restore are still open; it makes no
+complete `KEY-001` claim.
 
-Implement `UX-001` authenticated synthetic walkthrough immediately after this
-slice to maximize user and contributor learning while retaining fail-closed
-Host/Origin/CSRF/cookie/clickjacking precursors. Formal
-authenticated package promotion may remain deferred from V0.x to V1 without
-blocking synthetic implementation work. Preserve the accepted runner, SQLite,
-and key-spike source boundaries. Keep the incomplete egress design and browser
-spike at their current unpromoted states while their named gaps remain open.
+`UX-001` is now the active V0.x slice: an in-process-testable, server-rendered
+synthetic authenticated walkthrough with fail-closed Host/Origin/CSRF/cookie/
+clickjacking precursors. Formal authenticated package promotion may remain
+deferred from V0.x to V1 without blocking this synthetic learning surface.
+Preserve the accepted runner, SQLite and key-spike source boundaries. Keep the
+incomplete egress design and browser spike at their current unpromoted states
+while their named gaps remain open.
 
 ## Canonical work-package inventory
 

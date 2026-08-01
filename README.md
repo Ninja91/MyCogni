@@ -2,7 +2,7 @@
 
 MyCogni is a planned local-first, open-source system for recurring U.S. personal-data removal with auditable evidence and minimum necessary disclosure. It is for technically comfortable people who would rather self-host than give another SaaS a complete identity dossier.
 
-> **Status — developer preview, synthetic only.** This repository contains an installed synthetic CLI and a locally tested, hardened networkless Docker profile. It does not contain a runnable remover, signed release image, or live broker connector. The deterministic preview cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
+> **Status — developer preview, synthetic only.** This repository contains an installed synthetic CLI, a synthetic authenticated web shell, and a locally tested, hardened networkless Docker profile. It does not contain a runnable remover, signed release image, or live broker connector. The deterministic preview cannot contact a broker or deliver mail and must not be represented as a working privacy service. The roadmap begins with a read-only exposure preview and reaches narrowly controlled automatic submission only after security, legal, and connector gates pass.
 
 MyCogni is not affiliated with or endorsed by Incogni, Surfshark, Nord Security, or any commercial removal provider. “MyCogni” is a working name pending a pre-release trademark and confusion review.
 
@@ -75,11 +75,24 @@ routine startup never provisions or repairs the external key file. Independent
 code-level reviewers currently report zero unresolved P0/P1 findings.
 
 This remains an `IN_PROGRESS` precursor, not a user-facing vault or completed
-`KEY-001`. It stores no real PII and provides no rotation, cryptographic deletion,
-backup/restore conformance, supported provider profile, broker traffic, or removal
-capability. See [ADR-0016](docs/adr/0016-durable-wrapped-key-catalog.md), the
+`KEY-001`. The exact code-level review is complete, but it stores no real PII and
+provides no rotation, cryptographic deletion, backup/restore conformance,
+supported provider profile, broker traffic, or removal capability. See
+[ADR-0016](docs/adr/0016-durable-wrapped-key-catalog.md), the
 [KEY-001A execution and evidence plan](docs/v1/KEY-001A-DURABLE-CATALOG.md), and the
 [completion matrix](docs/v1/COMPLETION_MATRIX.md).
+
+### Synthetic authenticated web shell in progress
+
+`UX-001` is the active V0.x vertical slice. Run `uv run --frozen mycogni-web` to
+start a loopback-only, server-rendered walkthrough and receive a one-time
+synthetic operator code in the private terminal. The shell exercises Host,
+Origin, CSRF, strict-cookie, session-revocation, no-store, and clickjacking
+precursors while showing only synthetic status. Its state is volatile and it
+accepts no real identity data, broker URL, mail, browser action, or removal
+request. It is not production authentication or a deployable remover. See
+[ADR-0017](docs/adr/0017-synthetic-authenticated-shell.md) and the
+[UX-001 evidence plan](docs/v1/UX-001-SYNTHETIC-AUTH-SHELL.md).
 
 | Area | In this repository today | First stable v1 target | Later, only after evidence |
 | --- | --- | --- | --- |

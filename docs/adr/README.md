@@ -20,5 +20,6 @@ ADRs capture decisions that constrain implementation or materially affect privac
 | [0014](0014-runner-mailbox-persistent-state.md) | Accepted for initial build | bounded encrypted SQLite mailbox frame and isolated synthetic runner artifact; connector acceptance remains open |
 | [0015](0015-networkless-browser-sandbox-spike.md) | Accepted for initial build | networkless synthetic Chromium artifact with exact host/renderer proof; live browser acceptance remains open |
 | [0016](0016-durable-wrapped-key-catalog.md) | Accepted for initial build | durable synthetic wrapped-key catalog, reserve-before-AEAD ordering, restart readiness and recovery-only reconciliation; KEY-001 remains incomplete |
+| [0017](0017-synthetic-authenticated-shell.md) | Accepted for initial build | volatile synthetic authenticated web shell with Host/Origin/CSRF/cookie/clickjacking precursors; production auth remains incomplete |
 
 New ADRs use: context, decision, consequences, alternatives, security/privacy impact, and review trigger.
