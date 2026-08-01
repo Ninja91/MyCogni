@@ -132,24 +132,24 @@ def _csrf(body: str) -> str:
 
 
 def test_synthetic_login_logout_and_headers() -> None:
-    bundle = build_synthetic_web_shell(allowed_hosts=("testserver",))
+    bundle = build_synthetic_web_shell(allowed_hosts=("shell.test",))
     client = ASGIClient(bundle.app)
-    landing = client.request("GET", "/", host="testserver")
+    landing = client.request("GET", "/", host="shell.test")
     assert landing.status_code == 200
     assert "real personal data" in landing.text
     assert landing.headers["content-security-policy"].endswith("frame-ancestors 'none'")
     assert landing.headers["x-frame-options"] == "DENY"
     assert landing.headers["cache-control"] == "no-store"
 
-    login = client.request("GET", "/login", host="testserver")
+    login = client.request("GET", "/login", host="shell.test")
     assert login.status_code == 200
     csrf = _csrf(login.text)
     submitted = client.request(
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": bundle.bootstrap_code},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
     )
     assert submitted.status_code == 303
     assert submitted.headers["location"] == "/app"
@@ -159,7 +159,7 @@ def test_synthetic_login_logout_and_headers() -> None:
     assert "SameSite=strict" in session_cookie
     assert "Secure" not in session_cookie
 
-    dashboard = client.request("GET", "/app", host="testserver")
+    dashboard = client.request("GET", "/app", host="shell.test")
     assert dashboard.status_code == 200
     assert "AUTHENTICATED SYNTHETIC SHELL" in dashboard.text
     assert bundle.bootstrap_code not in dashboard.text
@@ -167,52 +167,52 @@ def test_synthetic_login_logout_and_headers() -> None:
         "POST",
         "/logout",
         data={"csrf_token": _csrf(dashboard.text)},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
     )
     assert logout.status_code == 303
-    assert client.request("GET", "/app", host="testserver").status_code == 303
+    assert client.request("GET", "/app", host="shell.test").status_code == 303
 
 
 def test_host_origin_and_csrf_guards_fail_closed() -> None:
-    bundle = build_synthetic_web_shell(allowed_hosts=("testserver",))
+    bundle = build_synthetic_web_shell(allowed_hosts=("shell.test",))
     client = ASGIClient(bundle.app)
     assert client.request("GET", "/", host="attacker.invalid").status_code == 400
-    login = client.request("GET", "/login", host="testserver")
+    login = client.request("GET", "/login", host="shell.test")
     csrf = _csrf(login.text)
     missing_origin = client.request(
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": bundle.bootstrap_code},
-        host="testserver",
+        host="shell.test",
     )
     assert missing_origin.status_code == 403
     wrong_csrf = client.request(
         "POST",
         "/login",
         data={"csrf_token": "wrong", "operator_code": bundle.bootstrap_code},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
     )
     assert wrong_csrf.status_code == 401
     assert "not accepted" in wrong_csrf.text
 
 
 def test_secure_cookie_profile_sets_secure_attribute() -> None:
-    bundle = build_synthetic_web_shell(allowed_hosts=("testserver",), secure_cookies=True)
-    response = ASGIClient(bundle.app).request("GET", "/login", host="testserver")
+    bundle = build_synthetic_web_shell(allowed_hosts=("shell.test",), secure_cookies=True)
+    response = ASGIClient(bundle.app).request("GET", "/login", host="shell.test")
     assert response.status_code == 200
     assert any("Secure" in value for value in response.set_cookies)
 
 
 def test_unexpected_handler_error_keeps_security_headers_and_redacts_body() -> None:
-    bundle = build_synthetic_web_shell(allowed_hosts=("testserver",))
+    bundle = build_synthetic_web_shell(allowed_hosts=("shell.test",))
 
     async def explode() -> None:
         raise RuntimeError("synthetic-secret-error")
 
     bundle.app.add_api_route("/explode", explode, methods=["GET"])
-    response = ASGIClient(bundle.app).request("GET", "/explode", host="testserver")
+    response = ASGIClient(bundle.app).request("GET", "/explode", host="shell.test")
     assert response.status_code == 500
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -220,16 +220,16 @@ def test_unexpected_handler_error_keeps_security_headers_and_redacts_body() -> N
 
 
 def test_form_size_and_field_limits_fail_closed() -> None:
-    bundle = build_synthetic_web_shell(allowed_hosts=("testserver",))
+    bundle = build_synthetic_web_shell(allowed_hosts=("shell.test",))
     client = ASGIClient(bundle.app)
-    login = client.request("GET", "/login", host="testserver")
+    login = client.request("GET", "/login", host="shell.test")
     csrf = _csrf(login.text)
     oversized = client.request(
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": "x" * 20_000},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
     )
     assert oversized.status_code == 401
     assert "internal" not in oversized.text.lower()
@@ -238,8 +238,8 @@ def test_form_size_and_field_limits_fail_closed() -> None:
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": "x" * 20_000},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
         omit_content_length=True,
     )
     assert unknown_length.status_code == 401
@@ -247,8 +247,8 @@ def test_form_size_and_field_limits_fail_closed() -> None:
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": "x"},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
         content_length="not-a-number",
     )
     assert malformed_length.status_code == 401
@@ -256,8 +256,8 @@ def test_form_size_and_field_limits_fail_closed() -> None:
         "POST",
         "/login",
         data={"csrf_token": csrf, "operator_code": "x"},
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
         content_length="-1",
     )
     assert negative_length.status_code == 401
@@ -267,7 +267,7 @@ def test_form_size_and_field_limits_fail_closed() -> None:
         "POST",
         "/login",
         data=too_many_fields,
-        host="testserver",
-        origin="http://testserver",
+        host="shell.test",
+        origin="http://shell.test",
     )
     assert field_overflow.status_code == 401
