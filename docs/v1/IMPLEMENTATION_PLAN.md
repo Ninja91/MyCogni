@@ -151,7 +151,7 @@ Deliver:
 Exit:
 
 - clean clone builds and tests from the committed lockfile;
-- installed synthetic CLI, authenticated preview shell, migrations, and
+- installed synthetic CLI, the UX-001 synthetic authenticated preview shell, migrations, and
   simulator boot locally; worker and scheduler components remain M1 packages;
 - live mail, browser, submit, custom network, and remote telemetry paths are absent or deny-by-default;
 - every P0 spike has an accepted ADR or a named blocker; no placeholder is described as a security boundary;
@@ -161,10 +161,13 @@ Exit:
 
 User-visible result: authenticated setup for one adult, encrypted aliases, key/backup health, durable jobs/events, and a restart-safe local-lite shell.
 
-Current delivery note (2026-07-31): the maintainer selected `KEY-001A` first. The
-synthetic-only durable wrapped-key catalog and restart-readiness precursor is
-`IN_PROGRESS` under ADR-0016; it does not yet complete `KEY-001`, encrypt real PII,
-or provide rotation, deletion, backup/restore, or provider-conformance evidence.
+Current delivery note (2026-07-31): `KEY-001A` was implemented and received an
+exact code-level review with zero unresolved P0/P1 findings. It remains an
+`IN_PROGRESS` precursor under ADR-0016 because host/provider conformance,
+authenticated acceptance, real-PII encryption, rotation, deletion,
+backup/restore and provider evidence remain open. `UX-001` is the active next
+slice: a volatile synthetic authenticated shell under ADR-0017; it does not
+promote the M1 auth package or accept real identity data.
 
 Deliver:
 

@@ -29,6 +29,7 @@ dependencies = [
 
 [project.scripts]
 mycogni = "mycogni.bootstrap.synthetic_preview:main"
+mycogni-web = "mycogni.bootstrap.web_shell:main"
 
 [dependency-groups]
 dev = [
